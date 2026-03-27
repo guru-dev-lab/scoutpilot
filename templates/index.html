@@ -159,6 +159,24 @@
   .dot.red { background: var(--red); }
   .dot.gray { background: var(--text3); }
 
+  /* Info Modal */
+  .info-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: flex-start; justify-content: center; padding-top: 60px; overflow-y: auto; }
+  .info-modal-overlay.show { display: flex; }
+  .info-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px 32px; width: 92%; max-width: 640px; max-height: 80vh; overflow-y: auto; position: relative; }
+  .info-modal h2 { font-size: 1.2rem; margin-bottom: 20px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .info-modal .close-info { position: absolute; top: 16px; right: 20px; background: none; border: none; color: var(--text3); font-size: 1.5rem; cursor: pointer; }
+  .info-modal .close-info:hover { color: var(--text); }
+  .info-section { margin-bottom: 20px; }
+  .info-section h3 { font-size: 0.9rem; color: var(--primary-hover); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .info-section p, .info-section li { font-size: 0.82rem; color: var(--text2); line-height: 1.6; }
+  .info-section ul { list-style: none; padding: 0; }
+  .info-section li { padding: 4px 0; padding-left: 16px; position: relative; }
+  .info-section li::before { content: ''; position: absolute; left: 0; top: 11px; width: 6px; height: 6px; border-radius: 50%; }
+  .info-section .score-scale { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .info-section .score-item { font-size: 0.75rem; padding: 3px 10px; border-radius: 5px; font-weight: 600; }
+  .info-btn { background: none; border: 1px solid var(--border); border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--text3); cursor: pointer; font-size: 0.9rem; transition: all 0.15s; }
+  .info-btn:hover { border-color: var(--primary); color: var(--primary-hover); }
+
   /* Responsive */
   @media (max-width: 768px) {
     .filters { flex-wrap: wrap; }
@@ -179,6 +197,7 @@
       </div>
     </div>
     <div class="header-actions">
+      <button class="info-btn" onclick="openInfoModal()" title="How ScoutPilot Works">?</button>
       <button class="btn" onclick="triggerScrape()" id="scrapeBtn">Scrape Now</button>
       <button class="btn primary" onclick="openProfileModal()">+ Add Search</button>
     </div>
@@ -289,6 +308,101 @@
   </div>
 
   <div class="job-list" id="jobList"></div>
+</div>
+
+<!-- Info Modal -->
+<div class="info-modal-overlay" id="infoModal" onclick="if(event.target===this)closeInfoModal()">
+  <div class="info-modal">
+    <button class="close-info" onclick="closeInfoModal()">&times;</button>
+    <h2>How ScoutPilot Works</h2>
+
+    <div class="info-section">
+      <h3>Relevance Score (Rel: 0\u2013100)</h3>
+      <p>Measures how closely a job matches your search profile title. Uses fuzzy title matching plus AI when available.</p>
+      <div class="score-scale">
+        <span class="score-item" style="background:#312e81;color:#a5b4fc;">90\u2013100 Perfect match</span>
+        <span class="score-item" style="background:#3b2f1e;color:#fbbf24;">50\u201389 Related role</span>
+        <span class="score-item" style="background:#3b1e1e;color:#f87171;">0\u201349 Low match</span>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <h3>Trust Score (Trust: 0\u2013100)</h3>
+      <p>Detects fake, spam, or low-quality postings. Checks for red flags like vague descriptions, no real company, unrealistic salary, MLM language, and spam patterns.</p>
+      <div class="score-scale">
+        <span class="score-item" style="background:#064e3b;color:#34d399;">70+ Legitimate</span>
+        <span class="score-item" style="background:#7f1d1d;color:#f87171;">&lt;40 Suspicious</span>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <h3>Direct Apply</h3>
+      <p>Jobs marked <span style="color:#34d399;font-weight:700;">\u2713 Direct Apply</span> link straight to the company\u2019s career page or ATS (Lever, Greenhouse, Workday, etc.) \u2014 not through an aggregator like LinkedIn or Indeed. You apply directly with the employer.</p>
+    </div>
+
+    <div class="info-section">
+      <h3>Skill Tags</h3>
+      <p>Colorful tags are extracted from each job\u2019s description showing required tools and technologies. Color-coded by category:</p>
+      <div class="score-scale" style="margin-top:6px;">
+        <span class="skill-tag cat-lang" style="font-size:0.72rem;">Languages</span>
+        <span class="skill-tag cat-data" style="font-size:0.72rem;">Data</span>
+        <span class="skill-tag cat-cloud" style="font-size:0.72rem;">Cloud</span>
+        <span class="skill-tag cat-framework" style="font-size:0.72rem;">Frameworks</span>
+        <span class="skill-tag cat-devops" style="font-size:0.72rem;">DevOps</span>
+        <span class="skill-tag cat-ai" style="font-size:0.72rem;">AI/ML</span>
+        <span class="skill-tag cat-tool" style="font-size:0.72rem;">Tools</span>
+        <span class="skill-tag cat-design" style="font-size:0.72rem;">Design</span>
+        <span class="skill-tag cat-business" style="font-size:0.72rem;">Business</span>
+        <span class="skill-tag cat-security" style="font-size:0.72rem;">Security</span>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <h3>Badges</h3>
+      <p>Each job card shows status badges:</p>
+      <div class="score-scale" style="margin-top:6px;">
+        <span class="badge fresh" style="animation:none;">JUST POSTED</span>
+        <span class="badge remote">Remote</span>
+        <span class="badge hybrid">Hybrid</span>
+        <span class="badge onsite">Onsite</span>
+        <span class="badge salary">$80k\u2013$120k</span>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <h3>Filters</h3>
+      <ul>
+        <li><strong>Posted</strong> \u2014 Filter by when the job was originally posted on the job board</li>
+        <li><strong>Found</strong> \u2014 Filter by when ScoutPilot first discovered the job</li>
+        <li><strong>Work Type</strong> \u2014 Remote, Hybrid, or Onsite (detected from title, location, and description)</li>
+        <li><strong>Source</strong> \u2014 Which job board the posting came from</li>
+        <li><strong>Status</strong> \u2014 New (unseen), Viewed (clicked), or Applied (manually marked)</li>
+        <li><strong>Apply</strong> \u2014 Show only jobs with Direct Apply links</li>
+        <li><strong>Relevance</strong> \u2014 Minimum relevance score threshold</li>
+        <li><strong>Sort By</strong> \u2014 Order results by post date, relevance, salary, etc.</li>
+        <li><strong>Search</strong> \u2014 Text search across job titles, company names, and descriptions</li>
+      </ul>
+    </div>
+
+    <div class="info-section">
+      <h3>Card Actions</h3>
+      <ul>
+        <li><strong>View Job / \u2713 Apply Direct</strong> \u2014 Opens the job listing. Automatically marks the job as \u201cViewed\u201d</li>
+        <li><strong>\u2713 Checkbox</strong> \u2014 Manually mark a job as \u201cApplied\u201d to track your applications</li>
+        <li><strong>\u00d7 Button</strong> \u2014 Hide a job you\u2019re not interested in</li>
+      </ul>
+    </div>
+
+    <div class="info-section">
+      <h3>How Scraping Works</h3>
+      <p>ScoutPilot checks multiple job sources every 10 minutes automatically. You can also hit \u201cScrape Now\u201d for an instant refresh. Jobs from known spam companies and staffing agencies are automatically blocked.</p>
+    </div>
+
+    <div class="info-section">
+      <h3>Search Profiles</h3>
+      <p>Add a search profile with your target job title. AI expands it into all related titles (e.g., \u201cProduct Manager\u201d becomes PM, Product Lead, Product Owner, etc.). You can add keyword boosts, exclusions, location filters, and remote-only preferences.</p>
+    </div>
+  </div>
 </div>
 
 <!-- Profile Modal -->
@@ -623,6 +737,9 @@ async function loadProfiles() {
     console.error('Failed to load profiles:', e);
   }
 }
+
+function openInfoModal() { document.getElementById('infoModal').classList.add('show'); }
+function closeInfoModal() { document.getElementById('infoModal').classList.remove('show'); }
 
 function openProfileModal() {
   document.getElementById('profileModal').classList.add('show');
