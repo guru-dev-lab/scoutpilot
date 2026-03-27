@@ -1,10 +1,11 @@
 """
-ScoutPilot — Real-time job intelligence engine.
+ScoutPilot â Real-time job intelligence engine.
 FastAPI app with background scheduler.
 """
 import asyncio
 import logging
 import json
+import traceback
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
@@ -81,9 +82,14 @@ async def dashboard(request: Request):
 
 @app.get("/api/jobs")
 async def api_get_jobs(hours: int = Query(24, ge=1, le=720), min_relevance: int = Query(0, ge=0, le=100), min_trust: int = Query(0, ge=0, le=100), source: str = "", status: str = "", sort_by: str = "first_seen_at", sort_dir: str = "DESC", limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0), search: str = ""):
-    jobs = await get_jobs(hours=hours, min_relevance=min_relevance, min_trust=min_trust, source=source, status=status, sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset, search=search)
-    stats = await get_job_count(hours)
-    return {"jobs": jobs, "stats": stats}
+    try:
+        jobs = await get_jobs(hours=hours, min_relevance=min_relevance, min_trust=min_trust, source=source, status=status, sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset, search=search)
+        stats = await get_job_count(hours)
+        return {"jobs": jobs, "stats": stats}
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"API /api/jobs error: {tb}")
+        return JSONResponse({"error": str(e), "traceback": tb}, status_code=500)
 
 
 @app.patch("/api/jobs/{job_id}/status")
