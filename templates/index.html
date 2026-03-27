@@ -44,12 +44,12 @@
   .btn.red:hover { background: var(--red-bg); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* Filters */
-  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-  .filters select, .filters input { padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.85rem; }
+  /* Filters — compact single row */
+  .filters { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .filters select, .filters input { padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.8rem; }
+  .filters select { max-width: 150px; }
   .filters select:focus, .filters input:focus { outline: none; border-color: var(--primary); }
-  .filters input[type="text"] { min-width: 200px; }
-  .filter-label { font-size: 0.75rem; color: var(--text3); margin-right: -4px; }
+  .filters input[type="text"] { min-width: 160px; flex: 1; }
 
   /* Job list */
   .job-list { display: flex; flex-direction: column; gap: 8px; }
@@ -140,7 +140,7 @@
   @media (max-width: 768px) {
     .job-card { grid-template-columns: 1fr; }
     .job-actions { flex-direction: row; align-items: center; min-width: auto; flex-wrap: wrap; }
-    .filters { flex-direction: column; }
+    .filters select { max-width: none; flex: 1; min-width: 100px; }
     .filters input[type="text"] { min-width: auto; width: 100%; }
   }
 </style>
@@ -173,51 +173,40 @@
   <!-- Profiles -->
   <div class="profiles-bar" id="profilesBar"></div>
 
-  <!-- Filters -->
+  <!-- Filters — single compact row -->
   <div class="filters">
-    <span class="filter-label">Found:</span>
-    <select id="filterHours" onchange="loadJobs()">
-      <option value="1">Last 1 hour</option>
-      <option value="4">Last 4 hours</option>
-      <option value="12">Last 12 hours</option>
-      <option value="24" selected>Last 24 hours</option>
-      <option value="72">Last 3 days</option>
-      <option value="168">Last 7 days</option>
-      <option value="720">Last 30 days</option>
+    <select id="filterPostedHours" onchange="loadJobs()" title="Filter by when job was posted">
+      <option value="0" selected>Posted: Any</option>
+      <option value="1">Posted: 1hr</option>
+      <option value="2">Posted: 2hr</option>
+      <option value="4">Posted: 4hr</option>
+      <option value="8">Posted: 8hr</option>
+      <option value="12">Posted: 12hr</option>
+      <option value="24">Posted: 24hr</option>
+      <option value="48">Posted: 2 days</option>
+      <option value="168">Posted: 7 days</option>
     </select>
 
-    <span class="filter-label">Posted:</span>
-    <select id="filterPostedHours" onchange="loadJobs()">
-      <option value="0" selected>Any time</option>
-      <option value="1">Within 1 hour</option>
-      <option value="2">Within 2 hours</option>
-      <option value="4">Within 4 hours</option>
-      <option value="8">Within 8 hours</option>
-      <option value="12">Within 12 hours</option>
-      <option value="24">Within 24 hours</option>
-      <option value="48">Within 2 days</option>
-      <option value="168">Within 7 days</option>
+    <select id="filterHours" onchange="loadJobs()" title="Filter by when ScoutPilot found job">
+      <option value="1">Found: 1hr</option>
+      <option value="2">Found: 2hr</option>
+      <option value="4">Found: 4hr</option>
+      <option value="12">Found: 12hr</option>
+      <option value="24" selected>Found: 24hr</option>
+      <option value="72">Found: 3 days</option>
+      <option value="168">Found: 7 days</option>
+      <option value="720">Found: 30 days</option>
     </select>
 
-    <span class="filter-label">Relevance:</span>
-    <select id="filterRelevance" onchange="loadJobs()">
-      <option value="0">All</option>
-      <option value="50">50+</option>
-      <option value="70">70+</option>
-      <option value="85">85+</option>
+    <select id="filterWorkType" onchange="loadJobs()">
+      <option value="">Type: All</option>
+      <option value="remote">Remote</option>
+      <option value="hybrid">Hybrid</option>
+      <option value="onsite">Onsite</option>
     </select>
 
-    <span class="filter-label">Trust:</span>
-    <select id="filterTrust" onchange="loadJobs()">
-      <option value="0">All</option>
-      <option value="40">40+</option>
-      <option value="60">60+</option>
-      <option value="80">80+</option>
-    </select>
-
-    <span class="filter-label">Source:</span>
     <select id="filterSource" onchange="loadJobs()">
-      <option value="">All</option>
+      <option value="">Source: All</option>
       <option value="linkedin">LinkedIn</option>
       <option value="indeed">Indeed</option>
       <option value="glassdoor">Glassdoor</option>
@@ -227,28 +216,22 @@
       <option value="jsearch">JSearch</option>
     </select>
 
-    <span class="filter-label">Work Type:</span>
-    <select id="filterWorkType" onchange="loadJobs()">
-      <option value="">All</option>
-      <option value="remote">Remote</option>
-      <option value="hybrid">Hybrid</option>
-      <option value="onsite">Onsite</option>
+    <select id="filterRelevance" onchange="loadJobs()">
+      <option value="0">Relevance: All</option>
+      <option value="50">Rel: 50+</option>
+      <option value="70">Rel: 70+</option>
+      <option value="85">Rel: 85+</option>
     </select>
 
-    <span class="filter-label">Sort:</span>
     <select id="filterSort" onchange="loadJobs()">
       <option value="posted_at:DESC">Newest Posted</option>
       <option value="first_seen_at:DESC">Newest Found</option>
-      <option value="first_seen_at:ASC">Oldest First</option>
       <option value="relevance_score:DESC">Most Relevant</option>
-      <option value="trust_score:DESC">Most Trusted</option>
       <option value="salary_max:DESC">Highest Salary</option>
       <option value="company_name:ASC">Company A-Z</option>
     </select>
 
-    <input type="text" id="filterSearch" placeholder="Search jobs..." oninput="debounceSearch()">
-
-    <button class="btn sm" onclick="loadJobs()">Refresh</button>
+    <input type="text" id="filterSearch" placeholder="Search title, company..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
   </div>
 
   <!-- Job List -->
@@ -316,16 +299,15 @@
     const hours = document.getElementById('filterHours').value;
     const postedHours = document.getElementById('filterPostedHours').value;
     const relevance = document.getElementById('filterRelevance').value;
-    const trust = document.getElementById('filterTrust').value;
     const source = document.getElementById('filterSource').value;
     const workType = document.getElementById('filterWorkType').value;
     const sortVal = document.getElementById('filterSort').value;
-    const search = document.getElementById('filterSearch').value;
+    const search = document.getElementById('filterSearch').value.trim();
     const [sort_by, sort_dir] = sortVal.split(':');
 
     const params = new URLSearchParams({
       hours, posted_hours: postedHours,
-      min_relevance: relevance, min_trust: trust,
+      min_relevance: relevance, min_trust: 0,
       source, work_type: workType, sort_by, sort_dir, search, limit: 200, offset: 0,
     });
 
