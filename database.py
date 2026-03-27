@@ -67,7 +67,6 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_jobs_hash ON jobs(hash);
             CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
-            CREATE INDEX IF NOT EXISTS idx_jobs_work_type ON jobs(work_type);
         """)
         await db.commit()
 
@@ -79,6 +78,10 @@ async def init_db():
             # Backfill existing rows: set work_type based on is_remote
             await db.execute("UPDATE jobs SET work_type = 'remote' WHERE is_remote = 1")
             await db.commit()
+
+        # Create work_type index (after migration ensures column exists)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_work_type ON jobs(work_type)")
+        await db.commit()
 
     finally:
         await db.close()
