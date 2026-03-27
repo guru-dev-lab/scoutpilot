@@ -17,6 +17,56 @@ from database import insert_job
 
 logger = logging.getLogger("scoutpilot.scraper")
 
+
+def _normalize_posted_at(raw: str) -> str:
+    """Normalize posted_at to ISO 8601 datetime string.
+    Handles: ISO datetime, YYYY-MM-DD, relative strings like '3 days ago', 'X hours ago'.
+    Returns empty string if unparseable."""
+    if not raw or raw == "None":
+        return ""
+    raw = raw.strip()
+
+    # Already ISO datetime (e.g. 2026-03-27T12:00:00Z or 2026-03-27T12:00:00+00:00)
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", raw):
+        return raw
+
+    # YYYY-MM-DD format — treat as start of that day UTC
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        return raw + "T00:00:00+00:00"
+
+    # Relative time: "X hours/days/minutes ago"
+    m = re.match(r"(\d+)\s*(minute|min|hour|hr|day|week|month)s?\s*ago", raw, re.IGNORECASE)
+    if m:
+        from datetime import timedelta
+        num = int(m.group(1))
+        unit = m.group(2).lower()
+        now = datetime.now(timezone.utc)
+        if unit in ("minute", "min"):
+            dt = now - timedelta(minutes=num)
+        elif unit in ("hour", "hr"):
+            dt = now - timedelta(hours=num)
+        elif unit == "day":
+            dt = now - timedelta(days=num)
+        elif unit == "week":
+            dt = now - timedelta(weeks=num)
+        elif unit == "month":
+            dt = now - timedelta(days=num * 30)
+        else:
+            return ""
+        return dt.isoformat()
+
+    # "just posted", "today"
+    if raw.lower() in ("just posted", "just now", "today"):
+        return datetime.now(timezone.utc).isoformat()
+
+    # "yesterday"
+    if raw.lower() == "yesterday":
+        from datetime import timedelta
+        return (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    return ""
+
+
 # Known aggregator domains — links from these are NOT direct apply
 AGGREGATOR_DOMAINS = {
     "linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
@@ -225,8 +275,8 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
     work_type = _detect_work_type(row)
     is_remote = work_type == "remote"
 
-    # Posted date
-    posted_at = str(row.get("date_posted", row.get("posted_at", ""))).strip()
+    # Posted date — normalize to ISO format
+    posted_at = _normalize_posted_at(str(row.get("date_posted", row.get("posted_at", ""))))
 
     # Company domain
     domain = ""
@@ -395,7 +445,7 @@ async def scrape_serpapi(
                 "source": "google_jobs",
                 "source_url": job_url or direct_url,
                 "direct_apply_url": direct_url,
-                "posted_at": item.get("detected_extensions", {}).get("posted_at", ""),
+                "posted_at": _normalize_posted_at(item.get("detected_extensions", {}).get("posted_at", "")),
                 "is_direct_apply": is_direct,
                 "search_profile_id": profile_id,
             }
@@ -482,7 +532,7 @@ async def scrape_jsearch(
                 "source": "jsearch",
                 "source_url": job_url,
                 "direct_apply_url": job_url if is_direct else "",
-                "posted_at": item.get("job_posted_at_datetime_utc", ""),
+                "posted_at": _normalize_posted_at(item.get("job_posted_at_datetime_utc", "")),
                 "is_direct_apply": is_direct,
                 "search_profile_id": profile_id,
             }

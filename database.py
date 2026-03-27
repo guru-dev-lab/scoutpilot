@@ -168,9 +168,11 @@ async def get_jobs(
             params.append(f"-{hours} hours")
 
         # Filter by actual posted time (from the job board)
+        # posted_at can be ISO datetime, YYYY-MM-DD, or relative text
+        # Only filter if value looks like a valid datetime (contains digits and dashes)
         if posted_hours > 0:
             conditions.append(
-                "posted_at != '' AND posted_at >= datetime('now', ?)"
+                "posted_at != '' AND posted_at IS NOT NULL AND posted_at LIKE '____-__-%' AND posted_at >= datetime('now', ?)"
             )
             params.append(f"-{posted_hours} hours")
 
@@ -187,8 +189,14 @@ async def get_jobs(
             params.append(source)
 
         if status:
-            conditions.append("status = ?")
-            params.append(status)
+            if status == "new":
+                conditions.append("status = 'new'")
+            else:
+                conditions.append("status = ?")
+                params.append(status)
+        else:
+            # By default, exclude hidden jobs
+            conditions.append("status != 'hidden'")
 
         if work_type:
             conditions.append("work_type = ?")

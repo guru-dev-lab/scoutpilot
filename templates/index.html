@@ -819,8 +819,8 @@ function renderJobs(jobs, searchInfo) {
     const skills = extractSkills(job.title, job.description);
     const skillHtml = renderSkillTags(skills);
 
-    // Time — short
-    var timeStr = postedAgo ? postedAgo : foundAgo;
+    // Time — show posted time if available, otherwise found time
+    var timeStr = postedAgo ? ('Posted ' + postedAgo) : ('Found ' + foundAgo);
 
     // Row 1: title
     // Row 2: company · location · source · time
