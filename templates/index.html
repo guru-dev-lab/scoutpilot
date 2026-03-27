@@ -1018,11 +1018,27 @@ function parseDate(str) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// Check if a timestamp is date-only (midnight = we only know the date, not the time)
+function isDateOnly(str) {
+  return str && /T00:00:00/.test(str);
+}
+
 function getTimeAgo(str) {
   var d = parseDate(str);
   if (!d) return str || '';
   var ms = Date.now() - d.getTime();
   var m = Math.floor(ms / 60000);
+
+  // If date-only (midnight), only show day-level precision
+  if (isDateOnly(str)) {
+    var days = Math.floor(ms / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return days + 'd ago';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  // Real timestamp — show precise time ago
   if (m < 1) return 'just now';
   if (m < 60) return m + 'm ago';
   var h = Math.floor(m / 60);
@@ -1031,6 +1047,8 @@ function getTimeAgo(str) {
 }
 
 function getPostedMs(job) {
+  // If date-only, return null so we don't show fake freshness badges
+  if (isDateOnly(job.posted_at)) return null;
   var d = parseDate(job.posted_at);
   return d ? Date.now() - d.getTime() : null;
 }
