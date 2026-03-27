@@ -137,8 +137,10 @@ async def api_get_jobs(
     direct_only: str = "",
 ):
     try:
+        # When searching, expand time window to search ALL jobs (not just last 24h)
+        effective_hours = 720 if search.strip() else hours
         jobs = await get_jobs(
-            hours=hours, posted_hours=posted_hours,
+            hours=effective_hours, posted_hours=posted_hours,
             min_relevance=min_relevance, min_trust=min_trust,
             source=source, status=status, work_type=work_type,
             sort_by=sort_by, sort_dir=sort_dir,

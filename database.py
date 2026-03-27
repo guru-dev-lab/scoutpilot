@@ -198,9 +198,16 @@ async def get_jobs(
             conditions.append("is_direct_apply = 1")
 
         if search:
-            conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
-            s = f"%{search}%"
-            params.extend([s, s, s])
+            # Split search into words for multi-term matching
+            # Each word must appear somewhere in title, company, or description
+            words = search.strip().split()
+            word_conditions = []
+            for word in words:
+                w = f"%{word}%"
+                word_conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
+                params.extend([w, w, w])
+            if word_conditions:
+                conditions.append("(" + " AND ".join(word_conditions) + ")")
 
         where = " AND ".join(conditions) if conditions else "1=1"
 

@@ -57,6 +57,13 @@
   .search-row input:focus { outline: none; border-color: var(--primary); }
   .search-row button { padding: 7px 14px; background: var(--primary); border: 1px solid var(--primary); border-radius: 0 6px 6px 0; color: #fff; font-size: 0.82rem; cursor: pointer; flex-shrink: 0; }
   .search-row button:hover { background: var(--primary-hover); }
+  .search-clear-btn { background: transparent !important; border: 1px solid var(--border) !important; border-left: none !important; border-right: none !important; border-radius: 0 !important; color: var(--text3) !important; padding: 7px 8px !important; font-size: 1rem !important; cursor: pointer; }
+  .search-clear-btn:hover { color: var(--red) !important; }
+  .search-row input.has-search { border-color: var(--primary); background: rgba(99,102,241,0.08); }
+  .search-active-banner { background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.1)); border: 1px solid rgba(99,102,241,0.3); border-radius: 8px; padding: 8px 14px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; color: var(--text2); }
+  .search-active-banner strong { color: var(--primary-hover); }
+  .search-active-banner button { background: none; border: 1px solid var(--border); border-radius: 5px; color: var(--text3); padding: 3px 10px; cursor: pointer; font-size: 0.75rem; }
+  .search-active-banner button:hover { border-color: var(--red); color: var(--red); }
 
   /* Job list */
   .job-list { display: flex; flex-direction: column; gap: 4px; }
@@ -301,10 +308,11 @@
       </select>
     </div>
     <div class="search-box">
-      <label>Search</label>
+      <label>Smart Search <span style="font-size:0.6rem;color:var(--text3);font-weight:400;">(finds related titles too)</span></label>
       <div class="search-row">
-        <input type="text" id="filterSearch" placeholder="Search job titles, companies, descriptions..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
-        <button onclick="loadJobs()">Go</button>
+        <input type="text" id="filterSearch" placeholder="e.g. Data Analyst, Software Engineer..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceSearch()">
+        <button class="search-clear-btn" id="searchClear" onclick="clearSearch()" style="display:none;">&times;</button>
+        <button onclick="loadJobs()" id="searchGoBtn">Go</button>
       </div>
     </div>
   </div>
@@ -456,6 +464,90 @@
 <script>
 const API = '';
 let searchTimeout = null;
+
+// ── Smart Search: Related Title Expansion ──
+// Maps common job-title keywords to related terms so "Data Analyst" also finds
+// "Business Analyst", "Data Scientist", "Analytics Engineer", etc.
+const TITLE_SYNONYMS = {
+  'data analyst': ['business analyst','data scientist','analytics','bi analyst','reporting analyst','insights analyst','quantitative analyst','data analytics'],
+  'data scientist': ['machine learning','data analyst','ml engineer','research scientist','applied scientist','ai engineer','data science'],
+  'data engineer': ['data pipeline','etl','data architect','analytics engineer','data infrastructure','big data'],
+  'software engineer': ['software developer','sde','backend engineer','frontend engineer','full stack','programmer','application developer','web developer'],
+  'software developer': ['software engineer','sde','backend developer','frontend developer','full stack','programmer','application developer'],
+  'web developer': ['frontend developer','frontend engineer','ui developer','web engineer','javascript developer','react developer'],
+  'product manager': ['product owner','program manager','technical product manager','product lead','product management'],
+  'project manager': ['program manager','project coordinator','scrum master','delivery manager','pmo','project management'],
+  'devops': ['sre','site reliability','platform engineer','infrastructure engineer','cloud engineer','devops engineer'],
+  'ux designer': ['ui designer','product designer','ux researcher','interaction designer','visual designer','ui/ux'],
+  'ui designer': ['ux designer','product designer','visual designer','graphic designer','ui/ux','web designer'],
+  'marketing': ['digital marketing','growth','content marketing','marketing manager','demand generation','brand manager'],
+  'sales': ['account executive','business development','sales representative','account manager','sales manager','bdr','sdr'],
+  'machine learning': ['ml engineer','ai engineer','deep learning','nlp','computer vision','data scientist','ml ops'],
+  'cybersecurity': ['security engineer','information security','security analyst','infosec','penetration tester','soc analyst'],
+  'cloud': ['aws','azure','gcp','cloud engineer','cloud architect','infrastructure'],
+  'qa': ['quality assurance','test engineer','sdet','automation tester','qa engineer','testing'],
+  'business analyst': ['data analyst','systems analyst','requirements analyst','ba','business analysis','functional analyst'],
+  'financial analyst': ['finance analyst','fp&a','investment analyst','equity analyst','financial planning'],
+  'operations': ['operations manager','ops manager','operations analyst','operations coordinator','business operations'],
+  'hr': ['human resources','recruiter','talent acquisition','people operations','hr manager','hrbp'],
+  'customer success': ['account manager','client success','customer experience','csm','relationship manager'],
+  'support': ['customer support','technical support','help desk','support engineer','customer service'],
+  'analyst': ['data analyst','business analyst','financial analyst','operations analyst','research analyst','intelligence analyst'],
+  'manager': ['lead','director','head of','vp','senior manager','team lead'],
+  'engineer': ['developer','architect','specialist','sde','swe'],
+  'designer': ['ux','ui','product designer','creative','visual designer'],
+  'intern': ['internship','co-op','entry level','junior','graduate','new grad'],
+  'remote': ['work from home','wfh','distributed','virtual','telecommute'],
+};
+
+function expandSearchQuery(query) {
+  if (!query) return query;
+  var lower = query.toLowerCase().trim();
+  var extras = new Set();
+
+  // Check full query first
+  if (TITLE_SYNONYMS[lower]) {
+    TITLE_SYNONYMS[lower].forEach(function(s) { extras.add(s); });
+  }
+
+  // Check each word as a key
+  var words = lower.split(/\s+/);
+  words.forEach(function(w) {
+    if (TITLE_SYNONYMS[w]) {
+      TITLE_SYNONYMS[w].forEach(function(s) { extras.add(s); });
+    }
+  });
+
+  // Check 2-word combos
+  for (var i = 0; i < words.length - 1; i++) {
+    var pair = words[i] + ' ' + words[i+1];
+    if (TITLE_SYNONYMS[pair]) {
+      TITLE_SYNONYMS[pair].forEach(function(s) { extras.add(s); });
+    }
+  }
+
+  return { original: query, expanded: Array.from(extras) };
+}
+
+// Client-side fuzzy match: checks if a job matches any of the expanded terms
+function jobMatchesSearch(job, searchInfo) {
+  if (!searchInfo || !searchInfo.original) return true;
+  var text = ((job.title || '') + ' ' + (job.company_name || '') + ' ' + (job.description || '')).toLowerCase();
+  var origWords = searchInfo.original.toLowerCase().split(/\s+/);
+
+  // Must match all original words
+  var matchesOriginal = origWords.every(function(w) { return text.indexOf(w) !== -1; });
+  if (matchesOriginal) return true;
+
+  // Or match any expanded synonym
+  if (searchInfo.expanded && searchInfo.expanded.length > 0) {
+    return searchInfo.expanded.some(function(syn) {
+      var synWords = syn.split(/\s+/);
+      return synWords.every(function(w) { return text.indexOf(w) !== -1; });
+    });
+  }
+  return false;
+}
 
 // ── Skill/Tech Extraction Engine ──
 var SKILL_DB = [
@@ -612,29 +704,77 @@ async function loadJobs() {
   const search = document.getElementById('filterSearch').value.trim();
   const [sort_by, sort_dir] = sortVal.split(':');
 
+  // Smart search: expand query with synonyms
+  const searchInfo = search ? expandSearchQuery(search) : null;
+
   const params = new URLSearchParams({
     hours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
     source, work_type: workType, status, direct_only: directOnly,
-    sort_by, sort_dir, search, limit: 200, offset: 0,
+    sort_by, sort_dir, search, limit: 500, offset: 0,
   });
+
+  // Show searching indicator
+  const searchBtn = document.getElementById('searchGoBtn');
+  if (search && searchBtn) { searchBtn.textContent = '...'; searchBtn.disabled = true; }
 
   try {
     const res = await fetch(API + '/api/jobs?' + params);
     const data = await res.json();
-    renderJobs(data.jobs || []);
-    renderStats(data.stats || {});
+    let jobs = data.jobs || [];
+
+    // If we have expanded synonyms, also fetch those matches
+    if (searchInfo && searchInfo.expanded.length > 0 && search) {
+      // Do a broader fetch with each synonym to catch related jobs
+      const extraFetches = searchInfo.expanded.slice(0, 6).map(function(syn) {
+        const p2 = new URLSearchParams({
+          hours: 720, posted_hours: postedHours,
+          min_relevance: 0, min_trust: 0,
+          source, work_type: workType, status, direct_only: directOnly,
+          sort_by, sort_dir, search: syn, limit: 100, offset: 0,
+        });
+        return fetch(API + '/api/jobs?' + p2).then(function(r) { return r.json(); }).catch(function() { return {jobs:[]}; });
+      });
+      const extraResults = await Promise.all(extraFetches);
+      const seenIds = new Set(jobs.map(function(j) { return j.id; }));
+      extraResults.forEach(function(d) {
+        (d.jobs || []).forEach(function(j) {
+          if (!seenIds.has(j.id)) { seenIds.add(j.id); jobs.push(j); }
+        });
+      });
+    }
+
+    renderJobs(jobs, searchInfo);
+    renderStats(data.stats || {}, jobs.length, search);
   } catch (e) {
     console.error('Failed to load jobs:', e);
+  } finally {
+    if (searchBtn) { searchBtn.textContent = 'Go'; searchBtn.disabled = false; }
   }
 }
 
-function renderJobs(jobs) {
+function renderJobs(jobs, searchInfo) {
   const list = document.getElementById('jobList');
 
+  // Remove old search banner
+  var oldBanner = document.getElementById('searchBanner');
+  if (oldBanner) oldBanner.remove();
+
   if (!jobs.length) {
-    list.innerHTML = '<div class="empty"><h3>No jobs match your filters</h3><p>Try widening your time range or removing filters.</p></div>';
+    list.innerHTML = '<div class="empty"><h3>No jobs match your filters</h3><p>Try widening your time range, adjusting keywords, or removing filters.</p></div>';
     return;
+  }
+
+  // Show search banner with result count and expanded terms
+  if (searchInfo && searchInfo.original) {
+    var bannerHtml = '<div class="search-active-banner" id="searchBanner">';
+    bannerHtml += '<span>Found <strong>' + jobs.length + '</strong> jobs matching "<strong>' + esc(searchInfo.original) + '</strong>"';
+    if (searchInfo.expanded.length > 0) {
+      bannerHtml += ' <span style="color:var(--text3);font-size:0.75rem;">(+ related: ' + searchInfo.expanded.slice(0,5).join(', ') + ')</span>';
+    }
+    bannerHtml += '</span>';
+    bannerHtml += '<button onclick="clearSearch()">Clear Search</button></div>';
+    list.insertAdjacentHTML('beforebegin', bannerHtml);
   }
 
   let html = '';
@@ -708,8 +848,14 @@ function renderJobs(jobs) {
   list.innerHTML = html;
 }
 
-function renderStats(s) {
-  document.getElementById('statTotal').textContent = s.total || 0;
+function renderStats(s, searchCount, searchTerm) {
+  if (searchTerm) {
+    document.getElementById('statTotal').textContent = searchCount || 0;
+    document.getElementById('statTotal').parentElement.querySelector('.label').textContent = 'Search Results';
+  } else {
+    document.getElementById('statTotal').textContent = s.total || 0;
+    document.getElementById('statTotal').parentElement.querySelector('.label').textContent = 'Total Jobs';
+  }
   document.getElementById('statNew').textContent = s.new_count || 0;
   document.getElementById('statViewed').textContent = s.viewed_count || 0;
   document.getElementById('statDirect').textContent = s.direct_count || 0;
@@ -911,7 +1057,26 @@ function formatDateTime(str) {
 
 function debounceSearch() {
   clearTimeout(searchTimeout);
-  searchTimeout = setTimeout(loadJobs, 400);
+  var val = document.getElementById('filterSearch').value.trim();
+  var clearBtn = document.getElementById('searchClear');
+  var input = document.getElementById('filterSearch');
+  if (val) {
+    clearBtn.style.display = 'block';
+    input.classList.add('has-search');
+  } else {
+    clearBtn.style.display = 'none';
+    input.classList.remove('has-search');
+  }
+  searchTimeout = setTimeout(loadJobs, 500);
+}
+
+function clearSearch() {
+  document.getElementById('filterSearch').value = '';
+  document.getElementById('searchClear').style.display = 'none';
+  document.getElementById('filterSearch').classList.remove('has-search');
+  var banner = document.getElementById('searchBanner');
+  if (banner) banner.remove();
+  loadJobs();
 }
 
 // ── Init ──
