@@ -245,6 +245,8 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
     company_url = str(row.get("company_url", "")).strip()
 
     # Collect all available URLs and find the best direct one
+    # ONLY use structured URL fields from the scraper — never extract from description
+    # (description URLs lead to company homepages, benefit pages, etc. — not job postings)
     candidate_urls = [u for u in [job_url, company_url] if u]
 
     # Also check for apply_link / apply_url fields some sources provide
@@ -253,41 +255,20 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
         if val and val not in candidate_urls:
             candidate_urls.append(val)
 
-    # Extract URLs from description that look like actual apply/career links
-    if description:
-        desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', description)
-        apply_patterns = re.compile(
-            r'(apply|career|job|position|opening|recruit|talent|hire|join)'
-            r'|lever\.co|greenhouse\.io|workday\.com|ashbyhq\.com|jobvite\.com'
-            r'|smartrecruiters\.com|icims\.com|myworkdayjobs\.com',
-            re.IGNORECASE,
-        )
-        for du in desc_urls:
-            du = du.rstrip('.,;:')
-            if du not in candidate_urls and _is_direct_url(du) and apply_patterns.search(du):
-                candidate_urls.append(du)
+    # Check structured apply options (SerpApi provides these)
+    for key in ("apply_options", "company_url_direct", "company_careers_url"):
+        val = row.get(key)
+        if isinstance(val, list):
+            for item in val:
+                u = item.get("link", "") if isinstance(item, dict) else str(item)
+                if u and u not in candidate_urls:
+                    candidate_urls.append(u)
+        elif isinstance(val, str) and val.strip() and val.strip() not in candidate_urls:
+            candidate_urls.append(val.strip())
 
     best_url, direct_url, is_direct = _find_best_direct_url(candidate_urls)
     if best_url:
         job_url = best_url
-
-    # If all URLs are aggregator links, check if the job has company career info
-    # JobSpy sometimes provides company_url_direct or similar fields
-    if not is_direct:
-        for key in ("company_url_direct", "company_careers_url", "apply_options"):
-            val = row.get(key)
-            if isinstance(val, list):
-                for item in val:
-                    u = item.get("link", "") if isinstance(item, dict) else str(item)
-                    if u and _is_direct_url(u):
-                        direct_url = u
-                        is_direct = True
-                        break
-            elif isinstance(val, str) and val.strip() and _is_direct_url(val.strip()):
-                direct_url = val.strip()
-                is_direct = True
-            if is_direct:
-                break
 
     # Parse salary
     salary_min = 0

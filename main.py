@@ -247,29 +247,13 @@ async def _reprocess_existing_jobs():
             row = dict(row)
             updates = {}
 
-            # Fix direct apply detection
+            # Fix direct apply detection — ONLY use structured URL fields
+            # Never extract from description (leads to company homepages, not job posts)
             urls = []
             if row["source_url"]:
                 urls.append(row["source_url"])
-            if row["direct_apply_url"]:
-                urls.append(row["direct_apply_url"])
 
-            # Extract URLs from description that look like actual apply/career links
-            if row["description"]:
-                import re
-                desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', row["description"])
-                apply_pat = re.compile(
-                    r'(apply|career|job|position|opening|recruit|talent|hire|join)'
-                    r'|lever\.co|greenhouse\.io|workday\.com|ashbyhq\.com|jobvite\.com'
-                    r'|smartrecruiters\.com|icims\.com|myworkdayjobs\.com',
-                    re.IGNORECASE,
-                )
-                for du in desc_urls:
-                    du = du.rstrip('.,;:')
-                    if du not in urls and _is_direct_url(du) and apply_pat.search(du):
-                        urls.append(du)
-
-            # Check if any URL is direct
+            # Check if any structured URL is a direct company link
             has_direct = False
             best_direct = ""
             for u in urls:
