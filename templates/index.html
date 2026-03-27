@@ -60,7 +60,7 @@
 
   /* Job list */
   .job-list { display: flex; flex-direction: column; gap: 8px; }
-  .job-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; display: grid; grid-template-columns: 1fr auto; gap: 12px; transition: border-color 0.15s; }
+  .job-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s; }
   .job-card:hover { border-color: var(--primary); }
   .job-card.viewed { border-left: 3px solid var(--yellow); opacity: 0.85; }
   .job-card.applied { border-left: 3px solid var(--green); opacity: 0.7; }
@@ -109,15 +109,22 @@
 
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 
-  .job-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; justify-content: center; min-width: 140px; }
-  .time-ago { font-size: 0.75rem; color: var(--text3); text-align: right; white-space: nowrap; }
+  .job-actions { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; flex-shrink: 0; }
+  .time-info { font-size: 0.72rem; color: var(--text3); display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+  .time-info span { white-space: nowrap; }
+  .time-info .sep { color: var(--border); }
 
-  /* Applied toggle */
-  .applied-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text3); cursor: pointer; user-select: none; }
-  .applied-toggle input[type="checkbox"] { appearance: none; width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg); cursor: pointer; position: relative; transition: all 0.15s; }
+  /* Applied toggle — compact icon style */
+  .applied-toggle { display: flex; align-items: center; gap: 0; cursor: pointer; user-select: none; }
+  .applied-toggle input[type="checkbox"] { appearance: none; width: 28px; height: 28px; border: 2px solid var(--border); border-radius: 6px; background: var(--surface2); cursor: pointer; position: relative; transition: all 0.15s; flex-shrink: 0; }
   .applied-toggle input[type="checkbox"]:checked { background: var(--green); border-color: var(--green); }
-  .applied-toggle input[type="checkbox"]:checked::after { content: '\2713'; position: absolute; top: -1px; left: 3px; color: #fff; font-size: 12px; font-weight: 700; }
+  .applied-toggle input[type="checkbox"]:checked::after { content: '\2713'; position: absolute; top: 2px; left: 6px; color: #fff; font-size: 14px; font-weight: 700; }
   .applied-toggle:hover input[type="checkbox"] { border-color: var(--green); }
+  .applied-toggle .toggle-label { font-size: 0; width: 0; overflow: hidden; }
+
+  /* Hide button — icon style */
+  .hide-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--text3); cursor: pointer; font-size: 1rem; transition: all 0.15s; padding: 0; flex-shrink: 0; }
+  .hide-btn:hover { border-color: var(--red); color: var(--red); background: var(--red-bg); }
 
   /* Profile modal */
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
@@ -154,11 +161,10 @@
 
   /* Responsive */
   @media (max-width: 768px) {
-    .job-card { grid-template-columns: 1fr; }
-    .job-actions { flex-direction: row; align-items: center; min-width: auto; flex-wrap: wrap; }
     .filters { flex-wrap: wrap; }
     .filter-group { flex: 1; min-width: 120px; }
     .search-box { min-width: 100%; }
+    .time-info { flex-wrap: wrap; }
   }
 </style>
 </head>
@@ -557,19 +563,15 @@ function renderJobs(jobs) {
     const skills = extractSkills(job.title, job.description);
     const skillHtml = renderSkillTags(skills);
 
-    // Time display: "Posted Xh ago" + local date/time + "Found Xh ago"
+    // Time display — compact inline
     var timeHtml = '';
     if (postedAgo) {
-      timeHtml += '<div class="time-ago">Posted ' + postedAgo + '</div>';
-      timeHtml += '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + formatDateTime(job.posted_at) + '</div>';
-      timeHtml += '<div class="time-ago" style="font-size:0.65rem;opacity:0.45;">Found ' + foundAgo + '</div>';
+      timeHtml = '<span>Posted ' + postedAgo + '</span><span class="sep">\u00b7</span><span>' + formatDateTime(job.posted_at) + '</span><span class="sep">\u00b7</span><span>Found ' + foundAgo + '</span>';
     } else {
-      timeHtml += '<div class="time-ago">Found ' + foundAgo + '</div>';
-      timeHtml += '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + formatDateTime(job.first_seen_at) + '</div>';
+      timeHtml = '<span>Found ' + foundAgo + '</span><span class="sep">\u00b7</span><span>' + formatDateTime(job.first_seen_at) + '</span>';
     }
 
     html += '<div class="job-card ' + cls + '" id="job-' + job.id + '">'
-      + '<div class="job-main">'
       + '<h3><a href="' + applyUrl + '" target="_blank" rel="noopener" onclick="markViewed(' + job.id + ')">' + esc(job.title) + '</a></h3>'
       + '<div class="job-meta">'
       + '<span class="company">' + esc(job.company_name || 'Unknown') + '</span>'
@@ -578,17 +580,17 @@ function renderJobs(jobs) {
       + '</div>'
       + '<div class="badges">' + badges + '</div>'
       + skillHtml
-      + '</div>'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;">'
+      + '<div class="time-info">' + timeHtml + '</div>'
       + '<div class="job-actions">'
-      + timeHtml
       + (job.is_direct_apply
         ? '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')" style="background:var(--green-bg);font-weight:700;">\u2713 Apply Direct</a>'
         : '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')">View Job</a>')
       + '<label class="applied-toggle" title="Mark as applied">'
       + '<input type="checkbox" ' + (isApplied ? 'checked' : '') + ' onchange="toggleApplied(' + job.id + ', this.checked)">'
-      + '<span>Applied</span></label>'
-      + '<button class="btn sm" onclick="markStatus(' + job.id + ', \'hidden\')" style="font-size:0.7rem;padding:2px 8px;">Hide</button>'
-      + '</div></div>';
+      + '<span class="toggle-label">Applied</span></label>'
+      + '<button class="hide-btn" onclick="markStatus(' + job.id + ', \'hidden\')" title="Hide">\u00d7</button>'
+      + '</div></div></div>';
   }
 
   list.innerHTML = html;
