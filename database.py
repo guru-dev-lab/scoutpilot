@@ -113,7 +113,7 @@ async def get_jobs(hours=24, min_relevance=0, min_trust=0, source="", status="",
 async def get_job_count(hours=24):
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_count, COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) as applied_count, COALESCE(SUM CASE THAN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count FROM jobs WHERE first_seen_at >= datetime('now', ?)", (f"-{hours} hours",))
+        cursor = await db.execute("SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_count, COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) as applied_count, COALESCE(SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count FROM jobs WHERE first_seen_at >= datetime('now', ?)", (f"-{hours} hours",))
         row = await cursor.fetchone()
         return dict(row) if row else {"total": 0, "new_count": 0, "applied_count": 0, "hidden_count": 0}
     finally: await db.close()
