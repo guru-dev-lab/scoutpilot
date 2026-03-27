@@ -959,7 +959,8 @@ async function triggerScrape() {
     setTimeout(function poll() {
       fetch(API + '/api/status').then(function(r){return r.json()}).then(function(status) {
         updateScrapeStatus(status);
-        if (status.scraper.status === 'ok' || status.scraper.status === 'error') {
+        var ss = status.scraper ? status.scraper.status : '';
+        if (ss === 'ok' || ss === 'error') {
           btn.disabled = false; btn.textContent = 'Scrape Now'; loadJobs();
         } else { setTimeout(poll, 3000); }
       });
