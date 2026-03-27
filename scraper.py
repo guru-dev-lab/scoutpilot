@@ -1,11 +1,13 @@
 """
 Job scraper engine — pulls from multiple sources and normalizes into a common format.
+Aggressively finds direct company application URLs.
 """
 import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 from jobspy import scrape_jobs
@@ -14,6 +16,79 @@ from config import settings
 from database import insert_job
 
 logger = logging.getLogger("scoutpilot.scraper")
+
+# Known aggregator domains — links from these are NOT direct apply
+AGGREGATOR_DOMAINS = {
+    "linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
+    "google.com", "monster.com", "careerbuilder.com", "simplyhired.com",
+    "dice.com", "snagajob.com", "talent.com", "adzuna.com", "jooble.org",
+    "getwork.com", "livecareer.com", "resume-library.com", "jobget.com",
+    "wellfound.com", "lever.co", "greenhouse.io", "workday.com",
+    "smartrecruiters.com", "icims.com", "myworkdayjobs.com",
+    "jobs.lever.co", "boards.greenhouse.io",
+}
+
+# ATS domains that ARE direct apply (company uses these as their career page)
+ATS_DIRECT_DOMAINS = {
+    "lever.co", "greenhouse.io", "workday.com", "myworkdayjobs.com",
+    "smartrecruiters.com", "icims.com", "jobvite.com", "ashbyhq.com",
+    "bamboohr.com", "recruitee.com", "workable.com", "breezy.hr",
+    "jazz.co", "jazzhr.com", "applicantstack.com", "paylocity.com",
+    "ultipro.com", "ceridian.com", "taleo.net", "successfactors.com",
+    "apply.workable.com", "jobs.ashbyhq.com", "careers.smartrecruiters.com",
+}
+
+
+def _is_direct_url(url: str) -> bool:
+    """
+    Determine if a URL is a direct company application link.
+    Returns True for company career pages and ATS-hosted job pages.
+    Returns False for aggregator job boards.
+    """
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url.lower())
+        domain = parsed.netloc.replace("www.", "")
+
+        # Check if it's a known aggregator (NOT direct)
+        for agg in AGGREGATOR_DOMAINS:
+            if domain == agg or domain.endswith("." + agg):
+                # BUT check if it's an ATS that companies use for their own careers
+                for ats in ATS_DIRECT_DOMAINS:
+                    if domain == ats or domain.endswith("." + ats):
+                        return True
+                return False
+
+        # If it's not an aggregator, it's likely a direct company link
+        return True
+    except Exception:
+        return False
+
+
+def _find_best_direct_url(urls: list[str]) -> tuple[str, str, bool]:
+    """
+    Given a list of URLs from a job posting, find the best direct apply URL.
+    Returns: (best_url, direct_url, is_direct)
+    """
+    direct_urls = []
+    aggregator_urls = []
+
+    for url in urls:
+        if not url:
+            continue
+        if _is_direct_url(url):
+            direct_urls.append(url)
+        else:
+            aggregator_urls.append(url)
+
+    if direct_urls:
+        # Prefer the first direct URL (usually the most relevant)
+        return (direct_urls[0], direct_urls[0], True)
+    elif aggregator_urls:
+        return (aggregator_urls[0], "", False)
+    else:
+        return ("", "", False)
 
 # ============================================================================
 # JOB BOARD / STAFFING AGENCY BLOCKLIST
@@ -115,20 +190,22 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
     if _is_blocked_company(company):
         return None  # Signal to skip this job
 
-    # Determine direct apply
+    # Determine direct apply — use smart URL detection
     job_url = str(row.get("job_url", row.get("link", row.get("url", "")))).strip()
     company_url = str(row.get("company_url", "")).strip()
 
-    # If the apply link goes to the company's own domain, it's direct
-    is_direct = False
-    direct_url = ""
-    if job_url:
-        # Check if it's a company career page (not linkedin/indeed/glassdoor/ziprecruiter)
-        aggregator_domains = ["linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com", "google.com"]
-        is_aggregator = any(d in job_url.lower() for d in aggregator_domains)
-        if not is_aggregator:
-            is_direct = True
-            direct_url = job_url
+    # Collect all available URLs and find the best direct one
+    candidate_urls = [u for u in [job_url, company_url] if u]
+
+    # Also check for apply_link / apply_url fields some sources provide
+    for key in ("apply_link", "apply_url", "application_url", "job_apply_link"):
+        val = str(row.get(key, "")).strip()
+        if val and val not in candidate_urls:
+            candidate_urls.append(val)
+
+    best_url, direct_url, is_direct = _find_best_direct_url(candidate_urls)
+    if best_url:
+        job_url = best_url
 
     # Parse salary
     salary_min = 0
@@ -155,7 +232,6 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
     domain = ""
     if company_url:
         try:
-            from urllib.parse import urlparse
             parsed = urlparse(company_url if company_url.startswith("http") else f"https://{company_url}")
             domain = parsed.netloc.replace("www.", "")
         except Exception:
@@ -248,7 +324,8 @@ async def scrape_jobspy(
             inserted += 1
             jobs.append(job)
 
-    logger.info(f"[JobSpy] Found {len(df)} results, blocked {blocked}, inserted {inserted} new jobs")
+    direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+    logger.info(f"[JobSpy] Found {len(df)} results, blocked {blocked}, inserted {inserted} new ({direct_count} direct apply)")
     return jobs
 
 
@@ -285,22 +362,19 @@ async def scrape_serpapi(
             if _is_blocked_company(company_name):
                 continue
 
-            job_url = ""
-            direct_url = ""
-            is_direct = False
-
-            # Check apply options for direct links
+            # Collect ALL apply option URLs and find the best direct one
+            all_urls = []
             for option in item.get("apply_options", []):
                 link = option.get("link", "")
                 if link:
-                    aggregator_domains = ["linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com"]
-                    is_agg = any(d in link.lower() for d in aggregator_domains)
-                    if not is_agg:
-                        direct_url = link
-                        is_direct = True
-                        break
-                    if not job_url:
-                        job_url = link
+                    all_urls.append(link)
+
+            # Also check detected_extensions for a share_link
+            share_link = item.get("detected_extensions", {}).get("share_link", "")
+            if share_link:
+                all_urls.append(share_link)
+
+            job_url, direct_url, is_direct = _find_best_direct_url(all_urls)
 
             if not job_url and not direct_url:
                 continue
@@ -319,7 +393,7 @@ async def scrape_serpapi(
                 "salary_min": 0,
                 "salary_max": 0,
                 "source": "google_jobs",
-                "source_url": direct_url or job_url,
+                "source_url": job_url or direct_url,
                 "direct_apply_url": direct_url,
                 "posted_at": item.get("detected_extensions", {}).get("posted_at", ""),
                 "is_direct_apply": is_direct,
@@ -330,7 +404,8 @@ async def scrape_serpapi(
             if was_inserted:
                 jobs.append(job)
 
-        logger.info(f"[SerpApi] Found {len(data.get('jobs_results', []))} results, inserted {len(jobs)} new")
+        direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+        logger.info(f"[SerpApi] Found {len(data.get('jobs_results', []))} results, inserted {len(jobs)} new ({direct_count} direct apply)")
     except Exception as e:
         logger.error(f"[SerpApi] Error: {e}")
 
@@ -380,8 +455,11 @@ async def scrape_jsearch(
             if _is_blocked_company(company_name):
                 continue
 
-            job_url = item.get("job_apply_link", "")
-            is_direct = item.get("job_apply_is_direct", False)
+            job_apply_link = item.get("job_apply_link", "")
+            # JSearch provides is_direct flag but let's verify with our own logic too
+            jsearch_direct = item.get("job_apply_is_direct", False)
+            is_direct = jsearch_direct or _is_direct_url(job_apply_link)
+            job_url = job_apply_link
 
             # Detect work type
             work_type = _detect_work_type({
@@ -413,7 +491,8 @@ async def scrape_jsearch(
             if was_inserted:
                 jobs.append(job)
 
-        logger.info(f"[JSearch] Found {len(data.get('data', []))} results, inserted {len(jobs)} new")
+        direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+        logger.info(f"[JSearch] Found {len(data.get('data', []))} results, inserted {len(jobs)} new ({direct_count} direct apply)")
     except Exception as e:
         logger.error(f"[JSearch] Error: {e}")
 

@@ -134,6 +134,7 @@ async def api_get_jobs(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: str = "",
+    direct_only: str = "",
 ):
     try:
         jobs = await get_jobs(
@@ -142,6 +143,7 @@ async def api_get_jobs(
             source=source, status=status, work_type=work_type,
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
+            direct_only=bool(direct_only),
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}

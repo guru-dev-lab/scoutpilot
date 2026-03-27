@@ -154,6 +154,7 @@ async def get_jobs(
     limit: int = 200,
     offset: int = 0,
     search: str = "",
+    direct_only: bool = False,
 ) -> list[dict]:
     db = await get_db()
     try:
@@ -192,6 +193,9 @@ async def get_jobs(
         if work_type:
             conditions.append("work_type = ?")
             params.append(work_type)
+
+        if direct_only:
+            conditions.append("is_direct_apply = 1")
 
         if search:
             conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
@@ -232,12 +236,13 @@ async def get_job_count(hours: int = 24) -> dict:
                 COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_count,
                 COALESCE(SUM(CASE WHEN status = 'viewed' THEN 1 ELSE 0 END), 0) as viewed_count,
                 COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) as applied_count,
-                COALESCE(SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count
+                COALESCE(SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count,
+                COALESCE(SUM(CASE WHEN is_direct_apply = 1 THEN 1 ELSE 0 END), 0) as direct_count
             FROM jobs WHERE first_seen_at >= datetime('now', ?)""",
             (f"-{hours} hours",),
         )
         row = await cursor.fetchone()
-        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "hidden_count": 0}
+        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "hidden_count": 0, "direct_count": 0}
     finally:
         await db.close()
 

@@ -74,7 +74,8 @@
 
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
   .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .badge.direct { background: var(--green-bg); color: var(--green); }
+  .badge.direct { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); font-size: 0.72rem; padding: 3px 10px; }
+  .badge.direct::before { content: '\2713 '; font-weight: 700; }
   .badge.remote { background: var(--blue-bg); color: var(--blue); }
   .badge.hybrid { background: var(--orange-bg); color: var(--orange); }
   .badge.onsite { background: var(--surface2); color: var(--text3); }
@@ -166,6 +167,7 @@
     <div class="stat"><div class="num" id="statTotal">0</div><div class="label">Total</div></div>
     <div class="stat"><div class="num" id="statNew">0</div><div class="label">New</div></div>
     <div class="stat"><div class="num" id="statViewed">0</div><div class="label">Viewed</div></div>
+    <div class="stat"><div class="num" id="statDirect">0</div><div class="label">Direct Apply</div></div>
     <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
   </div>
 
@@ -222,6 +224,22 @@
       </select>
     </div>
     <div class="filter-group">
+      <label>Status</label>
+      <select id="filterStatus" onchange="loadJobs()">
+        <option value="">All Jobs</option>
+        <option value="new">New Only</option>
+        <option value="viewed">Viewed</option>
+        <option value="applied">Applied</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Apply</label>
+      <select id="filterDirect" onchange="loadJobs()">
+        <option value="">All Links</option>
+        <option value="1">Direct Apply Only</option>
+      </select>
+    </div>
+    <div class="filter-group">
       <label>Relevance</label>
       <select id="filterRelevance" onchange="loadJobs()">
         <option value="0">All Scores</option>
@@ -243,7 +261,7 @@
     <div class="search-box">
       <label>Search</label>
       <div class="search-row">
-        <input type="text" id="filterSearch" placeholder="Title, company..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
+        <input type="text" id="filterSearch" placeholder="Search job titles, companies, descriptions..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
         <button onclick="loadJobs()">Go</button>
       </div>
     </div>
@@ -309,6 +327,8 @@ async function loadJobs() {
   const relevance = document.getElementById('filterRelevance').value;
   const source = document.getElementById('filterSource').value;
   const workType = document.getElementById('filterWorkType').value;
+  const status = document.getElementById('filterStatus').value;
+  const directOnly = document.getElementById('filterDirect').value;
   const sortVal = document.getElementById('filterSort').value;
   const search = document.getElementById('filterSearch').value.trim();
   const [sort_by, sort_dir] = sortVal.split(':');
@@ -316,7 +336,8 @@ async function loadJobs() {
   const params = new URLSearchParams({
     hours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
-    source, work_type: workType, sort_by, sort_dir, search, limit: 200, offset: 0,
+    source, work_type: workType, status, direct_only: directOnly,
+    sort_by, sort_dir, search, limit: 200, offset: 0,
   });
 
   try {
@@ -401,7 +422,9 @@ function renderJobs(jobs) {
       + '</div>'
       + '<div class="job-actions">'
       + timeHtml
-      + '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')">View Job</a>'
+      + (job.is_direct_apply
+        ? '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')" style="background:var(--green-bg);font-weight:700;">\u2713 Apply Direct</a>'
+        : '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')">View Job</a>')
       + '<label class="applied-toggle" title="Mark as applied">'
       + '<input type="checkbox" ' + (isApplied ? 'checked' : '') + ' onchange="toggleApplied(' + job.id + ', this.checked)">'
       + '<span>Applied</span></label>'
@@ -416,6 +439,7 @@ function renderStats(s) {
   document.getElementById('statTotal').textContent = s.total || 0;
   document.getElementById('statNew').textContent = s.new_count || 0;
   document.getElementById('statViewed').textContent = s.viewed_count || 0;
+  document.getElementById('statDirect').textContent = s.direct_count || 0;
   document.getElementById('statApplied').textContent = s.applied_count || 0;
 }
 
