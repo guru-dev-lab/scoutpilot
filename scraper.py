@@ -253,12 +253,18 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
         if val and val not in candidate_urls:
             candidate_urls.append(val)
 
-    # Extract URLs from description that point to company career pages / ATS
+    # Extract URLs from description that look like actual apply/career links
     if description:
         desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', description)
+        apply_patterns = re.compile(
+            r'(apply|career|job|position|opening|recruit|talent|hire|join)'
+            r'|lever\.co|greenhouse\.io|workday\.com|ashbyhq\.com|jobvite\.com'
+            r'|smartrecruiters\.com|icims\.com|myworkdayjobs\.com',
+            re.IGNORECASE,
+        )
         for du in desc_urls:
             du = du.rstrip('.,;:')
-            if du not in candidate_urls and _is_direct_url(du):
+            if du not in candidate_urls and _is_direct_url(du) and apply_patterns.search(du):
                 candidate_urls.append(du)
 
     best_url, direct_url, is_direct = _find_best_direct_url(candidate_urls)

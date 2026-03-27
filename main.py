@@ -232,6 +232,10 @@ async def _reprocess_existing_jobs():
 
     db = await get_db()
     try:
+        # Reset all direct_apply flags first so we re-evaluate cleanly
+        await db.execute("UPDATE jobs SET is_direct_apply = 0, direct_apply_url = '' WHERE is_direct_apply = 1")
+        await db.commit()
+
         cursor = await db.execute(
             "SELECT id, source_url, direct_apply_url, description, posted_at, is_direct_apply FROM jobs"
         )
@@ -250,13 +254,19 @@ async def _reprocess_existing_jobs():
             if row["direct_apply_url"]:
                 urls.append(row["direct_apply_url"])
 
-            # Extract URLs from description
+            # Extract URLs from description that look like actual apply/career links
             if row["description"]:
                 import re
                 desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', row["description"])
+                apply_pat = re.compile(
+                    r'(apply|career|job|position|opening|recruit|talent|hire|join)'
+                    r'|lever\.co|greenhouse\.io|workday\.com|ashbyhq\.com|jobvite\.com'
+                    r'|smartrecruiters\.com|icims\.com|myworkdayjobs\.com',
+                    re.IGNORECASE,
+                )
                 for du in desc_urls:
                     du = du.rstrip('.,;:')
-                    if du not in urls and _is_direct_url(du):
+                    if du not in urls and _is_direct_url(du) and apply_pat.search(du):
                         urls.append(du)
 
             # Check if any URL is direct
