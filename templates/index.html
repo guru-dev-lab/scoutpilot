@@ -69,6 +69,8 @@
   .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
   .badge.direct { background: var(--green-bg); color: var(--green); }
   .badge.remote { background: var(--blue-bg); color: var(--blue); }
+  .badge.hybrid { background: var(--orange-bg); color: var(--orange); }
+  .badge.onsite { background: var(--surface2); color: var(--text3); }
   .badge.relevance-high { background: #312e81; color: #a5b4fc; }
   .badge.relevance-mid { background: #3b2f1e; color: #fbbf24; }
   .badge.relevance-low { background: #3b1e1e; color: #f87171; }
@@ -197,6 +199,14 @@
       <option value="jsearch">JSearch</option>
     </select>
 
+    <span class="filter-label">Work Type:</span>
+    <select id="filterWorkType" onchange="loadJobs()">
+      <option value="">All</option>
+      <option value="remote">Remote</option>
+      <option value="hybrid">Hybrid</option>
+      <option value="onsite">Onsite</option>
+    </select>
+
     <span class="filter-label">Sort:</span>
     <select id="filterSort" onchange="loadJobs()">
       <option value="first_seen_at:DESC">Newest First</option>
@@ -272,19 +282,20 @@
   const API = '';
   let searchTimeout = null;
 
-  // ââ Load Jobs ââ
+  // ── Load Jobs ──
   async function loadJobs() {
     const hours = document.getElementById('filterHours').value;
     const relevance = document.getElementById('filterRelevance').value;
     const trust = document.getElementById('filterTrust').value;
     const source = document.getElementById('filterSource').value;
+    const workType = document.getElementById('filterWorkType').value;
     const sortVal = document.getElementById('filterSort').value;
     const search = document.getElementById('filterSearch').value;
     const [sort_by, sort_dir] = sortVal.split(':');
 
     const params = new URLSearchParams({
       hours, min_relevance: relevance, min_trust: trust,
-      source, sort_by, sort_dir, search, limit: 200, offset: 0,
+      source, work_type: workType, sort_by, sort_dir, search, limit: 200, offset: 0,
     });
 
     try {
@@ -310,13 +321,17 @@
     empty.style.display = 'none';
 
     list.innerHTML = jobs.map(job => {
-      const timeAgo = getTimeAgo(job.first_seen_at);
+      const postedAgo = job.posted_at ? getTimeAgo(job.posted_at) : '';
+      const foundAgo = getTimeAgo(job.first_seen_at);
       const applyUrl = job.direct_apply_url || job.source_url;
       const statusClass = job.status === 'applied' ? 'applied' : job.status === 'hidden' ? 'hidden' : '';
 
       let badges = '';
       if (job.is_direct_apply) badges += '<span class="badge direct">Direct Apply</span>';
-      if (job.is_remote) badges += '<span class="badge remote">Remote</span>';
+      if (job.work_type === 'remote') badges += '<span class="badge remote">Remote</span>';
+      else if (job.work_type === 'hybrid') badges += '<span class="badge hybrid">Hybrid</span>';
+      else if (job.work_type === 'onsite') badges += '<span class="badge onsite">Onsite</span>';
+      else if (job.is_remote) badges += '<span class="badge remote">Remote</span>';
 
       if (job.relevance_score >= 80) badges += `<span class="badge relevance-high">Rel: ${job.relevance_score}</span>`;
       else if (job.relevance_score >= 50) badges += `<span class="badge relevance-mid">Rel: ${job.relevance_score}</span>`;
@@ -327,7 +342,10 @@
 
       if (job.salary_max > 0) badges += `<span class="badge salary">$${(job.salary_min/1000).toFixed(0)}k-$${(job.salary_max/1000).toFixed(0)}k</span>`;
 
-      const freshMs = Date.now() - new Date(job.first_seen_at + 'Z').getTime();
+      // Use posted_at for freshness if available, otherwise first_seen_at
+      const postedDate = job.posted_at ? new Date(job.posted_at.endsWith('Z') ? job.posted_at : job.posted_at + 'Z') : null;
+      const freshRef = postedDate && !isNaN(postedDate.getTime()) ? postedDate : new Date(job.first_seen_at + 'Z');
+      const freshMs = Date.now() - freshRef.getTime();
       if (freshMs < 3600000) badges += '<span class="badge fresh">JUST POSTED</span>';
 
       const desc = (job.description || '').substring(0, 200).replace(/</g, '&lt;');
@@ -345,7 +363,8 @@
             ${desc ? `<div class="desc-preview">${desc}</div>` : ''}
           </div>
           <div class="job-actions">
-            <div class="time-ago">${timeAgo}</div>
+            <div class="time-ago">${postedAgo ? `Posted ${postedAgo}` : `Found ${foundAgo}`}</div>
+            ${postedAgo ? `<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">Found ${foundAgo}</div>` : ''}
             <a href="${applyUrl}" target="_blank" rel="noopener" class="btn sm green" onclick="markApplied(${job.id})">Apply</a>
             <button class="btn sm" onclick="markStatus(${job.id}, 'hidden')">Hide</button>
           </div>
@@ -359,7 +378,7 @@
     document.getElementById('statApplied').textContent = stats.applied_count || 0;
   }
 
-  // ââ Profiles ââ
+  // ── Profiles ──
   async function loadProfiles() {
     try {
       const res = await fetch(`${API}/api/profiles`);
@@ -451,7 +470,7 @@
     loadProfiles();
   }
 
-  // ââ Actions ââ
+  // ── Actions ──
   async function markApplied(id) {
     await fetch(`${API}/api/jobs/${id}/status?status=applied`, { method: 'PATCH' });
     const card = document.getElementById(`job-${id}`);
@@ -518,12 +537,23 @@
     }
   }
 
-  // ââ Helpers ââ
+  // ── Helpers ──
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
   function getTimeAgo(dateStr) {
     if (!dateStr) return '';
-    const d = new Date(dateStr);
+    // Handle various date formats: ISO datetime, date-only, relative strings
+    let d;
+    if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      // Date-only string like "2026-03-26" — treat as UTC midnight
+      d = new Date(dateStr + 'T00:00:00Z');
+    } else if (dateStr.match(/^\d{4}-\d{2}-\d{2}T/)) {
+      d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
+    } else {
+      // Could be relative like "21 hours ago" from job boards — try parsing
+      d = new Date(dateStr);
+    }
+    if (isNaN(d.getTime())) return dateStr; // Return raw string if unparseable
     const ms = Date.now() - d.getTime();
     const mins = Math.floor(ms / 60000);
     if (mins < 1) return 'just now';
@@ -539,7 +569,7 @@
     searchTimeout = setTimeout(loadJobs, 400);
   }
 
-  // ââ Init ââ
+  // ── Init ──
   loadProfiles();
   loadJobs();
   checkStatus();
