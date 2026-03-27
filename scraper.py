@@ -253,9 +253,35 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
         if val and val not in candidate_urls:
             candidate_urls.append(val)
 
+    # Extract URLs from description that point to company career pages / ATS
+    if description:
+        desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', description)
+        for du in desc_urls:
+            du = du.rstrip('.,;:')
+            if du not in candidate_urls and _is_direct_url(du):
+                candidate_urls.append(du)
+
     best_url, direct_url, is_direct = _find_best_direct_url(candidate_urls)
     if best_url:
         job_url = best_url
+
+    # If all URLs are aggregator links, check if the job has company career info
+    # JobSpy sometimes provides company_url_direct or similar fields
+    if not is_direct:
+        for key in ("company_url_direct", "company_careers_url", "apply_options"):
+            val = row.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    u = item.get("link", "") if isinstance(item, dict) else str(item)
+                    if u and _is_direct_url(u):
+                        direct_url = u
+                        is_direct = True
+                        break
+            elif isinstance(val, str) and val.strip() and _is_direct_url(val.strip()):
+                direct_url = val.strip()
+                is_direct = True
+            if is_direct:
+                break
 
     # Parse salary
     salary_min = 0

@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     logger.info(f"Scheduler started (every {settings.scrape_interval_minutes} min)")
+
+    # Reprocess existing jobs to fix direct_apply and posted_at on startup
+    asyncio.create_task(_reprocess_existing_jobs())
+
     yield
     scheduler.shutdown()
 
@@ -212,6 +216,81 @@ async def api_trigger_scrape():
     """Manually trigger a scrape cycle."""
     asyncio.create_task(scheduled_scrape())
     return {"status": "started", "message": "Scrape cycle triggered"}
+
+
+@app.post("/api/reprocess")
+async def api_reprocess_jobs():
+    """Re-scan existing jobs to fix direct_apply detection and posted_at normalization."""
+    asyncio.create_task(_reprocess_existing_jobs())
+    return {"status": "started", "message": "Reprocessing jobs in background"}
+
+
+async def _reprocess_existing_jobs():
+    """Fix direct_apply and posted_at for all existing jobs."""
+    from scraper import _is_direct_url, _normalize_posted_at
+    from database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, source_url, direct_apply_url, description, posted_at, is_direct_apply FROM jobs"
+        )
+        rows = await cursor.fetchall()
+        fixed_direct = 0
+        fixed_posted = 0
+
+        for row in rows:
+            row = dict(row)
+            updates = {}
+
+            # Fix direct apply detection
+            urls = []
+            if row["source_url"]:
+                urls.append(row["source_url"])
+            if row["direct_apply_url"]:
+                urls.append(row["direct_apply_url"])
+
+            # Extract URLs from description
+            if row["description"]:
+                import re
+                desc_urls = re.findall(r'https?://[^\s<>"\')\]]+', row["description"])
+                for du in desc_urls:
+                    du = du.rstrip('.,;:')
+                    if du not in urls and _is_direct_url(du):
+                        urls.append(du)
+
+            # Check if any URL is direct
+            has_direct = False
+            best_direct = ""
+            for u in urls:
+                if _is_direct_url(u):
+                    has_direct = True
+                    best_direct = u
+                    break
+
+            if has_direct and not row["is_direct_apply"]:
+                updates["is_direct_apply"] = 1
+                updates["direct_apply_url"] = best_direct
+                fixed_direct += 1
+
+            # Fix posted_at normalization
+            if row["posted_at"]:
+                normalized = _normalize_posted_at(row["posted_at"])
+                if normalized and normalized != row["posted_at"]:
+                    updates["posted_at"] = normalized
+                    fixed_posted += 1
+
+            if updates:
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                values = list(updates.values()) + [row["id"]]
+                await db.execute(f"UPDATE jobs SET {set_clause} WHERE id = ?", values)
+
+        await db.commit()
+        logger.info(f"[Reprocess] Fixed {fixed_direct} direct-apply flags, {fixed_posted} posted_at dates out of {len(rows)} jobs")
+    except Exception as e:
+        logger.error(f"[Reprocess] Error: {e}")
+    finally:
+        await db.close()
 
 
 @app.get("/api/status")
