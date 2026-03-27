@@ -352,10 +352,16 @@ function renderJobs(jobs) {
 
     const desc = (job.description || '').substring(0, 200).replace(/</g, '&lt;');
 
-    // Time lines
-    let timeLine1 = postedAgo ? 'Posted ' + postedAgo : 'Found ' + foundAgo;
-    let timeLine2 = job.posted_at ? formatDateTime(job.posted_at) : '';
-    let timeLine3 = postedAgo ? 'Found ' + foundAgo : '';
+    // Time display: "Posted Xh ago" + local date/time + "Found Xh ago"
+    var timeHtml = '';
+    if (postedAgo) {
+      timeHtml += '<div class="time-ago">Posted ' + postedAgo + '</div>';
+      timeHtml += '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + formatDateTime(job.posted_at) + '</div>';
+      timeHtml += '<div class="time-ago" style="font-size:0.65rem;opacity:0.45;">Found ' + foundAgo + '</div>';
+    } else {
+      timeHtml += '<div class="time-ago">Found ' + foundAgo + '</div>';
+      timeHtml += '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + formatDateTime(job.first_seen_at) + '</div>';
+    }
 
     html += '<div class="job-card ' + cls + '" id="job-' + job.id + '">'
       + '<div class="job-main">'
@@ -369,9 +375,7 @@ function renderJobs(jobs) {
       + (desc ? '<div class="desc-preview">' + desc + '</div>' : '')
       + '</div>'
       + '<div class="job-actions">'
-      + '<div class="time-ago">' + timeLine1 + '</div>'
-      + (timeLine2 ? '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + timeLine2 + '</div>' : '')
-      + (timeLine3 ? '<div class="time-ago" style="font-size:0.65rem;opacity:0.45;">' + timeLine3 + '</div>' : '')
+      + timeHtml
       + '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')">View Job</a>'
       + '<label class="applied-toggle" title="Mark as applied">'
       + '<input type="checkbox" ' + (isApplied ? 'checked' : '') + ' onchange="toggleApplied(' + job.id + ', this.checked)">'
@@ -540,9 +544,15 @@ function escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#
 function parseDate(str) {
   if (!str) return null;
   var d;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) d = new Date(str + 'T00:00:00Z');
-  else if (/^\d{4}-\d{2}-\d{2}T/.test(str)) d = new Date(str.charAt(str.length-1)==='Z' ? str : str + 'Z');
-  else d = new Date(str);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    d = new Date(str + 'T00:00:00Z');
+  } else if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    // Already has timezone info (+00:00 or Z) — parse directly
+    if (/[Z+\-]\d{0,2}:?\d{0,2}$/.test(str)) d = new Date(str);
+    else d = new Date(str + 'Z');
+  } else {
+    d = new Date(str);
+  }
   return isNaN(d.getTime()) ? null : d;
 }
 
