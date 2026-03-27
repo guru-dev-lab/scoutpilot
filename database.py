@@ -206,16 +206,34 @@ async def get_jobs(
             conditions.append("is_direct_apply = 1")
 
         if search:
-            # Split search into words for multi-term matching
-            # Each word must appear somewhere in title, company, or description
-            words = search.strip().split()
-            word_conditions = []
-            for word in words:
-                w = f"%{word}%"
-                word_conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
-                params.extend([w, w, w])
-            if word_conditions:
-                conditions.append("(" + " AND ".join(word_conditions) + ")")
+            # Support comma-separated OR search: "SQL, Power BI, Tableau"
+            # Each comma-separated term is OR'd; words within a term are AND'd
+            raw = search.strip()
+            if "," in raw:
+                # Comma-separated: OR between groups
+                terms = [t.strip() for t in raw.split(",") if t.strip()]
+                group_conditions = []
+                for term in terms:
+                    words = term.split()
+                    word_conds = []
+                    for word in words:
+                        w = f"%{word}%"
+                        word_conds.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
+                        params.extend([w, w, w])
+                    if word_conds:
+                        group_conditions.append("(" + " AND ".join(word_conds) + ")")
+                if group_conditions:
+                    conditions.append("(" + " OR ".join(group_conditions) + ")")
+            else:
+                # Single term: AND all words together
+                words = raw.split()
+                word_conditions = []
+                for word in words:
+                    w = f"%{word}%"
+                    word_conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
+                    params.extend([w, w, w])
+                if word_conditions:
+                    conditions.append("(" + " AND ".join(word_conditions) + ")")
 
         where = " AND ".join(conditions) if conditions else "1=1"
 

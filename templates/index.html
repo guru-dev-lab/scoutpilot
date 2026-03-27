@@ -469,42 +469,59 @@ const TITLE_SYNONYMS = {
 
 function expandSearchQuery(query) {
   if (!query) return query;
-  var lower = query.toLowerCase().trim();
   var extras = new Set();
 
-  // Check full query first
-  if (TITLE_SYNONYMS[lower]) {
-    TITLE_SYNONYMS[lower].forEach(function(s) { extras.add(s); });
-  }
+  // Support comma-separated terms: expand each term individually
+  var terms = query.indexOf(',') !== -1
+    ? query.split(',').map(function(t) { return t.trim(); }).filter(Boolean)
+    : [query.trim()];
 
-  // Check each word as a key
-  var words = lower.split(/\s+/);
-  words.forEach(function(w) {
-    if (TITLE_SYNONYMS[w]) {
-      TITLE_SYNONYMS[w].forEach(function(s) { extras.add(s); });
+  terms.forEach(function(term) {
+    var lower = term.toLowerCase();
+
+    // Check full term
+    if (TITLE_SYNONYMS[lower]) {
+      TITLE_SYNONYMS[lower].forEach(function(s) { extras.add(s); });
+    }
+
+    // Check each word as a key
+    var words = lower.split(/\s+/);
+    words.forEach(function(w) {
+      if (TITLE_SYNONYMS[w]) {
+        TITLE_SYNONYMS[w].forEach(function(s) { extras.add(s); });
+      }
+    });
+
+    // Check 2-word combos
+    for (var i = 0; i < words.length - 1; i++) {
+      var pair = words[i] + ' ' + words[i+1];
+      if (TITLE_SYNONYMS[pair]) {
+        TITLE_SYNONYMS[pair].forEach(function(s) { extras.add(s); });
+      }
     }
   });
 
-  // Check 2-word combos
-  for (var i = 0; i < words.length - 1; i++) {
-    var pair = words[i] + ' ' + words[i+1];
-    if (TITLE_SYNONYMS[pair]) {
-      TITLE_SYNONYMS[pair].forEach(function(s) { extras.add(s); });
-    }
-  }
-
-  return { original: query, expanded: Array.from(extras) };
+  return { original: query, terms: terms, expanded: Array.from(extras) };
 }
 
 // Client-side fuzzy match: checks if a job matches any of the expanded terms
 function jobMatchesSearch(job, searchInfo) {
   if (!searchInfo || !searchInfo.original) return true;
   var text = ((job.title || '') + ' ' + (job.company_name || '') + ' ' + (job.description || '')).toLowerCase();
-  var origWords = searchInfo.original.toLowerCase().split(/\s+/);
 
-  // Must match all original words
-  var matchesOriginal = origWords.every(function(w) { return text.indexOf(w) !== -1; });
-  if (matchesOriginal) return true;
+  // If comma-separated terms, use OR logic: match ANY term
+  if (searchInfo.terms && searchInfo.terms.length > 1) {
+    var matchesTerm = searchInfo.terms.some(function(term) {
+      var termWords = term.toLowerCase().split(/\s+/);
+      return termWords.every(function(w) { return text.indexOf(w) !== -1; });
+    });
+    if (matchesTerm) return true;
+  } else {
+    // Single term: must match all words
+    var origWords = searchInfo.original.toLowerCase().split(/\s+/);
+    var matchesOriginal = origWords.every(function(w) { return text.indexOf(w) !== -1; });
+    if (matchesOriginal) return true;
+  }
 
   // Or match any expanded synonym
   if (searchInfo.expanded && searchInfo.expanded.length > 0) {
