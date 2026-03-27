@@ -89,6 +89,24 @@
   .badge.time-green { background: #064e3b; color: #34d399; }
   .badge.time-blue { background: #1e3a5f; color: #60a5fa; }
 
+  /* Skill/Tech Tags */
+  .skill-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+  .skill-tag { font-size: 0.68rem; padding: 3px 9px; border-radius: 6px; font-weight: 600; letter-spacing: 0.3px;
+    display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent; }
+  .skill-tag .skill-icon { font-size: 0.72rem; }
+  /* Category colors */
+  .skill-tag.cat-lang { background: linear-gradient(135deg, #1e1b4b, #312e81); color: #a5b4fc; border-color: #4338ca; }
+  .skill-tag.cat-data { background: linear-gradient(135deg, #0c4a6e, #164e63); color: #67e8f9; border-color: #0891b2; }
+  .skill-tag.cat-cloud { background: linear-gradient(135deg, #14532d, #1a4731); color: #86efac; border-color: #16a34a; }
+  .skill-tag.cat-tool { background: linear-gradient(135deg, #78350f, #713f12); color: #fcd34d; border-color: #ca8a04; }
+  .skill-tag.cat-framework { background: linear-gradient(135deg, #4c1d95, #581c87); color: #d8b4fe; border-color: #9333ea; }
+  .skill-tag.cat-devops { background: linear-gradient(135deg, #7f1d1d, #831843); color: #fca5a5; border-color: #dc2626; }
+  .skill-tag.cat-design { background: linear-gradient(135deg, #701a75, #6b21a8); color: #f0abfc; border-color: #c026d3; }
+  .skill-tag.cat-business { background: linear-gradient(135deg, #1e3a5f, #1e40af); color: #93c5fd; border-color: #3b82f6; }
+  .skill-tag.cat-ai { background: linear-gradient(135deg, #5b21b6, #7c3aed); color: #e9d5ff; border-color: #8b5cf6; }
+  .skill-tag.cat-security { background: linear-gradient(135deg, #991b1b, #9f1239); color: #fda4af; border-color: #e11d48; }
+  .skill-tag.cat-other { background: var(--surface2); color: var(--text2); border-color: var(--border); }
+
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 
   .job-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; justify-content: center; min-width: 140px; }
@@ -320,6 +338,149 @@
 const API = '';
 let searchTimeout = null;
 
+// ── Skill/Tech Extraction Engine ──
+var SKILL_DB = [
+  // Languages [cat-lang]
+  {k:'Python',r:/\bPython\b/i,c:'lang',i:'\ud83d\udc0d'},
+  {k:'JavaScript',r:/\bJavaScript\b/i,c:'lang',i:'JS'},
+  {k:'TypeScript',r:/\bTypeScript\b/i,c:'lang',i:'TS'},
+  {k:'Java',r:/\bJava\b(?!\s*Script)/i,c:'lang',i:'\u2615'},
+  {k:'C#',r:/\bC#|\.NET\b/i,c:'lang',i:'#'},
+  {k:'C\u002B\u002B',r:/\bC\+\+\b/i,c:'lang',i:''},
+  {k:'Go',r:/\bGolang\b|\bGo\b(?=\s+(developer|engineer|programming|language))/i,c:'lang',i:''},
+  {k:'Rust',r:/\bRust\b/i,c:'lang',i:'\ud83e\udda0'},
+  {k:'Ruby',r:/\bRuby\b/i,c:'lang',i:'\ud83d\udc8e'},
+  {k:'PHP',r:/\bPHP\b/i,c:'lang',i:''},
+  {k:'Swift',r:/\bSwift\b/i,c:'lang',i:''},
+  {k:'Kotlin',r:/\bKotlin\b/i,c:'lang',i:''},
+  {k:'Scala',r:/\bScala\b/i,c:'lang',i:''},
+  {k:'R',r:/\bR\b(?=\s+(programming|studio|language|statistical))/i,c:'lang',i:'\ud83d\udcca'},
+  {k:'SQL',r:/\bSQL\b/i,c:'data',i:'\ud83d\uddc4'},
+  // Data & Analytics [cat-data]
+  {k:'Power BI',r:/\bPower\s*BI\b/i,c:'data',i:'\ud83d\udcca'},
+  {k:'Tableau',r:/\bTableau\b/i,c:'data',i:'\ud83d\udcc8'},
+  {k:'Excel',r:/\bExcel\b/i,c:'data',i:'\ud83d\udcca'},
+  {k:'Snowflake',r:/\bSnowflake\b/i,c:'data',i:'\u2744'},
+  {k:'BigQuery',r:/\bBigQuery\b/i,c:'data',i:''},
+  {k:'Databricks',r:/\bDatabricks\b/i,c:'data',i:''},
+  {k:'Spark',r:/\bApache\s*Spark\b|\bPySpark\b|\bSpark\b/i,c:'data',i:'\u26a1'},
+  {k:'Hadoop',r:/\bHadoop\b/i,c:'data',i:'\ud83d\udc18'},
+  {k:'Kafka',r:/\bKafka\b/i,c:'data',i:''},
+  {k:'Airflow',r:/\bAirflow\b/i,c:'data',i:''},
+  {k:'dbt',r:/\bdbt\b/i,c:'data',i:''},
+  {k:'Looker',r:/\bLooker\b/i,c:'data',i:''},
+  {k:'Redshift',r:/\bRedshift\b/i,c:'data',i:''},
+  {k:'PostgreSQL',r:/\bPostgres(?:QL)?\b/i,c:'data',i:'\ud83d\udc18'},
+  {k:'MongoDB',r:/\bMongoDB?\b/i,c:'data',i:'\ud83c\udf43'},
+  {k:'Redis',r:/\bRedis\b/i,c:'data',i:''},
+  {k:'Elasticsearch',r:/\bElasticsearch\b|\bElastic\b/i,c:'data',i:'\ud83d\udd0d'},
+  {k:'MySQL',r:/\bMySQL\b/i,c:'data',i:''},
+  {k:'Oracle DB',r:/\bOracle\s*(DB|Database)\b/i,c:'data',i:''},
+  {k:'ETL',r:/\bETL\b/i,c:'data',i:'\ud83d\udd04'},
+  // Cloud [cat-cloud]
+  {k:'AWS',r:/\bAWS\b|\bAmazon Web Services\b/i,c:'cloud',i:'\u2601'},
+  {k:'Azure',r:/\bAzure\b/i,c:'cloud',i:'\u2601'},
+  {k:'GCP',r:/\bGCP\b|\bGoogle Cloud\b/i,c:'cloud',i:'\u2601'},
+  {k:'Salesforce',r:/\bSalesforce\b|\bSFDC\b/i,c:'cloud',i:''},
+  {k:'SAP',r:/\bSAP\b/i,c:'cloud',i:''},
+  {k:'ServiceNow',r:/\bServiceNow\b/i,c:'cloud',i:''},
+  // Frameworks [cat-framework]
+  {k:'React',r:/\bReact(?:\.?js|JS)?\b/i,c:'framework',i:'\u269b'},
+  {k:'Angular',r:/\bAngular\b/i,c:'framework',i:''},
+  {k:'Vue',r:/\bVue(?:\.?js)?\b/i,c:'framework',i:''},
+  {k:'Node.js',r:/\bNode(?:\.?js|JS)\b/i,c:'framework',i:''},
+  {k:'Django',r:/\bDjango\b/i,c:'framework',i:''},
+  {k:'Flask',r:/\bFlask\b/i,c:'framework',i:''},
+  {k:'Spring',r:/\bSpring\s*Boot\b|\bSpring\b/i,c:'framework',i:''},
+  {k:'Rails',r:/\bRails\b|\bRuby on Rails\b/i,c:'framework',i:'\ud83d\udee4'},
+  {k:'Next.js',r:/\bNext(?:\.?js|JS)\b/i,c:'framework',i:''},
+  {k:'.NET',r:/\b\.NET\s*(?:Core|Framework)?\b/i,c:'framework',i:''},
+  {k:'FastAPI',r:/\bFastAPI\b/i,c:'framework',i:'\u26a1'},
+  {k:'GraphQL',r:/\bGraphQL\b/i,c:'framework',i:''},
+  {k:'REST API',r:/\bREST(?:ful)?\s*API\b/i,c:'framework',i:''},
+  // DevOps & Infra [cat-devops]
+  {k:'Docker',r:/\bDocker\b/i,c:'devops',i:'\ud83d\udc33'},
+  {k:'Kubernetes',r:/\bKubernetes\b|\bK8s\b/i,c:'devops',i:'\u2699'},
+  {k:'Terraform',r:/\bTerraform\b/i,c:'devops',i:''},
+  {k:'Jenkins',r:/\bJenkins\b/i,c:'devops',i:''},
+  {k:'CI/CD',r:/\bCI\s*\/?\s*CD\b/i,c:'devops',i:'\ud83d\ude80'},
+  {k:'Linux',r:/\bLinux\b/i,c:'devops',i:'\ud83d\udc27'},
+  {k:'Git',r:/\bGit\b(?!Hub|Lab)/i,c:'devops',i:''},
+  {k:'GitHub',r:/\bGitHub\b/i,c:'devops',i:''},
+  {k:'Ansible',r:/\bAnsible\b/i,c:'devops',i:''},
+  {k:'Prometheus',r:/\bPrometheus\b/i,c:'devops',i:''},
+  {k:'Grafana',r:/\bGrafana\b/i,c:'devops',i:'\ud83d\udcca'},
+  // AI/ML [cat-ai]
+  {k:'Machine Learning',r:/\bMachine Learning\b|\bML\b/i,c:'ai',i:'\ud83e\udde0'},
+  {k:'Deep Learning',r:/\bDeep Learning\b/i,c:'ai',i:'\ud83e\udde0'},
+  {k:'TensorFlow',r:/\bTensorFlow\b/i,c:'ai',i:''},
+  {k:'PyTorch',r:/\bPyTorch\b/i,c:'ai',i:'\ud83d\udd25'},
+  {k:'NLP',r:/\bNLP\b|\bNatural Language Processing\b/i,c:'ai',i:'\ud83d\udcac'},
+  {k:'LLM',r:/\bLLM\b|\bLarge Language Model\b/i,c:'ai',i:'\ud83e\udd16'},
+  {k:'GenAI',r:/\bGenerative AI\b|\bGenAI\b|\bGen AI\b/i,c:'ai',i:'\u2728'},
+  {k:'Computer Vision',r:/\bComputer Vision\b|\bCV\b(?=.*(?:model|image|detect))/i,c:'ai',i:'\ud83d\udc41'},
+  {k:'OpenAI',r:/\bOpenAI\b|\bChatGPT\b|\bGPT[-\s]?4\b/i,c:'ai',i:''},
+  {k:'Hugging Face',r:/\bHugging\s*Face\b/i,c:'ai',i:'\ud83e\udd17'},
+  // Tools [cat-tool]
+  {k:'Jira',r:/\bJira\b/i,c:'tool',i:''},
+  {k:'Confluence',r:/\bConfluence\b/i,c:'tool',i:''},
+  {k:'Figma',r:/\bFigma\b/i,c:'design',i:'\ud83c\udfa8'},
+  {k:'Sketch',r:/\bSketch\b/i,c:'design',i:'\ud83c\udfa8'},
+  {k:'Adobe XD',r:/\bAdobe\s*XD\b/i,c:'design',i:''},
+  {k:'Photoshop',r:/\bPhotoshop\b/i,c:'design',i:''},
+  {k:'Illustrator',r:/\bIllustrator\b/i,c:'design',i:''},
+  {k:'InDesign',r:/\bInDesign\b/i,c:'design',i:''},
+  {k:'Canva',r:/\bCanva\b/i,c:'design',i:''},
+  {k:'HubSpot',r:/\bHubSpot\b/i,c:'tool',i:''},
+  {k:'Marketo',r:/\bMarketo\b/i,c:'tool',i:''},
+  {k:'Google Analytics',r:/\bGoogle Analytics\b|\bGA4\b/i,c:'tool',i:'\ud83d\udcca'},
+  {k:'SEO',r:/\bSEO\b/i,c:'tool',i:'\ud83d\udd0d'},
+  {k:'SEM',r:/\bSEM\b|\bGoogle Ads\b/i,c:'tool',i:''},
+  {k:'Zendesk',r:/\bZendesk\b/i,c:'tool',i:''},
+  {k:'Intercom',r:/\bIntercom\b/i,c:'tool',i:''},
+  // Business [cat-business]
+  {k:'Agile',r:/\bAgile\b/i,c:'business',i:''},
+  {k:'Scrum',r:/\bScrum\b/i,c:'business',i:''},
+  {k:'Six Sigma',r:/\bSix Sigma\b/i,c:'business',i:''},
+  {k:'PMP',r:/\bPMP\b/i,c:'business',i:''},
+  {k:'CPA',r:/\bCPA\b/i,c:'business',i:''},
+  {k:'GAAP',r:/\bGAAP\b/i,c:'business',i:''},
+  {k:'SOC 2',r:/\bSOC\s*2\b/i,c:'security',i:'\ud83d\udd12'},
+  {k:'HIPAA',r:/\bHIPAA\b/i,c:'security',i:'\ud83c\udfe5'},
+  {k:'SOX',r:/\bSOX\b|\bSarbanes/i,c:'security',i:''},
+  // Security [cat-security]
+  {k:'Cybersecurity',r:/\bCyber\s*Security\b|\bCybersecurity\b/i,c:'security',i:'\ud83d\udee1'},
+  {k:'SIEM',r:/\bSIEM\b/i,c:'security',i:''},
+  {k:'Penetration Testing',r:/\bPen\s*Test\b|\bPenetration Testing\b/i,c:'security',i:''},
+];
+
+function extractSkills(title, desc) {
+  var text = (title || '') + ' ' + (desc || '');
+  var found = [];
+  var seen = {};
+  for (var i = 0; i < SKILL_DB.length; i++) {
+    var s = SKILL_DB[i];
+    if (!seen[s.k] && s.r.test(text)) {
+      seen[s.k] = true;
+      found.push(s);
+      if (found.length >= 8) break; // Cap at 8 tags per card
+    }
+  }
+  return found;
+}
+
+function renderSkillTags(skills) {
+  if (!skills.length) return '';
+  var html = '<div class="skill-tags">';
+  for (var i = 0; i < skills.length; i++) {
+    var s = skills[i];
+    var icon = s.i ? '<span class="skill-icon">' + s.i + '</span>' : '';
+    html += '<span class="skill-tag cat-' + s.c + '">' + icon + s.k + '</span>';
+  }
+  html += '</div>';
+  return html;
+}
+
 // ── Load & Render Jobs ──
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
@@ -397,6 +558,8 @@ function renderJobs(jobs) {
     if (job.salary_max > 0) badges += '<span class="badge salary">$' + Math.round(job.salary_min/1000) + 'k-$' + Math.round(job.salary_max/1000) + 'k</span>';
 
     const desc = (job.description || '').substring(0, 200).replace(/</g, '&lt;');
+    const skills = extractSkills(job.title, job.description);
+    const skillHtml = renderSkillTags(skills);
 
     // Time display: "Posted Xh ago" + local date/time + "Found Xh ago"
     var timeHtml = '';
@@ -418,6 +581,7 @@ function renderJobs(jobs) {
       + '<span class="source">' + esc(job.source) + '</span>'
       + '</div>'
       + '<div class="badges">' + badges + '</div>'
+      + skillHtml
       + (desc ? '<div class="desc-preview">' + desc + '</div>' : '')
       + '</div>'
       + '<div class="job-actions">'
