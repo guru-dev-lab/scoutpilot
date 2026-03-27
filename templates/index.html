@@ -272,7 +272,7 @@
   const API = '';
   let searchTimeout = null;
 
-  // ── Load Jobs ──
+  // ââ Load Jobs ââ
   async function loadJobs() {
     const hours = document.getElementById('filterHours').value;
     const relevance = document.getElementById('filterRelevance').value;
@@ -359,7 +359,7 @@
     document.getElementById('statApplied').textContent = stats.applied_count || 0;
   }
 
-  // ── Profiles ──
+  // ââ Profiles ââ
   async function loadProfiles() {
     try {
       const res = await fetch(`${API}/api/profiles`);
@@ -451,7 +451,7 @@
     loadProfiles();
   }
 
-  // ── Actions ──
+  // ââ Actions ââ
   async function markApplied(id) {
     await fetch(`${API}/api/jobs/${id}/status?status=applied`, { method: 'PATCH' });
     const card = document.getElementById(`job-${id}`);
@@ -518,12 +518,12 @@
     }
   }
 
-  // ── Helpers ──
+  // ââ Helpers ââ
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
   function getTimeAgo(dateStr) {
     if (!dateStr) return '';
-    const d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
+    const d = new Date(dateStr);
     const ms = Date.now() - d.getTime();
     const mins = Math.floor(ms / 60000);
     if (mins < 1) return 'just now';
@@ -539,7 +539,7 @@
     searchTimeout = setTimeout(loadJobs, 400);
   }
 
-  // ── Init ──
+  // ââ Init ââ
   loadProfiles();
   loadJobs();
   checkStatus();
