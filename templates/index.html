@@ -18,13 +18,14 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
 
-  /* Layout */
   .app { max-width: 1400px; margin: 0 auto; padding: 16px; }
+
+  /* Header */
   .header { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .header h1 { font-size: 1.5rem; background: linear-gradient(90deg, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
   .header-actions { display: flex; gap: 8px; align-items: center; }
 
-  /* Stats bar */
+  /* Stats */
   .stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
   .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; }
   .stat .num { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
@@ -38,18 +39,20 @@
   .btn.sm { padding: 4px 10px; font-size: 0.78rem; }
   .btn.green { color: var(--green); border-color: var(--green); }
   .btn.green:hover { background: var(--green-bg); }
-  .btn.orange { color: var(--orange); border-color: var(--orange); }
-  .btn.orange:hover { background: var(--orange-bg); }
   .btn.red { color: var(--red); border-color: var(--red); }
   .btn.red:hover { background: var(--red-bg); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* Filters — compact single row */
-  .filters { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-  .filters select, .filters input { padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.8rem; }
-  .filters select { max-width: 150px; }
-  .filters select:focus, .filters input:focus { outline: none; border-color: var(--primary); }
-  .filters input[type="text"] { min-width: 160px; flex: 1; }
+  /* Filter bar */
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .filters select { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.82rem; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+  .filters select:focus { outline: none; border-color: var(--primary); }
+  .filters select:hover { border-color: var(--text3); }
+  .search-box { display: flex; align-items: center; gap: 0; flex: 1; min-width: 180px; flex-shrink: 0; }
+  .search-box input { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px 0 0 6px; color: var(--text); font-size: 0.82rem; flex: 1; min-width: 0; }
+  .search-box input:focus { outline: none; border-color: var(--primary); }
+  .search-box button { padding: 7px 14px; background: var(--primary); border: 1px solid var(--primary); border-radius: 0 6px 6px 0; color: #fff; font-size: 0.82rem; cursor: pointer; flex-shrink: 0; }
+  .search-box button:hover { background: var(--primary-hover); }
 
   /* Job list */
   .job-list { display: flex; flex-direction: column; gap: 8px; }
@@ -57,14 +60,12 @@
   .job-card:hover { border-color: var(--primary); }
   .job-card.viewed { border-left: 3px solid var(--yellow); opacity: 0.85; }
   .job-card.applied { border-left: 3px solid var(--green); opacity: 0.7; }
-  .job-card.hidden { display: none; }
 
   .job-main h3 { font-size: 1rem; color: var(--text); margin-bottom: 4px; }
   .job-main h3 a { color: inherit; text-decoration: none; }
   .job-main h3 a:hover { color: var(--primary-hover); text-decoration: underline; }
   .job-meta { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 0.82rem; color: var(--text2); margin-bottom: 6px; }
   .job-meta .company { color: var(--blue); font-weight: 600; }
-  .job-meta .location { color: var(--text2); }
   .job-meta .source { color: var(--text3); }
 
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
@@ -80,9 +81,8 @@
   .badge.trust-low { background: var(--red-bg); color: var(--red); }
   .badge.fresh { background: #1e3a1e; color: #4ade80; animation: pulse 2s infinite; }
   .badge.salary { background: #1e293b; color: #38bdf8; }
-  .badge.posted-1h { background: #064e3b; color: #34d399; }
-  .badge.posted-4h { background: #1e3a5f; color: #60a5fa; }
-  .badge.posted-old { background: var(--surface2); color: var(--text3); }
+  .badge.time-green { background: #064e3b; color: #34d399; }
+  .badge.time-blue { background: #1e3a5f; color: #60a5fa; }
 
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 
@@ -93,8 +93,11 @@
   .applied-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text3); cursor: pointer; user-select: none; }
   .applied-toggle input[type="checkbox"] { appearance: none; width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg); cursor: pointer; position: relative; transition: all 0.15s; }
   .applied-toggle input[type="checkbox"]:checked { background: var(--green); border-color: var(--green); }
-  .applied-toggle input[type="checkbox"]:checked::after { content: '✓'; position: absolute; top: -1px; left: 3px; color: #fff; font-size: 12px; font-weight: 700; }
+  .applied-toggle input[type="checkbox"]:checked::after { content: '\2713'; position: absolute; top: -1px; left: 3px; color: #fff; font-size: 12px; font-weight: 700; }
   .applied-toggle:hover input[type="checkbox"] { border-color: var(--green); }
+
+  /* Desc */
+  .desc-preview { font-size: 0.8rem; color: var(--text3); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; max-width: 700px; }
 
   /* Profile modal */
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
@@ -109,23 +112,19 @@
   .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
   .expanded-preview { margin-top: 6px; font-size: 0.78rem; color: var(--primary); }
 
-  /* Loading spinner */
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Profiles list */
   .profiles-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   .profile-chip { padding: 6px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; font-size: 0.82rem; color: var(--text2); cursor: pointer; display: flex; align-items: center; gap: 6px; }
   .profile-chip.active { border-color: var(--primary); color: var(--primary-hover); background: #1e1b4b; }
   .profile-chip .remove { color: var(--text3); cursor: pointer; font-size: 0.9rem; }
   .profile-chip .remove:hover { color: var(--red); }
 
-  /* Empty state */
   .empty { text-align: center; padding: 60px 20px; color: var(--text3); }
   .empty h3 { color: var(--text2); margin-bottom: 8px; font-size: 1.1rem; }
   .empty p { margin-bottom: 20px; }
 
-  /* Scrape status */
   .scrape-status { font-size: 0.75rem; color: var(--text3); display: flex; align-items: center; gap: 6px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; }
   .dot.green { background: var(--green); }
@@ -133,22 +132,19 @@
   .dot.red { background: var(--red); }
   .dot.gray { background: var(--text3); }
 
-  /* Description preview */
-  .desc-preview { font-size: 0.8rem; color: var(--text3); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; max-width: 700px; }
-
   /* Responsive */
   @media (max-width: 768px) {
     .job-card { grid-template-columns: 1fr; }
     .job-actions { flex-direction: row; align-items: center; min-width: auto; flex-wrap: wrap; }
-    .filters select { max-width: none; flex: 1; min-width: 100px; }
-    .filters input[type="text"] { min-width: auto; width: 100%; }
+    .filters { flex-wrap: wrap; }
+    .filters select { flex: 1; min-width: 120px; }
+    .search-box { min-width: 100%; }
   }
 </style>
 </head>
 <body>
 <div class="app">
 
-  <!-- Header -->
   <div class="header">
     <div>
       <h1>ScoutPilot</h1>
@@ -162,7 +158,6 @@
     </div>
   </div>
 
-  <!-- Stats -->
   <div class="stats" id="stats">
     <div class="stat"><div class="num" id="statTotal">0</div><div class="label">Total</div></div>
     <div class="stat"><div class="num" id="statNew">0</div><div class="label">New</div></div>
@@ -170,41 +165,36 @@
     <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
   </div>
 
-  <!-- Profiles -->
   <div class="profiles-bar" id="profilesBar"></div>
 
-  <!-- Filters — single compact row -->
   <div class="filters">
-    <select id="filterPostedHours" onchange="loadJobs()" title="Filter by when job was posted">
+    <select id="filterPostedHours" onchange="loadJobs()">
       <option value="0" selected>Posted: Any</option>
-      <option value="1">Posted: 1hr</option>
-      <option value="2">Posted: 2hr</option>
-      <option value="4">Posted: 4hr</option>
-      <option value="8">Posted: 8hr</option>
-      <option value="12">Posted: 12hr</option>
-      <option value="24">Posted: 24hr</option>
+      <option value="1">Posted: 1 hr</option>
+      <option value="2">Posted: 2 hrs</option>
+      <option value="4">Posted: 4 hrs</option>
+      <option value="8">Posted: 8 hrs</option>
+      <option value="12">Posted: 12 hrs</option>
+      <option value="24">Posted: 24 hrs</option>
       <option value="48">Posted: 2 days</option>
       <option value="168">Posted: 7 days</option>
     </select>
-
-    <select id="filterHours" onchange="loadJobs()" title="Filter by when ScoutPilot found job">
-      <option value="1">Found: 1hr</option>
-      <option value="2">Found: 2hr</option>
-      <option value="4">Found: 4hr</option>
-      <option value="12">Found: 12hr</option>
-      <option value="24" selected>Found: 24hr</option>
+    <select id="filterHours" onchange="loadJobs()">
+      <option value="1">Found: 1 hr</option>
+      <option value="2">Found: 2 hrs</option>
+      <option value="4">Found: 4 hrs</option>
+      <option value="12">Found: 12 hrs</option>
+      <option value="24" selected>Found: 24 hrs</option>
       <option value="72">Found: 3 days</option>
       <option value="168">Found: 7 days</option>
       <option value="720">Found: 30 days</option>
     </select>
-
     <select id="filterWorkType" onchange="loadJobs()">
       <option value="">Type: All</option>
       <option value="remote">Remote</option>
       <option value="hybrid">Hybrid</option>
       <option value="onsite">Onsite</option>
     </select>
-
     <select id="filterSource" onchange="loadJobs()">
       <option value="">Source: All</option>
       <option value="linkedin">LinkedIn</option>
@@ -215,14 +205,12 @@
       <option value="zip_recruiter">ZipRecruiter</option>
       <option value="jsearch">JSearch</option>
     </select>
-
     <select id="filterRelevance" onchange="loadJobs()">
       <option value="0">Relevance: All</option>
       <option value="50">Rel: 50+</option>
       <option value="70">Rel: 70+</option>
       <option value="85">Rel: 85+</option>
     </select>
-
     <select id="filterSort" onchange="loadJobs()">
       <option value="posted_at:DESC">Newest Posted</option>
       <option value="first_seen_at:DESC">Newest Found</option>
@@ -230,18 +218,13 @@
       <option value="salary_max:DESC">Highest Salary</option>
       <option value="company_name:ASC">Company A-Z</option>
     </select>
-
-    <input type="text" id="filterSearch" placeholder="Search title, company..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
-  </div>
-
-  <!-- Job List -->
-  <div class="job-list" id="jobList">
-    <div class="empty" id="emptyState">
-      <h3>No jobs yet</h3>
-      <p>Add a search profile and hit "Scrape Now" to start finding jobs.</p>
-      <button class="btn primary" onclick="openProfileModal()">+ Add Your First Search</button>
+    <div class="search-box">
+      <input type="text" id="filterSearch" placeholder="Search title, company..." onkeydown="if(event.key==='Enter')loadJobs()" oninput="debounceSearch()">
+      <button onclick="loadJobs()">Search</button>
     </div>
   </div>
+
+  <div class="job-list" id="jobList"></div>
 </div>
 
 <!-- Profile Modal -->
@@ -291,368 +274,321 @@
 </div>
 
 <script>
-  const API = '';
-  let searchTimeout = null;
+const API = '';
+let searchTimeout = null;
 
-  // ── Load Jobs ──
-  async function loadJobs() {
-    const hours = document.getElementById('filterHours').value;
-    const postedHours = document.getElementById('filterPostedHours').value;
-    const relevance = document.getElementById('filterRelevance').value;
-    const source = document.getElementById('filterSource').value;
-    const workType = document.getElementById('filterWorkType').value;
-    const sortVal = document.getElementById('filterSort').value;
-    const search = document.getElementById('filterSearch').value.trim();
-    const [sort_by, sort_dir] = sortVal.split(':');
+// ── Load & Render Jobs ──
+async function loadJobs() {
+  const hours = document.getElementById('filterHours').value;
+  const postedHours = document.getElementById('filterPostedHours').value;
+  const relevance = document.getElementById('filterRelevance').value;
+  const source = document.getElementById('filterSource').value;
+  const workType = document.getElementById('filterWorkType').value;
+  const sortVal = document.getElementById('filterSort').value;
+  const search = document.getElementById('filterSearch').value.trim();
+  const [sort_by, sort_dir] = sortVal.split(':');
 
-    const params = new URLSearchParams({
-      hours, posted_hours: postedHours,
-      min_relevance: relevance, min_trust: 0,
-      source, work_type: workType, sort_by, sort_dir, search, limit: 200, offset: 0,
-    });
+  const params = new URLSearchParams({
+    hours, posted_hours: postedHours,
+    min_relevance: relevance, min_trust: 0,
+    source, work_type: workType, sort_by, sort_dir, search, limit: 200, offset: 0,
+  });
 
-    try {
-      const res = await fetch(`${API}/api/jobs?${params}`);
-      const data = await res.json();
-      renderJobs(data.jobs);
-      renderStats(data.stats);
-    } catch (e) {
-      console.error('Failed to load jobs:', e);
+  try {
+    const res = await fetch(API + '/api/jobs?' + params);
+    const data = await res.json();
+    renderJobs(data.jobs || []);
+    renderStats(data.stats || {});
+  } catch (e) {
+    console.error('Failed to load jobs:', e);
+  }
+}
+
+function renderJobs(jobs) {
+  const list = document.getElementById('jobList');
+
+  if (!jobs.length) {
+    list.innerHTML = '<div class="empty"><h3>No jobs match your filters</h3><p>Try widening your time range or removing filters.</p></div>';
+    return;
+  }
+
+  let html = '';
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
+    const postedAgo = job.posted_at ? getTimeAgo(job.posted_at) : '';
+    const foundAgo = getTimeAgo(job.first_seen_at);
+    const applyUrl = escAttr(job.direct_apply_url || job.source_url || '');
+    const isApplied = job.status === 'applied';
+    const isViewed = job.status === 'viewed';
+    const cls = isApplied ? 'applied' : isViewed ? 'viewed' : '';
+
+    let badges = '';
+
+    // Freshness badge based on posted time
+    const pMs = getPostedMs(job);
+    if (pMs !== null && pMs < 3600000) {
+      badges += '<span class="badge fresh">JUST POSTED</span>';
+    } else if (pMs !== null && pMs < 14400000) {
+      badges += '<span class="badge time-green">' + fmtMs(pMs) + ' ago</span>';
+    } else if (pMs !== null && pMs < 28800000) {
+      badges += '<span class="badge time-blue">' + fmtMs(pMs) + ' ago</span>';
     }
+
+    if (job.is_direct_apply) badges += '<span class="badge direct">Direct Apply</span>';
+
+    if (job.work_type === 'remote') badges += '<span class="badge remote">Remote</span>';
+    else if (job.work_type === 'hybrid') badges += '<span class="badge hybrid">Hybrid</span>';
+    else if (job.work_type === 'onsite') badges += '<span class="badge onsite">Onsite</span>';
+    else if (job.is_remote) badges += '<span class="badge remote">Remote</span>';
+
+    if (job.relevance_score >= 80) badges += '<span class="badge relevance-high">Rel: ' + job.relevance_score + '</span>';
+    else if (job.relevance_score >= 50) badges += '<span class="badge relevance-mid">Rel: ' + job.relevance_score + '</span>';
+    else if (job.relevance_score > 0) badges += '<span class="badge relevance-low">Rel: ' + job.relevance_score + '</span>';
+
+    if (job.trust_score >= 70) badges += '<span class="badge trust-high">Trust: ' + job.trust_score + '</span>';
+    else if (job.trust_score > 0 && job.trust_score < 40) badges += '<span class="badge trust-low">Trust: ' + job.trust_score + '</span>';
+
+    if (job.salary_max > 0) badges += '<span class="badge salary">$' + Math.round(job.salary_min/1000) + 'k-$' + Math.round(job.salary_max/1000) + 'k</span>';
+
+    const desc = (job.description || '').substring(0, 200).replace(/</g, '&lt;');
+
+    // Time lines
+    let timeLine1 = postedAgo ? 'Posted ' + postedAgo : 'Found ' + foundAgo;
+    let timeLine2 = job.posted_at ? formatDateTime(job.posted_at) : '';
+    let timeLine3 = postedAgo ? 'Found ' + foundAgo : '';
+
+    html += '<div class="job-card ' + cls + '" id="job-' + job.id + '">'
+      + '<div class="job-main">'
+      + '<h3><a href="' + applyUrl + '" target="_blank" rel="noopener" onclick="markViewed(' + job.id + ')">' + esc(job.title) + '</a></h3>'
+      + '<div class="job-meta">'
+      + '<span class="company">' + esc(job.company_name || 'Unknown') + '</span>'
+      + '<span>' + esc(job.location || '') + '</span>'
+      + '<span class="source">' + esc(job.source) + '</span>'
+      + '</div>'
+      + '<div class="badges">' + badges + '</div>'
+      + (desc ? '<div class="desc-preview">' + desc + '</div>' : '')
+      + '</div>'
+      + '<div class="job-actions">'
+      + '<div class="time-ago">' + timeLine1 + '</div>'
+      + (timeLine2 ? '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + timeLine2 + '</div>' : '')
+      + (timeLine3 ? '<div class="time-ago" style="font-size:0.65rem;opacity:0.45;">' + timeLine3 + '</div>' : '')
+      + '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(' + job.id + ')">View Job</a>'
+      + '<label class="applied-toggle" title="Mark as applied">'
+      + '<input type="checkbox" ' + (isApplied ? 'checked' : '') + ' onchange="toggleApplied(' + job.id + ', this.checked)">'
+      + '<span>Applied</span></label>'
+      + '<button class="btn sm" onclick="markStatus(' + job.id + ', \'hidden\')" style="font-size:0.7rem;padding:2px 8px;">Hide</button>'
+      + '</div></div>';
   }
 
-  function renderJobs(jobs) {
-    const list = document.getElementById('jobList');
-    const empty = document.getElementById('emptyState');
+  list.innerHTML = html;
+}
 
-    if (!jobs.length) {
-      list.innerHTML = '';
-      list.appendChild(empty);
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
+function renderStats(s) {
+  document.getElementById('statTotal').textContent = s.total || 0;
+  document.getElementById('statNew').textContent = s.new_count || 0;
+  document.getElementById('statViewed').textContent = s.viewed_count || 0;
+  document.getElementById('statApplied').textContent = s.applied_count || 0;
+}
 
-    list.innerHTML = jobs.map(job => {
-      const postedAgo = job.posted_at ? getTimeAgo(job.posted_at) : '';
-      const foundAgo = getTimeAgo(job.first_seen_at);
-      const applyUrl = job.direct_apply_url || job.source_url;
-      const isApplied = job.status === 'applied';
-      const isViewed = job.status === 'viewed';
-      const statusClass = isApplied ? 'applied' : isViewed ? 'viewed' : job.status === 'hidden' ? 'hidden' : '';
-
-      let badges = '';
-
-      // Posted time badge — how fresh is this job ACTUALLY
-      const postedMs = getPostedMs(job);
-      if (postedMs !== null) {
-        if (postedMs < 3600000) badges += '<span class="badge fresh">JUST POSTED</span>';
-        else if (postedMs < 14400000) badges += '<span class="badge posted-1h">' + formatMs(postedMs) + ' ago</span>';
-        else if (postedMs < 28800000) badges += '<span class="badge posted-4h">' + formatMs(postedMs) + ' ago</span>';
-      }
-
-      if (job.is_direct_apply) badges += '<span class="badge direct">Direct Apply</span>';
-      if (job.work_type === 'remote') badges += '<span class="badge remote">Remote</span>';
-      else if (job.work_type === 'hybrid') badges += '<span class="badge hybrid">Hybrid</span>';
-      else if (job.work_type === 'onsite') badges += '<span class="badge onsite">Onsite</span>';
-      else if (job.is_remote) badges += '<span class="badge remote">Remote</span>';
-
-      if (job.relevance_score >= 80) badges += '<span class="badge relevance-high">Rel: ' + job.relevance_score + '</span>';
-      else if (job.relevance_score >= 50) badges += '<span class="badge relevance-mid">Rel: ' + job.relevance_score + '</span>';
-      else badges += '<span class="badge relevance-low">Rel: ' + job.relevance_score + '</span>';
-
-      if (job.trust_score >= 70) badges += '<span class="badge trust-high">Trust: ' + job.trust_score + '</span>';
-      else if (job.trust_score < 40) badges += '<span class="badge trust-low">Trust: ' + job.trust_score + '</span>';
-
-      if (job.salary_max > 0) badges += '<span class="badge salary">$' + (job.salary_min/1000).toFixed(0) + 'k-$' + (job.salary_max/1000).toFixed(0) + 'k</span>';
-
-      const desc = (job.description || '').substring(0, 200).replace(/</g, '&lt;');
-
-      return `
-        <div class="job-card ${statusClass}" id="job-${job.id}">
-          <div class="job-main">
-            <h3><a href="${applyUrl}" target="_blank" rel="noopener" onclick="markViewed(${job.id})">${esc(job.title)}</a></h3>
-            <div class="job-meta">
-              <span class="company">${esc(job.company_name || 'Unknown')}</span>
-              <span class="location">${esc(job.location || 'Not specified')}</span>
-              <span class="source">${job.source}</span>
-            </div>
-            <div class="badges">${badges}</div>
-            ${desc ? '<div class="desc-preview">' + desc + '</div>' : ''}
-          </div>
-          <div class="job-actions">
-            <div class="time-ago">${postedAgo ? 'Posted ' + postedAgo : 'Found ' + foundAgo}</div>
-            ${job.posted_at ? '<div class="time-ago" style="font-size:0.68rem;opacity:0.6;">' + formatDateTime(job.posted_at) + '</div>' : ''}
-            ${postedAgo ? '<div class="time-ago" style="font-size:0.65rem;opacity:0.45;">Found ' + foundAgo + '</div>' : ''}
-            <a href="${applyUrl}" target="_blank" rel="noopener" class="btn sm green" onclick="markViewed(${job.id})">View Job</a>
-            <label class="applied-toggle" title="Mark as applied">
-              <input type="checkbox" ${isApplied ? 'checked' : ''} onchange="toggleApplied(${job.id}, this.checked)">
-              <span>Applied</span>
-            </label>
-            <button class="btn sm" onclick="markStatus(${job.id}, 'hidden')" style="font-size:0.7rem;padding:2px 8px;">Hide</button>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  function renderStats(stats) {
-    document.getElementById('statTotal').textContent = stats.total || 0;
-    document.getElementById('statNew').textContent = stats.new_count || 0;
-    document.getElementById('statViewed').textContent = stats.viewed_count || 0;
-    document.getElementById('statApplied').textContent = stats.applied_count || 0;
-  }
-
-  // ── Profiles ──
-  async function loadProfiles() {
-    try {
-      const res = await fetch(`${API}/api/profiles`);
-      const profiles = await res.json();
-      renderProfiles(profiles);
-    } catch (e) {
-      console.error('Failed to load profiles:', e);
-    }
-  }
-
-  function renderProfiles(profiles) {
+// ── Profiles ──
+async function loadProfiles() {
+  try {
+    const res = await fetch(API + '/api/profiles');
+    const profiles = await res.json();
     const bar = document.getElementById('profilesBar');
     if (!profiles.length) {
       bar.innerHTML = '<span style="font-size:0.82rem;color:var(--text3);">No search profiles yet. Add one to start.</span>';
       return;
     }
-    bar.innerHTML = profiles.map(p => `
-      <div class="profile-chip active">
-        ${esc(p.title)}
-        <span style="color:var(--text3);font-size:0.72rem;">(${(p.expanded_titles || []).length} variants)</span>
-        <span class="remove" onclick="removeProfile(${p.id})">&times;</span>
-      </div>
-    `).join('');
+    bar.innerHTML = profiles.map(function(p) {
+      return '<div class="profile-chip active">' + esc(p.title)
+        + ' <span style="color:var(--text3);font-size:0.72rem;">(' + (p.expanded_titles || []).length + ' variants)</span>'
+        + ' <span class="remove" onclick="removeProfile(' + p.id + ')">&times;</span></div>';
+    }).join('');
+  } catch (e) {
+    console.error('Failed to load profiles:', e);
   }
+}
 
-  function openProfileModal() {
-    document.getElementById('profileModal').classList.add('show');
-    document.getElementById('editProfileId').value = '';
-    document.getElementById('profileTitleInput').value = '';
-    document.getElementById('profileLocations').value = '';
-    document.getElementById('profileKeywords').value = '';
-    document.getElementById('profileExcluded').value = '';
-    document.getElementById('profileRemote').checked = false;
-    document.getElementById('expandedPreview').textContent = '';
-    document.getElementById('modalTitle').textContent = 'Add Search Profile';
-  }
+function openProfileModal() {
+  document.getElementById('profileModal').classList.add('show');
+  document.getElementById('editProfileId').value = '';
+  document.getElementById('profileTitleInput').value = '';
+  document.getElementById('profileLocations').value = '';
+  document.getElementById('profileKeywords').value = '';
+  document.getElementById('profileExcluded').value = '';
+  document.getElementById('profileRemote').checked = false;
+  document.getElementById('expandedPreview').textContent = '';
+  document.getElementById('modalTitle').textContent = 'Add Search Profile';
+}
 
-  function closeProfileModal() {
-    document.getElementById('profileModal').classList.remove('show');
-  }
+function closeProfileModal() {
+  document.getElementById('profileModal').classList.remove('show');
+}
 
-  async function saveProfile() {
-    const btn = document.getElementById('saveProfileBtn');
-    const title = document.getElementById('profileTitleInput').value.trim();
-    if (!title) return alert('Enter a job title');
+async function saveProfile() {
+  var btn = document.getElementById('saveProfileBtn');
+  var title = document.getElementById('profileTitleInput').value.trim();
+  if (!title) return alert('Enter a job title');
 
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Expanding titles...';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Expanding titles...';
 
-    const data = {
-      title,
-      locations: document.getElementById('profileLocations').value.split(',').map(s => s.trim()).filter(Boolean),
-      keywords: document.getElementById('profileKeywords').value.split(',').map(s => s.trim()).filter(Boolean),
-      excluded_keywords: document.getElementById('profileExcluded').value.split(',').map(s => s.trim()).filter(Boolean),
-      remote_only: document.getElementById('profileRemote').checked,
-      freshness_hours: parseInt(document.getElementById('profileFreshness').value),
-    };
+  var data = {
+    title: title,
+    locations: document.getElementById('profileLocations').value.split(',').map(function(s){return s.trim()}).filter(Boolean),
+    keywords: document.getElementById('profileKeywords').value.split(',').map(function(s){return s.trim()}).filter(Boolean),
+    excluded_keywords: document.getElementById('profileExcluded').value.split(',').map(function(s){return s.trim()}).filter(Boolean),
+    remote_only: document.getElementById('profileRemote').checked,
+    freshness_hours: parseInt(document.getElementById('profileFreshness').value),
+  };
 
-    try {
-      const editId = document.getElementById('editProfileId').value;
-      const method = editId ? 'PUT' : 'POST';
-      const url = editId ? `${API}/api/profiles/${editId}` : `${API}/api/profiles`;
-
-      const res = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
-      });
-      const result = await res.json();
-
-      if (result.expanded_titles) {
-        document.getElementById('expandedPreview').textContent =
-          'AI expanded to: ' + result.expanded_titles.join(', ');
-      }
-
-      closeProfileModal();
-      loadProfiles();
-      setTimeout(() => triggerScrape(), 500);
-    } catch (e) {
-      alert('Failed to save profile: ' + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = 'Save &amp; Start Hunting';
+  try {
+    var editId = document.getElementById('editProfileId').value;
+    var method = editId ? 'PUT' : 'POST';
+    var url = editId ? API + '/api/profiles/' + editId : API + '/api/profiles';
+    var res = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    var result = await res.json();
+    if (result.expanded_titles) {
+      document.getElementById('expandedPreview').textContent = 'AI expanded to: ' + result.expanded_titles.join(', ');
     }
-  }
-
-  async function removeProfile(id) {
-    if (!confirm('Remove this search profile?')) return;
-    await fetch(`${API}/api/profiles/${id}`, { method: 'DELETE' });
+    closeProfileModal();
     loadProfiles();
+    setTimeout(triggerScrape, 500);
+  } catch (e) {
+    alert('Failed to save profile: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Save &amp; Start Hunting';
   }
+}
 
-  // ── Actions ──
-  async function markViewed(id) {
-    // Only mark as viewed if it's currently "new"
-    const card = document.getElementById('job-' + id);
-    if (card && !card.classList.contains('applied') && !card.classList.contains('viewed')) {
-      await fetch(`${API}/api/jobs/${id}/status?status=viewed`, { method: 'PATCH' });
-      card.classList.add('viewed');
-    }
+async function removeProfile(id) {
+  if (!confirm('Remove this search profile?')) return;
+  await fetch(API + '/api/profiles/' + id, { method: 'DELETE' });
+  loadProfiles();
+}
+
+// ── Actions ──
+async function markViewed(id) {
+  var card = document.getElementById('job-' + id);
+  if (card && !card.classList.contains('applied') && !card.classList.contains('viewed')) {
+    await fetch(API + '/api/jobs/' + id + '/status?status=viewed', { method: 'PATCH' });
+    card.classList.add('viewed');
   }
+}
 
-  async function toggleApplied(id, checked) {
-    const newStatus = checked ? 'applied' : 'viewed';
-    await fetch(`${API}/api/jobs/${id}/status?status=${newStatus}`, { method: 'PATCH' });
-    const card = document.getElementById('job-' + id);
-    if (card) {
-      card.classList.remove('applied', 'viewed');
-      card.classList.add(newStatus);
-    }
-    // Refresh stats
-    loadJobs();
-  }
+async function toggleApplied(id, checked) {
+  var st = checked ? 'applied' : 'viewed';
+  await fetch(API + '/api/jobs/' + id + '/status?status=' + st, { method: 'PATCH' });
+  var card = document.getElementById('job-' + id);
+  if (card) { card.classList.remove('applied', 'viewed'); card.classList.add(st); }
+  loadJobs();
+}
 
-  async function markStatus(id, status) {
-    await fetch(`${API}/api/jobs/${id}/status?status=${status}`, { method: 'PATCH' });
-    const card = document.getElementById('job-' + id);
-    if (card) {
-      if (status === 'hidden') card.style.display = 'none';
-      else card.className = 'job-card ' + status;
-    }
-  }
+async function markStatus(id, status) {
+  await fetch(API + '/api/jobs/' + id + '/status?status=' + status, { method: 'PATCH' });
+  var card = document.getElementById('job-' + id);
+  if (card) { if (status === 'hidden') card.style.display = 'none'; else card.className = 'job-card ' + status; }
+}
 
-  async function triggerScrape() {
-    const btn = document.getElementById('scrapeBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Scraping...';
-
-    try {
-      await fetch(`${API}/api/scrape`, { method: 'POST' });
-      setTimeout(async function poll() {
-        const res = await fetch(`${API}/api/status`);
-        const status = await res.json();
+async function triggerScrape() {
+  var btn = document.getElementById('scrapeBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scraping...';
+  try {
+    await fetch(API + '/api/scrape', { method: 'POST' });
+    setTimeout(function poll() {
+      fetch(API + '/api/status').then(function(r){return r.json()}).then(function(status) {
         updateScrapeStatus(status);
         if (status.scraper.status === 'ok' || status.scraper.status === 'error') {
-          btn.disabled = false;
-          btn.textContent = 'Scrape Now';
-          loadJobs();
-        } else {
-          setTimeout(poll, 3000);
-        }
-      }, 5000);
-    } catch (e) {
-      btn.disabled = false;
-      btn.textContent = 'Scrape Now';
-    }
+          btn.disabled = false; btn.textContent = 'Scrape Now'; loadJobs();
+        } else { setTimeout(poll, 3000); }
+      });
+    }, 5000);
+  } catch (e) { btn.disabled = false; btn.textContent = 'Scrape Now'; }
+}
+
+async function checkStatus() {
+  try {
+    var res = await fetch(API + '/api/status');
+    var status = await res.json();
+    updateScrapeStatus(status);
+  } catch (e) {}
+}
+
+function updateScrapeStatus(status) {
+  var el = document.getElementById('scrapeStatus');
+  var s = status.scraper;
+  if (!s || !s.timestamp) {
+    el.innerHTML = '<span class="dot gray"></span> Waiting for first scrape...';
+  } else if (s.status === 'ok') {
+    el.innerHTML = '<span class="dot green"></span> Last scrape: ' + formatDateTime(s.timestamp) + ' (' + getTimeAgo(s.timestamp) + ') \u2014 ' + (s.new_jobs || 0) + ' new jobs';
+  } else if (s.status === 'error') {
+    el.innerHTML = '<span class="dot red"></span> Last scrape failed at ' + formatDateTime(s.timestamp);
+  } else if (s.status === 'no_profiles') {
+    el.innerHTML = '<span class="dot orange"></span> No profiles configured';
+  } else {
+    el.innerHTML = '<span class="dot orange"></span> Scraping...';
   }
+}
 
-  async function checkStatus() {
-    try {
-      const res = await fetch(`${API}/api/status`);
-      const status = await res.json();
-      updateScrapeStatus(status);
-    } catch (e) {}
-  }
+// ── Helpers ──
+function esc(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
-  function updateScrapeStatus(status) {
-    const el = document.getElementById('scrapeStatus');
-    const s = status.scraper;
-    if (!s || !s.timestamp) {
-      el.innerHTML = '<span class="dot gray"></span> Waiting for first scrape...';
-    } else if (s.status === 'ok') {
-      const ago = getTimeAgo(s.timestamp);
-      const formatted = formatDateTime(s.timestamp);
-      el.innerHTML = '<span class="dot green"></span> Last scrape: ' + formatted + ' (' + ago + ') — ' + (s.new_jobs || 0) + ' new jobs';
-    } else if (s.status === 'error') {
-      const formatted = formatDateTime(s.timestamp);
-      el.innerHTML = '<span class="dot red"></span> Last scrape failed at ' + formatted;
-    } else if (s.status === 'no_profiles') {
-      el.innerHTML = '<span class="dot orange"></span> No profiles configured';
-    } else {
-      el.innerHTML = '<span class="dot orange"></span> Scraping...';
-    }
-  }
+function parseDate(str) {
+  if (!str) return null;
+  var d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) d = new Date(str + 'T00:00:00Z');
+  else if (/^\d{4}-\d{2}-\d{2}T/.test(str)) d = new Date(str.charAt(str.length-1)==='Z' ? str : str + 'Z');
+  else d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
 
-  function formatDateTime(dateStr) {
-    if (!dateStr) return '';
-    let d;
-    if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      d = new Date(dateStr + 'T00:00:00Z');
-    } else if (dateStr.match(/^\d{4}-\d{2}-\d{2}T/)) {
-      d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
-    } else {
-      d = new Date(dateStr);
-    }
-    if (isNaN(d.getTime())) return dateStr;
-    // Format: "Mar 27, 4:35 PM"
-    const opts = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true };
-    return d.toLocaleString(undefined, opts);
-  }
+function getTimeAgo(str) {
+  var d = parseDate(str);
+  if (!d) return str || '';
+  var ms = Date.now() - d.getTime();
+  var m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
 
-  // ── Helpers ──
-  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function getPostedMs(job) {
+  var d = parseDate(job.posted_at);
+  return d ? Date.now() - d.getTime() : null;
+}
 
-  function getTimeAgo(dateStr) {
-    if (!dateStr) return '';
-    let d;
-    if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      d = new Date(dateStr + 'T00:00:00Z');
-    } else if (dateStr.match(/^\d{4}-\d{2}-\d{2}T/)) {
-      d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
-    } else {
-      d = new Date(dateStr);
-    }
-    if (isNaN(d.getTime())) return dateStr;
-    const ms = Date.now() - d.getTime();
-    const mins = Math.floor(ms / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return mins + 'm ago';
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    const days = Math.floor(hrs / 24);
-    return days + 'd ago';
-  }
+function fmtMs(ms) {
+  var m = Math.floor(ms / 60000);
+  return m < 60 ? m + 'm' : Math.floor(m / 60) + 'h';
+}
 
-  function getPostedMs(job) {
-    // Returns ms since posted, or null if no posted_at
-    if (!job.posted_at) return null;
-    let d;
-    if (job.posted_at.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      d = new Date(job.posted_at + 'T00:00:00Z');
-    } else if (job.posted_at.match(/^\d{4}-\d{2}-\d{2}T/)) {
-      d = new Date(job.posted_at.endsWith('Z') ? job.posted_at : job.posted_at + 'Z');
-    } else {
-      d = new Date(job.posted_at);
-    }
-    if (isNaN(d.getTime())) return null;
-    return Date.now() - d.getTime();
-  }
+function formatDateTime(str) {
+  var d = parseDate(str);
+  if (!d) return str || '';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+}
 
-  function formatMs(ms) {
-    const mins = Math.floor(ms / 60000);
-    if (mins < 60) return mins + 'm';
-    const hrs = Math.floor(mins / 60);
-    return hrs + 'h';
-  }
+function debounceSearch() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(loadJobs, 400);
+}
 
-  function debounceSearch() {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(loadJobs, 400);
-  }
+// ── Init ──
+loadProfiles();
+loadJobs();
+checkStatus();
+setInterval(checkStatus, 30000);
+setInterval(loadJobs, 60000);
 
-  // ── Init ──
-  loadProfiles();
-  loadJobs();
-  checkStatus();
-  setInterval(checkStatus, 30000);
-  setInterval(loadJobs, 60000);
-
-  document.getElementById('profileModal').addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) closeProfileModal();
-  });
+document.getElementById('profileModal').addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-overlay')) closeProfileModal();
+});
 </script>
 </body>
 </html>
