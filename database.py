@@ -143,6 +143,7 @@ async def insert_job(job_data: dict) -> bool:
 
 async def get_jobs(
     hours: int = 24,
+    posted_hours: int = 0,
     min_relevance: int = 0,
     min_trust: int = 0,
     source: str = "",
@@ -164,6 +165,13 @@ async def get_jobs(
                 "first_seen_at >= datetime('now', ?)"
             )
             params.append(f"-{hours} hours")
+
+        # Filter by actual posted time (from the job board)
+        if posted_hours > 0:
+            conditions.append(
+                "posted_at != '' AND posted_at >= datetime('now', ?)"
+            )
+            params.append(f"-{posted_hours} hours")
 
         if min_relevance > 0:
             conditions.append("relevance_score >= ?")
@@ -222,13 +230,14 @@ async def get_job_count(hours: int = 24) -> dict:
             """SELECT
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_count,
+                COALESCE(SUM(CASE WHEN status = 'viewed' THEN 1 ELSE 0 END), 0) as viewed_count,
                 COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) as applied_count,
                 COALESCE(SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count
             FROM jobs WHERE first_seen_at >= datetime('now', ?)""",
             (f"-{hours} hours",),
         )
         row = await cursor.fetchone()
-        return dict(row) if row else {"total": 0, "new_count": 0, "applied_count": 0, "hidden_count": 0}
+        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "hidden_count": 0}
     finally:
         await db.close()
 

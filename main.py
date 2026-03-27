@@ -123,6 +123,7 @@ async def dashboard(request: Request):
 @app.get("/api/jobs")
 async def api_get_jobs(
     hours: int = Query(24, ge=1, le=720),
+    posted_hours: int = Query(0, ge=0, le=720),
     min_relevance: int = Query(0, ge=0, le=100),
     min_trust: int = Query(0, ge=0, le=100),
     source: str = "",
@@ -136,7 +137,8 @@ async def api_get_jobs(
 ):
     try:
         jobs = await get_jobs(
-            hours=hours, min_relevance=min_relevance, min_trust=min_trust,
+            hours=hours, posted_hours=posted_hours,
+            min_relevance=min_relevance, min_trust=min_trust,
             source=source, status=status, work_type=work_type,
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
@@ -151,7 +153,7 @@ async def api_get_jobs(
 
 @app.patch("/api/jobs/{job_id}/status")
 async def api_update_status(job_id: int, status: str = "seen"):
-    if status not in ("new", "seen", "applied", "hidden"):
+    if status not in ("new", "viewed", "applied", "hidden"):
         return JSONResponse({"error": "Invalid status"}, 400)
     await update_job_status(job_id, status)
     return {"ok": True}
