@@ -6,14 +6,14 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.6.1"
+BUILD_VERSION = "0.6.2"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.6.2", "date": "2026-03-28", "status": "active", "change": "Day-based Posted filter — Today, Yesterday, Last 3/7/30 Days instead of hourly increments"},
     {"version": "0.6.1", "date": "2026-03-28", "status": "active", "change": "Quality filter — block AI job sites, no LinkedIn EasyApply, reject homepage-only direct links"},
     {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, location filter, CSV export, mobile-friendly layout"},
     {"version": "0.5.1", "date": "2026-03-28", "status": "active", "change": "Clean timestamps — only show 'Posted' date, removed confusing 'Found' labels"},
     {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
-    {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
 ]  # Keep only last 5 entries
 import asyncio
 import logging
