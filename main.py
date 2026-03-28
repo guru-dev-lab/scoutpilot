@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.4.0"
+BUILD_VERSION = "0.5.0"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
     {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
     {"version": "0.3.2", "date": "2026-03-28", "status": "active", "change": "Fuzzy dedup — catches near-duplicate jobs across sources (Sr vs Senior etc.)"},
     {"version": "0.3.1", "date": "2026-03-28", "status": "active", "change": "Data retention — auto-archive after 14d, purge after 90d, daily cleanup at 3AM"},
@@ -21,10 +22,14 @@ import traceback
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+import hashlib
+import secrets
+
+from fastapi import FastAPI, Query, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import settings
@@ -143,6 +148,120 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ScoutPilot", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
+
+# ──────────────────────────────────────────────
+# Password Protection
+# ──────────────────────────────────────────────
+
+# Generate a random session token on startup (changes each deploy = extra safe)
+_AUTH_TOKEN = secrets.token_hex(32)
+
+# Valid session tokens (in-memory, survives for the life of this process)
+_valid_sessions: set[str] = set()
+
+
+def _make_session_id() -> str:
+    """Create a new random session ID."""
+    return secrets.token_hex(24)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
+
+    OPEN_PATHS = {"/login", "/favicon.ico"}
+
+    async def dispatch(self, request: Request, call_next):
+        # If no password configured, let everything through
+        if not settings.site_password:
+            return await call_next(request)
+
+        path = request.url.path
+
+        # Always allow login page and static assets
+        if path in self.OPEN_PATHS or path.startswith("/static"):
+            return await call_next(request)
+
+        # Check for valid session cookie
+        session_id = request.cookies.get("sp_session")
+        if session_id and session_id in _valid_sessions:
+            return await call_next(request)
+
+        # Not authenticated — redirect browser requests, block API calls
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return RedirectResponse("/login", status_code=302)
+
+
+app.add_middleware(AuthMiddleware)
+
+
+LOGIN_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ScoutPilot — Login</title>
+<style>
+  :root { --bg: #0f1117; --surface: #1a1d2e; --border: #2a2d3e; --text: #e2e8f0; --muted: #94a3b8; --accent: #818cf8; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .login-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px 36px; width: 100%%; max-width: 380px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+  h1 { font-size: 1.6rem; background: linear-gradient(90deg, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 6px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; }
+  input[type=password] { width: 100%%; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 1rem; outline: none; margin-bottom: 16px; transition: border 0.2s; }
+  input[type=password]:focus { border-color: var(--accent); }
+  button { width: 100%%; padding: 12px; border-radius: 10px; border: none; background: linear-gradient(135deg, #818cf8, #6366f1); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+  button:hover { opacity: 0.9; }
+  .error { color: #f87171; font-size: 0.8rem; margin-top: 12px; }
+  .lock { font-size: 2.5rem; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="login-box">
+  <div class="lock">🔒</div>
+  <h1>ScoutPilot</h1>
+  <p class="sub">Enter the access password to continue</p>
+  <form method="POST" action="/login">
+    <input type="password" name="password" placeholder="Password" autofocus required>
+    <button type="submit">Unlock</button>
+  </form>
+  {error}
+</div>
+</body>
+</html>"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    if not settings.site_password:
+        return RedirectResponse("/", status_code=302)
+    return HTMLResponse(LOGIN_PAGE_HTML.replace("{error}", ""))
+
+
+@app.post("/login")
+async def login_submit(password: str = Form(...)):
+    if not settings.site_password:
+        return RedirectResponse("/", status_code=302)
+
+    if password == settings.site_password:
+        session_id = _make_session_id()
+        _valid_sessions.add(session_id)
+        response = RedirectResponse("/", status_code=302)
+        response.set_cookie(
+            "sp_session", session_id,
+            httponly=True, secure=True, samesite="lax",
+            max_age=60 * 60 * 24 * 30,  # 30 days
+        )
+        return response
+
+    html = LOGIN_PAGE_HTML.replace("{error}", '<p class="error">Wrong password. Try again.</p>')
+    return HTMLResponse(html, status_code=401)
+
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie("sp_session")
+    return response
 
 
 # ──────────────────────────────────────────────

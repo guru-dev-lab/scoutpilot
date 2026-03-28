@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Site access
+    site_password: str = ""  # Set to require password; empty = open access
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
