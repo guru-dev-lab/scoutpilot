@@ -14,9 +14,7 @@ RECENT_CHANGES = [
     {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
     {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
     {"version": "0.3.2", "date": "2026-03-28", "status": "active", "change": "Fuzzy dedup — catches near-duplicate jobs across sources (Sr vs Senior etc.)"},
-    {"version": "0.3.1", "date": "2026-03-28", "status": "active", "change": "Data retention — auto-archive after 14d, purge after 90d, daily cleanup at 3AM"},
-    {"version": "0.3.0", "date": "2026-03-27", "status": "active", "change": "Hot card animation for jobs < 1hr old, honest posted dates, rounded scores"},
-]
+]  # Keep only last 5 entries
 import asyncio
 import logging
 import json
