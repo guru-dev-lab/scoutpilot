@@ -76,6 +76,14 @@ AGGREGATOR_DOMAINS = {
     "wellfound.com", "lever.co", "greenhouse.io", "workday.com",
     "smartrecruiters.com", "icims.com", "myworkdayjobs.com",
     "jobs.lever.co", "boards.greenhouse.io",
+    # AI job sites / aggregator clones — same as us, not real employers
+    "otta.com", "builtin.com", "cord.co", "hired.com", "triplebyte.com",
+    "angel.co", "remotive.com", "weworkremotely.com", "flexjobs.com",
+    "remote.co", "himalayas.app", "jobgether.com", "4dayweek.io",
+    "nodesk.co", "workingnomads.com", "remoteleaf.com", "jobspresso.co",
+    "pangian.com", "remoteok.com", "skipthedrive.com", "virtualvocations.com",
+    "lensa.com", "jobright.ai", "teal.com", "sonara.ai", "lazyapply.com",
+    "jobscan.co", "huntr.co", "careerflow.ai",
 }
 
 # ATS domains that ARE direct apply (company uses these as their career page)
@@ -91,15 +99,20 @@ ATS_DIRECT_DOMAINS = {
 
 def _is_direct_url(url: str) -> bool:
     """
-    Determine if a URL is a direct company application link.
-    Returns True for company career pages and ATS-hosted job pages.
-    Returns False for aggregator job boards.
+    Determine if a URL is a direct company application link to a SPECIFIC JOB.
+    Returns True for company career pages and ATS-hosted job pages with a job path.
+    Returns False for aggregator job boards, LinkedIn EasyApply, and bare homepages.
     """
     if not url:
         return False
     try:
         parsed = urlparse(url.lower())
         domain = parsed.netloc.replace("www.", "")
+        path = parsed.path.rstrip("/")
+
+        # NEVER treat LinkedIn as direct apply (EasyApply loops back to LinkedIn)
+        if "linkedin.com" in domain:
+            return False
 
         # Check if it's a known aggregator (NOT direct)
         for agg in AGGREGATOR_DOMAINS:
@@ -110,7 +123,19 @@ def _is_direct_url(url: str) -> bool:
                         return True
                 return False
 
-        # If it's not an aggregator, it's likely a direct company link
+        # Reject bare homepages — a URL like "company.com" or "company.com/"
+        # is NOT a job application link. Need at least a path with content.
+        if not path or path == "/":
+            return False
+
+        # Reject very short paths that are likely top-level pages, not job posts
+        # e.g. /careers, /jobs, /about — these are category pages not specific jobs
+        bare_pages = {"/careers", "/jobs", "/about", "/contact", "/team",
+                      "/hiring", "/work-with-us", "/join-us", "/openings"}
+        if path in bare_pages:
+            return False
+
+        # If it has a meaningful path, it's likely a direct company link
         return True
     except Exception:
         return False
@@ -151,6 +176,12 @@ BLOCKED_COMPANIES = {
     "getwork", "livecareer", "resume-library", "resume library",
     "jobot", "cybercoders", "harnham", "crossover", "toptal",
     "upwork", "hired", "vettery", "triplebyte", "wellfound",
+    # AI job sites / aggregator clones (same as us — not real employers)
+    "otta", "cord", "jobright", "jobright.ai", "sonara", "lazyapply",
+    "teal", "jobscan", "huntr", "careerflow", "jobgether", "remotive",
+    "himalayas", "flexjobs", "pangian", "remoteok", "remote ok",
+    "weworkremotely", "we work remotely", "nodesk", "jobspresso",
+    "builtin", "built in", "4dayweek", "skipthedrive", "virtualvocations",
     # Known spam / fake job reposters
     "recruitics", "appcast", "joveo", "pandologic", "radancy",
     "talentify", "recruitology", "jobalign", "nexxt", "recruitics",
