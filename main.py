@@ -20,6 +20,7 @@ from database import (
     init_db, get_jobs, get_job_count, update_job_status,
     update_job_scores, create_profile, get_profiles,
     update_profile, delete_profile, insert_job,
+    init_archive_table, cleanup_old_jobs, get_retention_stats,
 )
 from scraper import run_scrape_cycle
 from ai_engine import expand_title_ai, score_relevance_ai, score_trust_ai
@@ -85,10 +86,24 @@ async def scheduled_scrape():
         }
 
 
+async def scheduled_cleanup():
+    """Daily cleanup: archive old jobs and purge ancient archives."""
+    try:
+        result = await cleanup_old_jobs()
+        logger.info(
+            f"[Retention] Archived {result['archived']} jobs, "
+            f"purged {result['purged']}. "
+            f"Active: {result['active_jobs']}, Archived: {result['archived_jobs']}"
+        )
+    except Exception as e:
+        logger.error(f"[Retention] Cleanup failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    logger.info("Database initialized")
+    await init_archive_table()
+    logger.info("Database initialized (with archive table)")
 
     scheduler.add_job(
         scheduled_scrape,
@@ -97,8 +112,15 @@ async def lifespan(app: FastAPI):
         id="scrape_cycle",
         replace_existing=True,
     )
+    scheduler.add_job(
+        scheduled_cleanup,
+        "cron",
+        hour=3, minute=0,
+        id="daily_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started (every {settings.scrape_interval_minutes} min)")
+    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, cleanup daily at 3 AM)")
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
@@ -285,6 +307,30 @@ async def _reprocess_existing_jobs():
         logger.error(f"[Reprocess] Error: {e}")
     finally:
         await db.close()
+
+
+# ──────────────────────────────────────────────
+# Data Retention API
+# ──────────────────────────────────────────────
+
+@app.get("/api/retention")
+async def api_retention_stats():
+    """Get data retention stats (active vs archived jobs, age range)."""
+    try:
+        stats = await get_retention_stats()
+        return stats
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/cleanup")
+async def api_trigger_cleanup():
+    """Manually trigger cleanup (archive stale + purge ancient)."""
+    try:
+        result = await cleanup_old_jobs()
+        return {"status": "ok", **result}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/status")
