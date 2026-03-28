@@ -1,9 +1,17 @@
 import aiosqlite
 import hashlib
 import json
+import re
+import logging
 from datetime import datetime, timezone
 from typing import Optional
+from rapidfuzz import fuzz
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+# Fuzzy dedup threshold — 88+ means titles are near-identical
+FUZZY_TITLE_THRESHOLD = 88
 
 DB_PATH = settings.database_path
 
@@ -87,13 +95,41 @@ async def init_db():
         await db.close()
 
 
+def _normalize_text(text: str) -> str:
+    """Normalize text for fuzzy comparison — expand abbreviations, strip noise."""
+    t = text.lower().strip()
+    # Common title abbreviations → full form
+    swaps = {
+        r"\bsr\.?\b": "senior", r"\bjr\.?\b": "junior", r"\bmgr\.?\b": "manager",
+        r"\beng\.?\b": "engineer", r"\bdev\.?\b": "developer", r"\badmin\.?\b": "administrator",
+        r"\bassoc\.?\b": "associate", r"\bdir\.?\b": "director", r"\bvp\b": "vice president",
+        r"\bii\b": "2", r"\biii\b": "3", r"\biv\b": "4",
+    }
+    for pat, repl in swaps.items():
+        t = re.sub(pat, repl, t)
+    # Strip trailing dots, dashes, extra whitespace
+    t = re.sub(r"[.\-/]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _normalize_company(name: str) -> str:
+    """Normalize company name for matching."""
+    t = name.lower().strip()
+    # Remove common suffixes
+    t = re.sub(r"\b(inc\.?|llc\.?|ltd\.?|corp\.?|co\.?|company|group|holdings)\b", "", t)
+    t = re.sub(r"[,.\-]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def make_job_hash(company: str, title: str, location: str) -> str:
     raw = f"{company.lower().strip()}|{title.lower().strip()}|{location.lower().strip()}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
 async def insert_job(job_data: dict) -> bool:
-    """Insert a job if it doesn't already exist. Returns True if inserted."""
+    """Insert a job if it doesn't already exist (exact hash + fuzzy title check). Returns True if inserted."""
     h = make_job_hash(
         job_data.get("company_name", ""),
         job_data.get("title", ""),
@@ -101,9 +137,29 @@ async def insert_job(job_data: dict) -> bool:
     )
     db = await get_db()
     try:
+        # 1. Exact hash match — fastest check
         existing = await db.execute("SELECT id FROM jobs WHERE hash = ?", (h,))
         if await existing.fetchone():
             return False
+
+        # 2. Fuzzy dedup — catch "Sr Data Analyst" vs "Senior Data Analyst" etc.
+        company_norm = _normalize_company(job_data.get("company_name", ""))
+        title_norm = _normalize_text(job_data.get("title", ""))
+        if company_norm and title_norm:
+            # Pull recent jobs from this company (use LIKE for loose company match)
+            cursor = await db.execute(
+                "SELECT id, title FROM jobs WHERE LOWER(company_name) LIKE ? LIMIT 50",
+                (f"%{company_norm[:20]}%",),
+            )
+            similar_jobs = await cursor.fetchall()
+            for row in similar_jobs:
+                existing_title = _normalize_text(row[1] or "")
+                score = fuzz.token_sort_ratio(title_norm, existing_title)
+                if score >= FUZZY_TITLE_THRESHOLD:
+                    logger.debug(
+                        f"[Dedup] Fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
+                    )
+                    return False
 
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
