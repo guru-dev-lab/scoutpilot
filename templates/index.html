@@ -673,9 +673,12 @@ async function loadJobs() {
   const workType = document.getElementById('filterWorkType').value;
   const status = document.getElementById('filterStatus').value;
   const directOnly = document.getElementById('filterDirect').value;
-  const sortVal = document.getElementById('filterSort').value;
+  const sortEl = document.getElementById('filterSort');
+  const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
-  const [sort_by, sort_dir] = sortVal.split(':');
+  // When searching, auto-switch to "Most Relevant" so best matches show first
+  const effectiveSort = search ? 'relevance_score:DESC' : sortVal;
+  const [sort_by, sort_dir] = effectiveSort.split(':');
 
   // Smart search: expand query with synonyms
   const searchInfo = search ? expandSearchQuery(search) : null;

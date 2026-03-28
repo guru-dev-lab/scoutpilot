@@ -262,14 +262,15 @@ async def get_jobs(
             conditions.append("is_direct_apply = 1")
 
         if search:
-            # Split search into words for multi-term matching
-            # Each word must appear somewhere in title, company, or description
+            # Search title and company only — description matching is too noisy
+            # (a Java Developer job mentioning "data" in its desc would match "Data Analyst")
+            # Relevance scores already account for description-level matching
             words = search.strip().split()
             word_conditions = []
             for word in words:
                 w = f"%{word}%"
-                word_conditions.append("(title LIKE ? OR company_name LIKE ? OR description LIKE ?)")
-                params.extend([w, w, w])
+                word_conditions.append("(title LIKE ? OR company_name LIKE ?)")
+                params.extend([w, w])
             if word_conditions:
                 conditions.append("(" + " AND ".join(word_conditions) + ")")
 
