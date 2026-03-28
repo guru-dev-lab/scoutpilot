@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.5.0"
+BUILD_VERSION = "0.5.1"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.5.1", "date": "2026-03-28", "status": "active", "change": "Clean timestamps — only show 'Posted' date, removed confusing 'Found' labels"},
     {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
     {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
     {"version": "0.3.2", "date": "2026-03-28", "status": "active", "change": "Fuzzy dedup — catches near-duplicate jobs across sources (Sr vs Senior etc.)"},

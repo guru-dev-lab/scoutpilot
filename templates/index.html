@@ -267,7 +267,7 @@
       </select>
     </div>
     <div class="filter-group">
-      <label>Found</label>
+      <label>Scraped Within</label>
       <select id="filterHours" onchange="loadJobs()">
         <option value="1">Last 1 Hour</option>
         <option value="2">Last 2 Hours</option>
@@ -330,7 +330,7 @@
       <label>Sort By</label>
       <select id="filterSort" onchange="loadJobs()">
         <option value="posted_at:DESC">Newest Posted</option>
-        <option value="first_seen_at:DESC">Newest Found</option>
+        <option value="first_seen_at:DESC">Recently Added</option>
         <option value="relevance_score:DESC">Most Relevant</option>
         <option value="salary_max:DESC">Highest Salary</option>
         <option value="company_name:ASC">Company A-Z</option>
@@ -863,8 +863,8 @@ function renderJobs(jobs, searchInfo) {
     const skills = extractSkills(job.title, job.description);
     const skillHtml = renderSkillTags(skills);
 
-    // Time — show posted time if available, otherwise found time
-    var timeStr = postedAgo ? ('Posted ' + postedAgo) : ('Found ' + foundAgo);
+    // Time — only show posted date (when the job was actually listed)
+    var timeStr = postedAgo ? ('Posted ' + postedAgo) : '';
 
     // Row 1: title
     // Row 2: company · location · source · time
@@ -877,8 +877,7 @@ function renderJobs(jobs, searchInfo) {
       + '<span class="company">' + esc(job.company_name || 'Unknown') + '</span>'
       + '<span>' + esc(job.location || '') + '</span>'
       + '<span class="source">' + esc(job.source) + '</span>'
-      + '<span class="sep">\u00b7</span>'
-      + '<span class="time-stamp">' + timeStr + '</span>'
+      + (timeStr ? '<span class="sep">\u00b7</span><span class="time-stamp">' + timeStr + '</span>' : '')
       + '</div>'
       + '<div class="job-tags">' + badges + skillHtml + '</div>'
       + '<div class="job-actions">'
