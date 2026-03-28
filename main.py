@@ -172,7 +172,7 @@ def _make_session_id() -> str:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -197,6 +197,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(AuthMiddleware)
+
+
+@app.get("/healthz")
+async def healthz():
+    """Unauthenticated health check — shows DB path and job count."""
+    import os
+    from database import get_db, DB_PATH
+    info = {"db_path": DB_PATH, "db_exists": os.path.exists(DB_PATH), "version": BUILD_VERSION}
+    try:
+        db = await get_db()
+        row = await db.execute("SELECT COUNT(*) as cnt FROM jobs")
+        result = await row.fetchone()
+        info["job_count"] = result[0] if result else 0
+        await db.close()
+    except Exception as e:
+        info["db_error"] = str(e)
+    # Check if /data/ directory exists and list contents
+    try:
+        info["data_dir_exists"] = os.path.isdir("/data")
+        if info["data_dir_exists"]:
+            info["data_dir_contents"] = os.listdir("/data")
+    except Exception as e:
+        info["data_dir_error"] = str(e)
+    return info
 
 
 LOGIN_PAGE_HTML = """<!DOCTYPE html>

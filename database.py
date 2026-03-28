@@ -1,6 +1,7 @@
 import aiosqlite
 import hashlib
 import json
+import os
 import re
 import logging
 from datetime import datetime, timezone
@@ -13,7 +14,14 @@ logger = logging.getLogger(__name__)
 # Fuzzy dedup threshold — 88+ means titles are near-identical
 FUZZY_TITLE_THRESHOLD = 88
 
+# Ensure the database directory exists (Railway volume must be mounted)
+_db_dir = os.path.dirname(settings.database_path)
+if _db_dir and not os.path.isdir(_db_dir):
+    logger.warning(f"Database directory {_db_dir} does not exist — creating it")
+    os.makedirs(_db_dir, exist_ok=True)
+
 DB_PATH = settings.database_path
+logger.info(f"Using database at: {DB_PATH}")
 
 
 async def get_db():
