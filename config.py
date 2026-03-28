@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     scrape_interval_minutes: int = 10
 
     # Database
-    database_path: str = "/tmp/scoutpilot.db"
+    database_path: str = "/data/scoutpilot.db"
 
     # Server
     host: str = "0.0.0.0"
