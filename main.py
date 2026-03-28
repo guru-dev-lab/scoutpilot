@@ -2,6 +2,18 @@
 ScoutPilot — Real-time job intelligence engine.
 FastAPI app with background scheduler.
 """
+
+# ──────────────────────────────────────────────
+# Build Info — update with each deploy
+# ──────────────────────────────────────────────
+BUILD_VERSION = "0.4.0"
+BUILD_DATE = "2026-03-28"
+RECENT_CHANGES = [
+    {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
+    {"version": "0.3.2", "date": "2026-03-28", "status": "active", "change": "Fuzzy dedup — catches near-duplicate jobs across sources (Sr vs Senior etc.)"},
+    {"version": "0.3.1", "date": "2026-03-28", "status": "active", "change": "Data retention — auto-archive after 14d, purge after 90d, daily cleanup at 3AM"},
+    {"version": "0.3.0", "date": "2026-03-27", "status": "active", "change": "Hot card animation for jobs < 1hr old, honest posted dates, rounded scores"},
+]
 import asyncio
 import logging
 import json
@@ -341,6 +353,17 @@ async def api_status():
         "has_anthropic_key": bool(settings.anthropic_api_key),
         "has_serpapi_key": bool(settings.serpapi_key),
         "has_rapidapi_key": bool(settings.rapidapi_key),
+        "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
+    }
+
+
+@app.get("/api/build")
+async def api_build():
+    """Build info and recent changelog."""
+    return {
+        "version": BUILD_VERSION,
+        "date": BUILD_DATE,
+        "changes": RECENT_CHANGES,
     }
 
 

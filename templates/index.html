@@ -24,6 +24,18 @@
   .header { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .header h1 { font-size: 1.5rem; background: linear-gradient(90deg, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
   .header-actions { display: flex; gap: 8px; align-items: center; }
+  .header > div:first-child { position: relative; }
+  .build-badge { font-size: 0.55rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: rgba(129,140,248,0.15); color: #818cf8; -webkit-text-fill-color: #818cf8; cursor: pointer; vertical-align: middle; letter-spacing: 0.03em; transition: background 0.2s; }
+  .build-badge:hover { background: rgba(129,140,248,0.3); }
+  .changelog-panel { position: absolute; top: 100%; left: 0; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-width: 360px; max-width: 440px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin-top: 6px; }
+  .changelog-header { font-size: 0.75rem; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .changelog-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+  .changelog-item:last-child { border-bottom: none; }
+  .changelog-status { font-size: 0.6rem; font-weight: 700; padding: 1px 6px; border-radius: 6px; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; }
+  .changelog-status.active { background: rgba(52,211,153,0.15); color: #34d399; }
+  .changelog-status.pending { background: rgba(251,191,36,0.15); color: #fbbf24; }
+  .changelog-ver { color: #818cf8; font-weight: 600; flex-shrink: 0; min-width: 36px; }
+  .changelog-text { color: var(--muted); }
 
   /* Stats */
   .stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -212,9 +224,13 @@
 
   <div class="header">
     <div>
-      <h1>ScoutPilot</h1>
+      <h1>ScoutPilot <span id="buildBadge" class="build-badge" onclick="toggleChangelog()" title="Click for changelog"></span></h1>
       <div class="scrape-status" id="scrapeStatus">
         <span class="dot gray"></span> Initializing...
+      </div>
+      <div id="changelogPanel" class="changelog-panel" style="display:none;">
+        <div class="changelog-header">Recent Changes</div>
+        <div id="changelogList"></div>
       </div>
     </div>
     <div class="header-actions">
@@ -665,6 +681,39 @@ function renderSkillTags(skills) {
 }
 
 // ── Load & Render Jobs ──
+// ── Build / Changelog ──
+async function loadBuildInfo() {
+  try {
+    var res = await fetch(API + '/api/build');
+    var data = await res.json();
+    var badge = document.getElementById('buildBadge');
+    if (badge) badge.textContent = 'v' + data.version;
+    var list = document.getElementById('changelogList');
+    if (list && data.changes) {
+      list.innerHTML = data.changes.map(function(c) {
+        return '<div class="changelog-item">'
+          + '<span class="changelog-status ' + c.status + '">' + c.status + '</span>'
+          + '<span class="changelog-ver">v' + c.version + '</span>'
+          + '<span class="changelog-text">' + c.change + '</span>'
+          + '</div>';
+      }).join('');
+    }
+  } catch(e) { console.log('Build info unavailable'); }
+}
+function toggleChangelog() {
+  var panel = document.getElementById('changelogPanel');
+  if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+// Close changelog when clicking outside
+document.addEventListener('click', function(e) {
+  var panel = document.getElementById('changelogPanel');
+  var badge = document.getElementById('buildBadge');
+  if (panel && panel.style.display !== 'none' && !panel.contains(e.target) && e.target !== badge) {
+    panel.style.display = 'none';
+  }
+});
+loadBuildInfo();
+
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
   const postedHours = document.getElementById('filterPostedHours').value;
