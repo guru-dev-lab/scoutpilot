@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.5.1"
+BUILD_VERSION = "0.6.0"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, location filter, CSV export, mobile-friendly layout"},
     {"version": "0.5.1", "date": "2026-03-28", "status": "active", "change": "Clean timestamps — only show 'Posted' date, removed confusing 'Found' labels"},
     {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
     {"version": "0.4.0", "date": "2026-03-28", "status": "active", "change": "Smart search — results match title/company only, auto-sort by relevance"},
@@ -26,8 +27,11 @@ from contextlib import asynccontextmanager
 import hashlib
 import secrets
 
+import csv
+import io
+
 from fastapi import FastAPI, Query, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -295,6 +299,7 @@ async def api_get_jobs(
     offset: int = Query(0, ge=0),
     search: str = "",
     direct_only: str = "",
+    location: str = "",
 ):
     try:
         # When searching, expand time window to search ALL jobs (not just last 24h)
@@ -306,7 +311,7 @@ async def api_get_jobs(
             source=source, status=status, work_type=work_type,
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
-            direct_only=is_direct,
+            direct_only=is_direct, location=location,
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}
@@ -318,7 +323,7 @@ async def api_get_jobs(
 
 @app.patch("/api/jobs/{job_id}/status")
 async def api_update_status(job_id: int, status: str = "seen"):
-    if status not in ("new", "viewed", "applied", "hidden"):
+    if status not in ("new", "viewed", "applied", "hidden", "saved"):
         return JSONResponse({"error": "Invalid status"}, 400)
     await update_job_status(job_id, status)
     return {"ok": True}
@@ -361,6 +366,53 @@ async def api_update_profile(profile_id: int, request: Request):
 async def api_delete_profile(profile_id: int):
     await delete_profile(profile_id)
     return {"ok": True}
+
+
+# ──────────────────────────────────────────────
+# Export
+# ──────────────────────────────────────────────
+
+@app.get("/api/export/csv")
+async def api_export_csv(
+    hours: int = Query(24, ge=1, le=720),
+    search: str = "",
+    status: str = "",
+    work_type: str = "",
+    source: str = "",
+    location: str = "",
+    direct_only: str = "",
+):
+    """Export current filtered jobs as CSV."""
+    effective_hours = 720 if search.strip() else hours
+    is_direct = direct_only in ("1", "true", "yes")
+    jobs = await get_jobs(
+        hours=effective_hours, search=search, status=status,
+        work_type=work_type, source=source, location=location,
+        direct_only=is_direct, limit=500,
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Title", "Company", "Location", "Work Type", "Source",
+                      "Posted", "Salary Min", "Salary Max", "Direct Apply",
+                      "Status", "Apply URL"])
+    for j in jobs:
+        writer.writerow([
+            j.get("title", ""), j.get("company_name", ""),
+            j.get("location", ""), j.get("work_type", ""),
+            j.get("source", ""), j.get("posted_at", ""),
+            j.get("salary_min", 0), j.get("salary_max", 0),
+            "Yes" if j.get("is_direct_apply") else "No",
+            j.get("status", ""),
+            j.get("direct_apply_url") or j.get("source_url", ""),
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=scoutpilot-jobs.csv"},
+    )
 
 
 # ──────────────────────────────────────────────

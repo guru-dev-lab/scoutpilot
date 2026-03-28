@@ -88,6 +88,7 @@
   .job-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; transition: border-color 0.15s; align-items: center; }
   .job-card:hover { border-color: var(--primary); }
   .job-card.viewed { border-left: 3px solid var(--yellow); opacity: 0.85; }
+  .job-card.saved { border-left: 3px solid var(--primary); }
   .job-card.applied { border-left: 3px solid var(--green); opacity: 0.7; }
 
   /* Row 1: title */
@@ -155,8 +156,19 @@
   .act-btn.go { color: var(--green); border-color: rgba(52,211,153,0.4); }
   .act-btn.go:hover { background: var(--green-bg); }
   .act-btn.go-direct { background: var(--green-bg); color: var(--green); border-color: var(--green); font-weight: 700; }
+  .act-btn.saved-on { background: var(--primary); border-color: var(--primary); color: #fff; }
   .act-btn.applied-on { background: var(--green); border-color: var(--green); color: #fff; }
   .act-btn.hide:hover { border-color: var(--red); color: var(--red); }
+  .act-btn.save:hover { border-color: var(--primary); color: var(--primary-hover); }
+
+  /* Export button */
+  .export-btn { padding: 7px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text2); cursor: pointer; font-size: 0.78rem; transition: all 0.15s; white-space: nowrap; }
+  .export-btn:hover { border-color: var(--primary); color: var(--primary-hover); }
+
+  /* Location filter */
+  .location-input { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.82rem; width: 130px; }
+  .location-input:focus { outline: none; border-color: var(--primary); }
+  .location-input::placeholder { color: var(--text3); }
 
   /* Profile modal */
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
@@ -211,12 +223,33 @@
 
   /* Responsive */
   @media (max-width: 768px) {
-    .filters { flex-wrap: wrap; }
-    .filter-group { flex: 1; min-width: 120px; }
-    .search-box { min-width: 100%; }
-    .job-card { grid-template-columns: 1fr; }
-    .job-actions { grid-row: auto; grid-column: auto; justify-content: flex-start; }
-    .job-meta { flex-wrap: wrap; }
+    .app { padding: 10px; }
+    .header { flex-direction: column; gap: 10px; align-items: flex-start; }
+    .header-actions { width: 100%; justify-content: flex-end; }
+    .stats { gap: 8px; }
+    .stat { padding: 8px 12px; flex: 1; min-width: 60px; text-align: center; }
+    .stat .num { font-size: 1.1rem; }
+    .stat .label { font-size: 0.6rem; }
+    .filters { flex-wrap: wrap; gap: 6px; }
+    .filter-group { flex: 1; min-width: 100px; }
+    .filter-group select { font-size: 0.78rem; padding: 6px 8px; }
+    .search-box { min-width: 100%; order: -1; }
+    .job-card { grid-template-columns: 1fr; padding: 10px 12px; }
+    .job-title { font-size: 0.85rem; white-space: normal; }
+    .job-actions { grid-row: auto; grid-column: auto; justify-content: flex-start; margin-top: 4px; }
+    .job-meta { flex-wrap: wrap; font-size: 0.72rem; }
+    .job-tags { gap: 3px; }
+    .badge { font-size: 0.58rem; padding: 1px 4px; }
+    .skill-tag { font-size: 0.58rem; padding: 1px 5px; }
+    .changelog-panel { min-width: 280px; max-width: 320px; }
+    .results-bar { flex-direction: column; gap: 4px; align-items: flex-start; }
+    .location-input { width: 100px; }
+  }
+  @media (max-width: 480px) {
+    .stat { min-width: 50px; padding: 6px 8px; }
+    .stat .num { font-size: 0.95rem; }
+    .filter-group { min-width: 80px; }
+    .act-btn { padding: 3px 8px; font-size: 0.68rem; }
   }
 </style>
 </head>
@@ -236,6 +269,7 @@
     </div>
     <div class="header-actions">
       <button class="info-btn" onclick="openInfoModal()" title="How ScoutPilot Works">?</button>
+      <button class="export-btn" onclick="exportCSV()" title="Download results as CSV">Export CSV</button>
       <button class="btn" onclick="triggerScrape()" id="scrapeBtn">Scrape Now</button>
       <button class="btn primary" onclick="openProfileModal()">+ Add Search</button>
     </div>
@@ -246,6 +280,7 @@
     <div class="stat"><div class="num" id="statNew">0</div><div class="label">New</div></div>
     <div class="stat"><div class="num" id="statViewed">0</div><div class="label">Viewed</div></div>
     <div class="stat"><div class="num" id="statDirect">0</div><div class="label">Direct Apply</div></div>
+    <div class="stat" style="cursor:pointer;" onclick="document.getElementById('filterStatus').value='saved';loadJobs()"><div class="num" id="statSaved" style="color:var(--primary);">0</div><div class="label">Saved</div></div>
     <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
   </div>
 
@@ -307,6 +342,7 @@
         <option value="">All Jobs</option>
         <option value="new">New Only</option>
         <option value="viewed">Viewed</option>
+        <option value="saved">Saved</option>
         <option value="applied">Applied</option>
       </select>
     </div>
@@ -325,6 +361,10 @@
         <option value="70">70 and Above</option>
         <option value="85">85 and Above</option>
       </select>
+    </div>
+    <div class="filter-group">
+      <label>Location</label>
+      <input type="text" class="location-input" id="filterLocation" placeholder="e.g. Remote, NYC..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceLocation()">
     </div>
     <div class="filter-group">
       <label>Sort By</label>
@@ -400,7 +440,12 @@
 
     <div class="info-section">
       <h3>Quick Actions</h3>
-      <p>Click a job title to open it (marks as viewed). Use <strong>Applied?</strong> to track jobs you applied to. Hit <strong>&times;</strong> to hide jobs you're not interested in.</p>
+      <p>Click a job title to open it (marks as viewed). Hit <strong>&#9734; Save</strong> to bookmark jobs you're interested in — view them anytime by clicking the Saved counter or choosing "Saved" in the Status filter. Use <strong>Applied?</strong> to track jobs you applied to. Hit <strong>&times;</strong> to hide jobs you're not interested in.</p>
+    </div>
+
+    <div class="info-section">
+      <h3>Export &amp; Location</h3>
+      <p>Use the <strong>Location</strong> filter to narrow results by city, state, or "Remote". Click <strong>Export CSV</strong> to download your current filtered results as a spreadsheet you can share or use for tracking.</p>
     </div>
   </div>
 </div>
@@ -454,6 +499,7 @@
 <script>
 const API = '';
 let searchTimeout = null;
+let locationTimeout = null;
 
 // ── Smart Search: Related Title Expansion ──
 // Maps common job-title keywords to related terms so "Data Analyst" also finds
@@ -726,6 +772,7 @@ async function loadJobs() {
   const sortEl = document.getElementById('filterSort');
   const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
+  const location = document.getElementById('filterLocation').value.trim();
   // When searching, auto-switch to "Most Relevant" so best matches show first
   const effectiveSort = search ? 'relevance_score:DESC' : sortVal;
   const [sort_by, sort_dir] = effectiveSort.split(':');
@@ -733,11 +780,13 @@ async function loadJobs() {
   // Smart search: expand query with synonyms
   const searchInfo = search ? expandSearchQuery(search) : null;
 
+  // When viewing saved/applied jobs, show all regardless of time window
+  const effectiveHours = (status === 'saved' || status === 'applied') ? 720 : hours;
   const params = new URLSearchParams({
-    hours, posted_hours: postedHours,
+    hours: effectiveHours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
     source, work_type: workType, status, direct_only: directOnly,
-    sort_by, sort_dir, search, limit: 500, offset: 0,
+    sort_by, sort_dir, search, location, limit: 500, offset: 0,
   });
 
   // Show searching indicator
@@ -822,8 +871,9 @@ function renderJobs(jobs, searchInfo) {
     const foundAgo = getTimeAgo(job.first_seen_at);
     const applyUrl = escAttr(job.direct_apply_url || job.source_url || '');
     const isApplied = job.status === 'applied';
+    const isSaved = job.status === 'saved';
     const isViewed = job.status === 'viewed';
-    const cls = isApplied ? 'applied' : isViewed ? 'viewed' : '';
+    const cls = isApplied ? 'applied' : isSaved ? 'saved' : isViewed ? 'viewed' : '';
 
     let badges = '';
 
@@ -884,6 +934,7 @@ function renderJobs(jobs, searchInfo) {
       + (job.is_direct_apply
         ? '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="act-btn go-direct" onclick="markViewed(' + job.id + ')">\u2713 Apply Direct</a>'
         : '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="act-btn go" onclick="markViewed(' + job.id + ')">View</a>')
+      + '<button class="act-btn save' + (isSaved ? ' saved-on' : '') + '" onclick="toggleSaved(' + job.id + ',' + !isSaved + ')">' + (isSaved ? '\u2605 Saved' : '\u2606 Save') + '</button>'
       + '<button class="act-btn' + (isApplied ? ' applied-on' : '') + '" onclick="toggleApplied(' + job.id + ',' + !isApplied + ')">' + (isApplied ? '\u2713 Applied' : 'Applied?') + '</button>'
       + '<button class="act-btn hide" onclick="markStatus(' + job.id + ',\'hidden\')">\u00d7</button>'
       + '</div></div>';
@@ -903,6 +954,7 @@ function renderStats(s, searchCount, searchTerm) {
   document.getElementById('statNew').textContent = s.new_count || 0;
   document.getElementById('statViewed').textContent = s.viewed_count || 0;
   document.getElementById('statDirect').textContent = s.direct_count || 0;
+  document.getElementById('statSaved').textContent = s.saved_count || 0;
   document.getElementById('statApplied').textContent = s.applied_count || 0;
 }
 
@@ -997,11 +1049,19 @@ async function markViewed(id) {
   }
 }
 
+async function toggleSaved(id, checked) {
+  var st = checked ? 'saved' : 'new';
+  await fetch(API + '/api/jobs/' + id + '/status?status=' + st, { method: 'PATCH' });
+  var card = document.getElementById('job-' + id);
+  if (card) { card.classList.remove('saved', 'viewed', 'applied'); if (checked) card.classList.add('saved'); }
+  loadJobs();
+}
+
 async function toggleApplied(id, checked) {
   var st = checked ? 'applied' : 'viewed';
   await fetch(API + '/api/jobs/' + id + '/status?status=' + st, { method: 'PATCH' });
   var card = document.getElementById('job-' + id);
-  if (card) { card.classList.remove('applied', 'viewed'); card.classList.add(st); }
+  if (card) { card.classList.remove('applied', 'viewed', 'saved'); card.classList.add(st); }
   loadJobs();
 }
 
@@ -1140,6 +1200,23 @@ function clearSearch() {
   var banner = document.getElementById('searchBanner');
   if (banner) banner.remove();
   loadJobs();
+}
+
+function debounceLocation() {
+  clearTimeout(locationTimeout);
+  locationTimeout = setTimeout(loadJobs, 600);
+}
+
+function exportCSV() {
+  const hours = document.getElementById('filterHours').value;
+  const search = document.getElementById('filterSearch').value.trim();
+  const status = document.getElementById('filterStatus').value;
+  const workType = document.getElementById('filterWorkType').value;
+  const source = document.getElementById('filterSource').value;
+  const location = document.getElementById('filterLocation').value.trim();
+  const directOnly = document.getElementById('filterDirect').value;
+  const params = new URLSearchParams({ hours, search, status, work_type: workType, source, location, direct_only: directOnly });
+  window.open(API + '/api/export/csv?' + params.toString(), '_blank');
 }
 
 // ── Init ──

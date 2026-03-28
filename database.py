@@ -211,6 +211,7 @@ async def get_jobs(
     offset: int = 0,
     search: str = "",
     direct_only: bool = False,
+    location: str = "",
 ) -> list[dict]:
     db = await get_db()
     try:
@@ -261,6 +262,12 @@ async def get_jobs(
         if direct_only:
             conditions.append("is_direct_apply = 1")
 
+        if location:
+            loc_words = location.strip().split()
+            for lw in loc_words:
+                conditions.append("location LIKE ?")
+                params.append(f"%{lw}%")
+
         if search:
             # Search title and company only — description matching is too noisy
             # (a Java Developer job mentioning "data" in its desc would match "Data Analyst")
@@ -308,13 +315,14 @@ async def get_job_count(hours: int = 24) -> dict:
                 COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_count,
                 COALESCE(SUM(CASE WHEN status = 'viewed' THEN 1 ELSE 0 END), 0) as viewed_count,
                 COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) as applied_count,
+                COALESCE(SUM(CASE WHEN status = 'saved' THEN 1 ELSE 0 END), 0) as saved_count,
                 COALESCE(SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END), 0) as hidden_count,
                 COALESCE(SUM(CASE WHEN is_direct_apply = 1 THEN 1 ELSE 0 END), 0) as direct_count
             FROM jobs WHERE first_seen_at >= datetime('now', ?)""",
             (f"-{hours} hours",),
         )
         row = await cursor.fetchone()
-        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "hidden_count": 0, "direct_count": 0}
+        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "saved_count": 0, "hidden_count": 0, "direct_count": 0}
     finally:
         await db.close()
 
