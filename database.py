@@ -363,3 +363,135 @@ async def delete_profile(profile_id: int):
         await db.commit()
     finally:
         await db.close()
+
+
+# --- Data Retention / Cleanup ---
+
+ARCHIVE_AFTER_DAYS = 14   # Move jobs older than this to archive
+PURGE_AFTER_DAYS = 90     # Delete archived jobs older than this
+
+
+async def init_archive_table():
+    """Create the archive table (same schema as jobs) if it doesn't exist."""
+    db = await get_db()
+    try:
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS jobs_archive (
+                id INTEGER PRIMARY KEY,
+                hash TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                company_name TEXT DEFAULT '',
+                company_domain TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                is_remote INTEGER DEFAULT 0,
+                work_type TEXT DEFAULT 'onsite',
+                description TEXT DEFAULT '',
+                salary_min INTEGER DEFAULT 0,
+                salary_max INTEGER DEFAULT 0,
+                source TEXT DEFAULT '',
+                source_url TEXT DEFAULT '',
+                direct_apply_url TEXT DEFAULT '',
+                posted_at TEXT DEFAULT '',
+                first_seen_at TEXT DEFAULT '',
+                relevance_score INTEGER DEFAULT 50,
+                trust_score INTEGER DEFAULT 50,
+                is_direct_apply INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'new',
+                search_profile_id INTEGER,
+                archived_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_archive_first_seen ON jobs_archive(first_seen_at);
+            CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON jobs_archive(archived_at);
+        """)
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def cleanup_old_jobs() -> dict:
+    """Move stale jobs to archive and purge ancient archived jobs.
+    Returns stats on what was moved/deleted."""
+    db = await get_db()
+    try:
+        # 1. Count what we're about to archive
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE first_seen_at < datetime('now', ?)",
+            (f"-{ARCHIVE_AFTER_DAYS} days",),
+        )
+        archive_count = (await cursor.fetchone())[0]
+
+        # 2. Move old jobs to archive (INSERT OR IGNORE to skip dupes)
+        if archive_count > 0:
+            await db.execute(
+                """INSERT OR IGNORE INTO jobs_archive
+                   (id, hash, title, company_name, company_domain, location,
+                    is_remote, work_type, description, salary_min, salary_max,
+                    source, source_url, direct_apply_url, posted_at, first_seen_at,
+                    relevance_score, trust_score, is_direct_apply, status, search_profile_id)
+                   SELECT id, hash, title, company_name, company_domain, location,
+                          is_remote, work_type, description, salary_min, salary_max,
+                          source, source_url, direct_apply_url, posted_at, first_seen_at,
+                          relevance_score, trust_score, is_direct_apply, status, search_profile_id
+                   FROM jobs WHERE first_seen_at < datetime('now', ?)""",
+                (f"-{ARCHIVE_AFTER_DAYS} days",),
+            )
+            # 3. Delete them from active table
+            await db.execute(
+                "DELETE FROM jobs WHERE first_seen_at < datetime('now', ?)",
+                (f"-{ARCHIVE_AFTER_DAYS} days",),
+            )
+
+        # 4. Purge ancient archives
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM jobs_archive WHERE archived_at < datetime('now', ?)",
+            (f"-{PURGE_AFTER_DAYS} days",),
+        )
+        purge_count = (await cursor.fetchone())[0]
+
+        if purge_count > 0:
+            await db.execute(
+                "DELETE FROM jobs_archive WHERE archived_at < datetime('now', ?)",
+                (f"-{PURGE_AFTER_DAYS} days",),
+            )
+
+        await db.commit()
+
+        # 5. Get current table sizes
+        active = (await (await db.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
+        archived = (await (await db.execute("SELECT COUNT(*) FROM jobs_archive")).fetchone())[0]
+
+        return {
+            "archived": archive_count,
+            "purged": purge_count,
+            "active_jobs": active,
+            "archived_jobs": archived,
+        }
+    finally:
+        await db.close()
+
+
+async def get_retention_stats() -> dict:
+    """Get current data retention stats."""
+    db = await get_db()
+    try:
+        active = (await (await db.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
+
+        # Archive table may not exist yet
+        try:
+            archived = (await (await db.execute("SELECT COUNT(*) FROM jobs_archive")).fetchone())[0]
+        except Exception:
+            archived = 0
+
+        oldest = await (await db.execute("SELECT MIN(first_seen_at) FROM jobs")).fetchone()
+        newest = await (await db.execute("SELECT MAX(first_seen_at) FROM jobs")).fetchone()
+
+        return {
+            "active_jobs": active,
+            "archived_jobs": archived,
+            "oldest_active": oldest[0] if oldest else None,
+            "newest_active": newest[0] if newest else None,
+            "archive_after_days": ARCHIVE_AFTER_DAYS,
+            "purge_after_days": PURGE_AFTER_DAYS,
+        }
+    finally:
+        await db.close()
