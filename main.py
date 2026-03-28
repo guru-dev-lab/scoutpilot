@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ScoutPilot", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ──────────────────────────────────────────────
@@ -200,6 +201,7 @@ LOGIN_PAGE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ScoutPilot — Login</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <style>
   :root { --bg: #0f1117; --surface: #1a1d2e; --border: #2a2d3e; --text: #e2e8f0; --muted: #94a3b8; --accent: #818cf8; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -473,6 +475,7 @@ async def api_status():
         "has_serpapi_key": bool(settings.serpapi_key),
         "has_rapidapi_key": bool(settings.rapidapi_key),
         "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
+        "has_password": bool(settings.site_password),
     }
 
 
