@@ -797,13 +797,15 @@ function renderJobs(jobs, searchInfo) {
     else if (job.salary_max > 0 && job.salary_max <= 1000) badges += '<span class="badge salary">$' + job.salary_min + '-$' + job.salary_max + '/hr</span>';
 
     // 5. Relevance & Trust
-    if (job.relevance_score >= 80) badges += '<span class="badge relevance-high">Rel: ' + job.relevance_score + '</span>';
-    else if (job.relevance_score >= 50) badges += '<span class="badge relevance-mid">Rel: ' + job.relevance_score + '</span>';
-    else if (job.relevance_score > 0) badges += '<span class="badge relevance-low">Rel: ' + job.relevance_score + '</span>';
+    var rel = Math.round(job.relevance_score);
+    if (rel >= 80) badges += '<span class="badge relevance-high">Rel: ' + rel + '</span>';
+    else if (rel >= 50) badges += '<span class="badge relevance-mid">Rel: ' + rel + '</span>';
+    else if (rel > 0) badges += '<span class="badge relevance-low">Rel: ' + rel + '</span>';
 
-    if (job.trust_score >= 70) badges += '<span class="badge trust-high">Trust: ' + job.trust_score + '</span>';
-    else if (job.trust_score >= 40) badges += '<span class="badge trust-mid">Trust: ' + job.trust_score + '</span>';
-    else if (job.trust_score > 0) badges += '<span class="badge trust-low">Trust: ' + job.trust_score + '</span>';
+    var trust = Math.round(job.trust_score);
+    if (trust >= 70) badges += '<span class="badge trust-high">Trust: ' + trust + '</span>';
+    else if (trust >= 40) badges += '<span class="badge trust-mid">Trust: ' + trust + '</span>';
+    else if (trust > 0) badges += '<span class="badge trust-low">Trust: ' + trust + '</span>';
 
     const skills = extractSkills(job.title, job.description);
     const skillHtml = renderSkillTags(skills);
