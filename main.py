@@ -6,14 +6,14 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.6.2"
+BUILD_VERSION = "0.6.3"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD, share different codes with different people"},
     {"version": "0.6.2", "date": "2026-03-28", "status": "active", "change": "Day-based Posted filter — Today, Yesterday, Last 3/7/30 Days instead of hourly increments"},
     {"version": "0.6.1", "date": "2026-03-28", "status": "active", "change": "Quality filter — block AI job sites, no LinkedIn EasyApply, reject homepage-only direct links"},
     {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, location filter, CSV export, mobile-friendly layout"},
     {"version": "0.5.1", "date": "2026-03-28", "status": "active", "change": "Clean timestamps — only show 'Posted' date, removed confusing 'Found' labels"},
-    {"version": "0.5.0", "date": "2026-03-28", "status": "active", "change": "Password protection — lock screen gate, session cookies, /login & /logout"},
 ]  # Keep only last 5 entries
 import asyncio
 import logging
@@ -163,6 +163,9 @@ _AUTH_TOKEN = secrets.token_hex(32)
 # Valid session tokens (in-memory, survives for the life of this process)
 _valid_sessions: set[str] = set()
 
+# Parse comma-separated passwords (supports multiple users)
+_passwords: set[str] = {p.strip() for p in settings.site_password.split(",") if p.strip()}
+
 
 def _make_session_id() -> str:
     """Create a new random session ID."""
@@ -176,7 +179,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
-        if not settings.site_password:
+        if not _passwords:
             return await call_next(request)
 
         path = request.url.path
@@ -261,17 +264,17 @@ LOGIN_PAGE_HTML = """<!DOCTYPE html>
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
-    if not settings.site_password:
+    if not _passwords:
         return RedirectResponse("/", status_code=302)
     return HTMLResponse(LOGIN_PAGE_HTML.replace("{error}", ""))
 
 
 @app.post("/login")
 async def login_submit(password: str = Form(...)):
-    if not settings.site_password:
+    if not _passwords:
         return RedirectResponse("/", status_code=302)
 
-    if password == settings.site_password:
+    if password in _passwords:
         session_id = _make_session_id()
         _valid_sessions.add(session_id)
         response = RedirectResponse("/", status_code=302)
@@ -550,7 +553,7 @@ async def api_status():
         "has_serpapi_key": bool(settings.serpapi_key),
         "has_rapidapi_key": bool(settings.rapidapi_key),
         "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
-        "has_password": bool(settings.site_password),
+        "has_password": bool(_passwords),
     }
 
 
