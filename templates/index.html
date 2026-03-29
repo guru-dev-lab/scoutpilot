@@ -73,7 +73,7 @@
   .skill-picker .skill-tag-sel .skill-tag-x:hover { color: var(--red); }
   .skill-picker input { border: none; background: transparent; color: var(--text); font-size: 0.8rem; outline: none; flex: 1; min-width: 60px; padding: 2px 0; }
   .skill-picker input::placeholder { color: var(--text3); }
-  .skill-dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 200; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .skill-dropdown { display: none; position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; max-height: 260px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
   .skill-dropdown.open { display: block; }
   .skill-dropdown .skill-option { padding: 6px 10px; font-size: 0.8rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
   .skill-dropdown .skill-option:hover { background: rgba(99,102,241,0.15); }
@@ -1319,7 +1319,14 @@ function _renderSkillDropdown(filter) {
   var dd = document.getElementById('skillDropdown');
   var picker = document.getElementById('skillPicker');
 
-  input.addEventListener('focus', function() { dd.classList.add('open'); _renderSkillDropdown(input.value); });
+  function positionDropdown() {
+    var rect = picker.getBoundingClientRect();
+    dd.style.top = rect.bottom + 'px';
+    dd.style.left = rect.left + 'px';
+    dd.style.width = Math.max(rect.width, 200) + 'px';
+  }
+
+  input.addEventListener('focus', function() { positionDropdown(); dd.classList.add('open'); _renderSkillDropdown(input.value); });
   input.addEventListener('blur', function() { setTimeout(function() { dd.classList.remove('open'); }, 150); });
   input.addEventListener('input', function() { _renderSkillDropdown(input.value); });
   input.addEventListener('keydown', function(e) {
