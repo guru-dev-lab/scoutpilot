@@ -197,6 +197,8 @@ async def insert_job(job_data: dict) -> bool:
                     return False
 
         now = datetime.now(timezone.utc).isoformat()
+        # If no posted_at from source, fall back to now (scrape time)
+        posted_at = job_data.get("posted_at", "") or now
         skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
         await db.execute(
             """INSERT INTO jobs (hash, title, company_name, company_domain, location,
@@ -218,7 +220,7 @@ async def insert_job(job_data: dict) -> bool:
                 job_data.get("source", ""),
                 job_data.get("source_url", ""),
                 job_data.get("direct_apply_url", ""),
-                job_data.get("posted_at", ""),
+                posted_at,
                 now,
                 job_data.get("relevance_score", 50),
                 job_data.get("trust_score", 50),
@@ -339,10 +341,17 @@ async def get_jobs(
             sort_by = "first_seen_at"
         sort_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
 
+        # For posted_at sort, use COALESCE to fall back to first_seen_at
+        # so jobs without a posted date don't float to the top
+        if sort_by == "posted_at":
+            order_expr = f"COALESCE(NULLIF(posted_at, ''), first_seen_at) {sort_dir}"
+        else:
+            order_expr = f"{sort_by} {sort_dir}"
+
         query = f"""
             SELECT * FROM jobs
             WHERE {where}
-            ORDER BY {sort_by} {sort_dir}
+            ORDER BY {order_expr}
             LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
