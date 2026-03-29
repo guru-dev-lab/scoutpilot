@@ -39,9 +39,9 @@
   .changelog-text { color: var(--muted); }
 
   /* Stats + Search row */
-  .stats-search-row { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; }
+  .stats-search-row { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 12px; background: rgba(17,24,39,0.6); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; }
   .stats { display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0; }
-  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; }
+  .stat { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; }
   .stat .num { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
   .stat .label { font-size: 0.7rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
 
@@ -58,15 +58,15 @@
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* Filter bar */
-  .filters { display: flex; gap: 10px; margin-bottom: 16px; align-items: flex-end; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
-  .filter-group { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+  .filters { display: flex; gap: 10px; margin-bottom: 12px; align-items: flex-end; flex-wrap: nowrap; overflow-x: auto; padding: 12px 18px; background: rgba(30,41,59,0.45); border: 1px solid var(--border); border-radius: 10px; }
+  .filter-group { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
   .filter-group label { font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-  .filters select { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.82rem; white-space: nowrap; cursor: pointer; }
+  .filters select { padding: 7px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.82rem; white-space: nowrap; cursor: pointer; width: 100%; }
   .filters select:focus { outline: none; border-color: var(--primary); }
   .filters select:hover { border-color: var(--text3); }
 
   /* Skill multi-tag picker */
-  .skill-picker-group { min-width: 200px; max-width: 320px; flex-shrink: 1 !important; }
+  .skill-picker-group { min-width: 160px; max-width: 320px; flex: 1.5 !important; }
   .skill-picker { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 6px; min-height: 34px; cursor: text; }
   .skill-picker:focus-within { border-color: var(--primary); }
   .skill-picker .skill-tag-sel { display: inline-flex; align-items: center; gap: 3px; background: rgba(99,102,241,0.2); color: #a5b4fc; border-radius: 4px; padding: 2px 6px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
