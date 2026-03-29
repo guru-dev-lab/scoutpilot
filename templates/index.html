@@ -63,6 +63,24 @@
   .filters select { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.82rem; white-space: nowrap; cursor: pointer; }
   .filters select:focus { outline: none; border-color: var(--primary); }
   .filters select:hover { border-color: var(--text3); }
+
+  /* Skill multi-tag picker */
+  .skill-picker-group { min-width: 200px; max-width: 320px; flex-shrink: 1 !important; }
+  .skill-picker { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 6px; min-height: 34px; cursor: text; }
+  .skill-picker:focus-within { border-color: var(--primary); }
+  .skill-picker .skill-tag-sel { display: inline-flex; align-items: center; gap: 3px; background: rgba(99,102,241,0.2); color: #a5b4fc; border-radius: 4px; padding: 2px 6px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+  .skill-picker .skill-tag-sel .skill-tag-x { cursor: pointer; color: #818cf8; font-size: 0.85rem; line-height: 1; margin-left: 2px; }
+  .skill-picker .skill-tag-sel .skill-tag-x:hover { color: var(--red); }
+  .skill-picker input { border: none; background: transparent; color: var(--text); font-size: 0.8rem; outline: none; flex: 1; min-width: 60px; padding: 2px 0; }
+  .skill-picker input::placeholder { color: var(--text3); }
+  .skill-dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 200; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .skill-dropdown.open { display: block; }
+  .skill-dropdown .skill-option { padding: 6px 10px; font-size: 0.8rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .skill-dropdown .skill-option:hover { background: rgba(99,102,241,0.15); }
+  .skill-dropdown .skill-option .skill-count { color: var(--text3); font-size: 0.7rem; }
+  .skill-dropdown .skill-option.selected { background: rgba(99,102,241,0.1); color: #818cf8; }
+  .skill-dropdown .no-results { padding: 8px 10px; color: var(--text3); font-size: 0.78rem; font-style: italic; }
+
   .search-box { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 180px; flex-shrink: 0; }
   .search-box label { font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
   .search-row { display: flex; align-items: center; }
@@ -233,6 +251,7 @@
     .filters { flex-wrap: wrap; gap: 6px; }
     .filter-group { flex: 1; min-width: 100px; }
     .filter-group select { font-size: 0.78rem; padding: 6px 8px; }
+    .skill-picker-group { min-width: 150px; max-width: 100%; }
     .search-box { min-width: 100%; order: -1; }
     .job-card { grid-template-columns: 1fr; padding: 10px 12px; }
     .job-title { font-size: 0.85rem; white-space: normal; }
@@ -361,11 +380,13 @@
         <option value="85">85 and Above</option>
       </select>
     </div>
-    <div class="filter-group">
-      <label>Skill</label>
-      <select id="filterSkill" onchange="loadJobs()">
-        <option value="">Any Skill</option>
-      </select>
+    <div class="filter-group skill-picker-group">
+      <label>Skills</label>
+      <div class="skill-picker" id="skillPicker">
+        <div class="skill-tags" id="skillTags"></div>
+        <input type="text" id="skillSearch" placeholder="Search skills..." autocomplete="off">
+        <div class="skill-dropdown" id="skillDropdown"></div>
+      </div>
     </div>
     <div class="filter-group">
       <label>Sort By</label>
@@ -772,7 +793,7 @@ async function loadJobs() {
   const sortEl = document.getElementById('filterSort');
   const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
-  const skill = document.getElementById('filterSkill').value;
+  const skill = _selectedSkills.join(',');
   // When searching, auto-switch to "Most Relevant" so best matches show first
   const effectiveSort = search ? 'relevance_score:DESC' : sortVal;
   const [sort_by, sort_dir] = effectiveSort.split(':');
@@ -1221,7 +1242,7 @@ function exportCSV() {
   const status = document.getElementById('filterStatus').value;
   const workType = document.getElementById('filterWorkType').value;
   const source = document.getElementById('filterSource').value;
-  const skill = document.getElementById('filterSkill').value;
+  const skill = _selectedSkills.join(',');
   const directOnly = document.getElementById('filterDirect').value;
   const params = new URLSearchParams({ hours, search, status, work_type: workType, source, skill, direct_only: directOnly });
   window.open(API + '/api/export/csv?' + params.toString(), '_blank');
@@ -1229,22 +1250,90 @@ function exportCSV() {
 
 // ── Init ──
 loadProfiles();
+// ── Multi-select skill picker ──
+var _allSkills = [];        // [{skill, count}, ...]
+var _selectedSkills = [];   // ["Python", "AWS", ...]
+
 async function loadSkills() {
   try {
     const resp = await fetch(API + '/api/skills');
-    const data = await resp.json();
-    const sel = document.getElementById('filterSkill');
-    const current = sel.value;
-    sel.innerHTML = '<option value="">Any Skill</option>';
-    data.forEach(function(s) {
-      var opt = document.createElement('option');
-      opt.value = s.skill;
-      opt.textContent = s.skill + ' (' + s.count + ')';
-      sel.appendChild(opt);
-    });
-    sel.value = current; // restore selection
+    _allSkills = await resp.json();
+    _renderSkillDropdown();
   } catch(e) { console.error('Failed to load skills:', e); }
 }
+
+function _renderSkillTags() {
+  var container = document.getElementById('skillTags');
+  container.innerHTML = '';
+  _selectedSkills.forEach(function(sk) {
+    var tag = document.createElement('span');
+    tag.className = 'skill-tag-sel';
+    tag.innerHTML = sk + ' <span class="skill-tag-x" data-skill="' + sk + '">&times;</span>';
+    container.appendChild(tag);
+  });
+  // click handler on X buttons
+  container.querySelectorAll('.skill-tag-x').forEach(function(x) {
+    x.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var sk = this.getAttribute('data-skill');
+      _selectedSkills = _selectedSkills.filter(function(s) { return s !== sk; });
+      _renderSkillTags();
+      _renderSkillDropdown();
+      loadJobs();
+    });
+  });
+}
+
+function _renderSkillDropdown(filter) {
+  var dd = document.getElementById('skillDropdown');
+  var q = (filter || '').toLowerCase();
+  var filtered = _allSkills.filter(function(s) {
+    if (_selectedSkills.indexOf(s.skill) !== -1) return false;
+    if (q && s.skill.toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+  if (filtered.length === 0 && q) {
+    dd.innerHTML = '<div class="no-results">No matching skills</div>';
+    return;
+  }
+  dd.innerHTML = '';
+  filtered.slice(0, 30).forEach(function(s) {
+    var opt = document.createElement('div');
+    opt.className = 'skill-option';
+    opt.setAttribute('data-skill', s.skill);
+    opt.innerHTML = '<span>' + s.skill + '</span><span class="skill-count">' + s.count + '</span>';
+    opt.addEventListener('mousedown', function(e) {
+      e.preventDefault(); // prevent input blur
+      _selectedSkills.push(s.skill);
+      document.getElementById('skillSearch').value = '';
+      _renderSkillTags();
+      _renderSkillDropdown();
+      loadJobs();
+    });
+    dd.appendChild(opt);
+  });
+}
+
+(function() {
+  var input = document.getElementById('skillSearch');
+  var dd = document.getElementById('skillDropdown');
+  var picker = document.getElementById('skillPicker');
+
+  input.addEventListener('focus', function() { dd.classList.add('open'); _renderSkillDropdown(input.value); });
+  input.addEventListener('blur', function() { setTimeout(function() { dd.classList.remove('open'); }, 150); });
+  input.addEventListener('input', function() { _renderSkillDropdown(input.value); });
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Backspace' && !input.value && _selectedSkills.length) {
+      _selectedSkills.pop();
+      _renderSkillTags();
+      _renderSkillDropdown();
+      loadJobs();
+    }
+    if (e.key === 'Escape') { input.blur(); }
+  });
+  picker.addEventListener('click', function() { input.focus(); });
+})();
+
 loadSkills();
 loadJobs();
 checkStatus();

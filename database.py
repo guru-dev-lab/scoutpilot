@@ -307,9 +307,12 @@ async def get_jobs(
                 params.append(f"%{lw}%")
 
         if skill:
-            # Filter by skill tag (exact match within comma-separated list)
-            conditions.append("(',' || skills || ',') LIKE ?")
-            params.append(f"%,{skill},%")
+            # Filter by skill tags (AND logic — job must have ALL selected skills)
+            for sk in skill.split(","):
+                sk = sk.strip()
+                if sk:
+                    conditions.append("(',' || skills || ',') LIKE ?")
+                    params.append(f"%,{sk},%")
 
         if search:
             # Search title and company only — description matching is too noisy
