@@ -182,7 +182,10 @@
 
   /* ── Hot card: posted within last hour ── */
   .job-card.hot-card { border: 1.5px solid transparent; background-origin: border-box; background-clip: padding-box, border-box; background-image: linear-gradient(var(--surface), var(--surface)), linear-gradient(135deg, #f59e0b, #ef4444, #f59e0b); animation: hotGlow 3s ease-in-out infinite; position: relative; }
-  .job-card.hot-card::before { content: '\uD83D\uDD25 JUST IN'; position: absolute; top: -9px; right: 14px; background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; font-size: 0.6rem; font-weight: 800; letter-spacing: 0.06em; padding: 2px 10px; border-radius: 4px; box-shadow: 0 2px 8px rgba(239,68,68,0.4); animation: hotBadgePulse 2s ease-in-out infinite; }
+  .hot-badge { position: absolute; top: -9px; right: 14px; color: #fff; font-size: 0.6rem; font-weight: 800; letter-spacing: 0.06em; padding: 2px 10px; border-radius: 4px; box-shadow: 0 2px 8px rgba(239,68,68,0.4); animation: hotBadgePulse 2s ease-in-out infinite; white-space: nowrap; z-index: 2; }
+  .hot-badge.level-fire { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  .hot-badge.level-hot { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+  .hot-badge.level-warm { background: linear-gradient(135deg, #f59e0b, #d97706); }
   @keyframes hotGlow { 0%, 100% { box-shadow: 0 0 6px rgba(245,158,11,0.15); } 50% { box-shadow: 0 0 16px rgba(245,158,11,0.35), 0 0 30px rgba(239,68,68,0.15); } }
   @keyframes hotBadgePulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.05); opacity: 0.9; } }
   .badge.salary { background: #1e293b; color: #38bdf8; }
@@ -1015,7 +1018,22 @@ function renderJobs(jobs, searchInfo) {
     // Row 3: badges + skill tags
     // Actions column on right spanning all 3 rows
     const isHot = (pMs !== null && pMs < 3600000);
+    // Hot badge with dynamic label based on recency
+    var hotBadge = '';
+    if (isHot && pMs !== null) {
+      var mins = Math.floor(pMs / 60000);
+      if (mins < 5) {
+        hotBadge = '<span class="hot-badge level-fire">\uD83D\uDD25 JUST DROPPED</span>';
+      } else if (mins < 15) {
+        hotBadge = '<span class="hot-badge level-fire">\uD83D\uDD25 ' + mins + 'min ago \u2014 ACT FAST</span>';
+      } else if (mins < 30) {
+        hotBadge = '<span class="hot-badge level-hot">\uD83D\uDD25 HOT \u2014 ' + mins + 'm ago</span>';
+      } else {
+        hotBadge = '<span class="hot-badge level-warm">\u26A1 JUST IN \u2014 ' + mins + 'm ago</span>';
+      }
+    }
     html += '<div class="job-card ' + cls + (isHot ? ' hot-card' : '') + '" id="job-' + job.id + '">'
+      + hotBadge
       + '<div class="job-title"><a href="' + applyUrl + '" target="_blank" rel="noopener" onclick="markViewed(' + job.id + ')">' + esc(job.title) + '</a></div>'
       + '<div class="job-meta">'
       + '<span class="company">' + esc(job.company_name || 'Unknown') + '</span>'

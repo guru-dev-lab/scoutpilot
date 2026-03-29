@@ -91,34 +91,63 @@ async def scheduled_scrape():
                 )
                 await update_job_scores(job["id"], relevance, trust)
 
-        # AI direct link detection — find actual company career page URLs
+        # AI enhancements for new jobs
         if settings.anthropic_api_key:
+            from ai_engine import extract_skills_ai
+
+            # AI direct link detection — find actual company career page URLs
             direct_found = 0
+            skills_found = 0
             for job in new_jobs:
-                if job.get("direct_apply_url") or not job.get("description"):
-                    continue
-                try:
-                    direct_url = await extract_direct_link_ai(
-                        job["description"],
-                        job.get("company_name", ""),
-                        job.get("company_domain", ""),
-                        job.get("source_url", ""),
-                    )
-                    if direct_url:
-                        db = await _get_db()
-                        try:
-                            await db.execute(
-                                "UPDATE jobs SET direct_apply_url = ?, is_direct_apply = 1 WHERE id = ?",
-                                (direct_url, job["id"]),
-                            )
-                            await db.commit()
-                            direct_found += 1
-                        finally:
-                            await db.close()
-                except Exception as e:
-                    logger.debug(f"[AI Direct Link] Error for job {job['id']}: {e}")
+                # Direct link detection
+                if not job.get("direct_apply_url") and job.get("description"):
+                    try:
+                        direct_url = await extract_direct_link_ai(
+                            job["description"],
+                            job.get("company_name", ""),
+                            job.get("company_domain", ""),
+                            job.get("source_url", ""),
+                        )
+                        if direct_url:
+                            db = await _get_db()
+                            try:
+                                await db.execute(
+                                    "UPDATE jobs SET direct_apply_url = ?, is_direct_apply = 1 WHERE id = ?",
+                                    (direct_url, job["id"]),
+                                )
+                                await db.commit()
+                                direct_found += 1
+                            finally:
+                                await db.close()
+                    except Exception as e:
+                        logger.debug(f"[AI Direct Link] Error for job {job['id']}: {e}")
+
+                # AI skill extraction — for jobs where regex found nothing
+                job_skills = job.get("skills", "")
+                if (not job_skills or job_skills == "_none") and job.get("description"):
+                    try:
+                        ai_skills = await extract_skills_ai(
+                            job.get("title", ""),
+                            job.get("description", ""),
+                        )
+                        if ai_skills:
+                            db = await _get_db()
+                            try:
+                                await db.execute(
+                                    "UPDATE jobs SET skills = ? WHERE id = ?",
+                                    (ai_skills, job["id"]),
+                                )
+                                await db.commit()
+                                skills_found += 1
+                            finally:
+                                await db.close()
+                    except Exception as e:
+                        logger.debug(f"[AI Skills] Error for job {job['id']}: {e}")
+
             if direct_found:
                 logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(new_jobs)} new jobs")
+            if skills_found:
+                logger.info(f"[AI Skills] Tagged {skills_found} jobs that regex missed")
 
         last_scrape_result = {
             "status": "ok",

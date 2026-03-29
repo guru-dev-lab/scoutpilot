@@ -386,6 +386,85 @@ Rules:
     return ""
 
 
+# ──────────────────────────────────────────────
+# AI-Powered Skill Extraction
+# ──────────────────────────────────────────────
+
+# Known skills from our SKILL_DB (keep in sync with skills.py)
+_KNOWN_SKILLS = {
+    "Python", "JavaScript", "TypeScript", "Java", "C#", "C++", "Go", "Rust", "Ruby", "PHP",
+    "Swift", "Kotlin", "Scala", "R", "SQL", "Power BI", "Tableau", "Excel", "Snowflake",
+    "BigQuery", "Databricks", "Spark", "Hadoop", "Kafka", "Airflow", "dbt", "Looker",
+    "Redshift", "PostgreSQL", "MongoDB", "Redis", "Elasticsearch", "MySQL", "Oracle DB", "ETL",
+    "AWS", "Azure", "GCP", "Salesforce", "Docker", "Kubernetes", "Terraform", "Jenkins",
+    "GitHub Actions", "React", "Angular", "Vue.js", "Node.js", "Django", "Flask", "Spring",
+    "FastAPI", "GraphQL", "REST API", "TensorFlow", "PyTorch", "Scikit-learn", "Pandas",
+    "NumPy", "OpenAI", "LangChain", "RAG", "Machine Learning", "Deep Learning", "NLP",
+    "Computer Vision", "LLM", "GenAI", "Prompt Engineering", "Data Warehouse", "Data Lake",
+    "Data Pipeline", "CI/CD", "Agile", "Scrum", "JIRA", "Confluence", "Git", "Linux",
+    "Figma", "Sketch", "Adobe XD", "Photoshop", "Illustrator", "Sass", "Tailwind",
+    "Next.js", "Express.js", "Spring Boot", "Microservices", "CCPA", "GDPR", "SOX",
+    "HIPAA", "PCI", "ServiceNow", "SAP", "Workday", "Amplitude", "Mixpanel", "Segment",
+}
+
+
+async def extract_skills_ai(title: str, description: str) -> str:
+    """Use Claude to extract skills/technologies from a job posting.
+    Returns comma-separated skill names matching our known skill set.
+    Only called when regex extraction found nothing."""
+    if not settings.anthropic_api_key:
+        return ""
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": f"""Extract technical skills and tools mentioned in this job posting.
+
+Title: {title}
+Description (first 2000 chars): {description[:2000]}
+
+Return ONLY a JSON array of skill/tool names. Pick from these known skills when possible:
+Python, JavaScript, TypeScript, Java, SQL, Power BI, Tableau, Excel, AWS, Azure, GCP,
+Docker, Kubernetes, React, Node.js, TensorFlow, PyTorch, Machine Learning, Data Warehouse,
+ETL, Airflow, Spark, Kafka, Agile, Scrum, JIRA, Git, CI/CD, REST API, GraphQL,
+Salesforce, SAP, ServiceNow, Figma, LLM, GenAI, Prompt Engineering, etc.
+
+If you find skills not in this list but clearly technical, include them too.
+Return [] if no technical skills are mentioned. No explanation.""",
+            }],
+        )
+        text = response.content[0].text.strip()
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            skills = json.loads(match.group())
+            # Filter to our known skill set and clean up
+            valid = []
+            for s in skills:
+                s = s.strip()
+                if s in _KNOWN_SKILLS:
+                    valid.append(s)
+                else:
+                    # Fuzzy match against known skills
+                    for known in _KNOWN_SKILLS:
+                        if s.lower() == known.lower():
+                            valid.append(known)
+                            break
+            if valid:
+                result = ",".join(list(dict.fromkeys(valid)))  # dedup preserving order
+                logger.info(f"[AI Skills] Found {len(valid)} skills for '{title}': {result}")
+                return result
+    except Exception as e:
+        logger.error(f"[AI Skills] Failed: {e}")
+
+    return ""
+
+
 async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     """Score a batch of jobs for relevance and trust."""
     target_title = profile["title"]
