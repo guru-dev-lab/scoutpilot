@@ -45,7 +45,7 @@ from database import (
     update_profile, delete_profile, insert_job,
     init_archive_table, cleanup_old_jobs, get_retention_stats,
 )
-from scraper import run_scrape_cycle
+from scraper import run_scrape_cycle, scrape_jobspy
 from ai_engine import expand_title_ai, score_relevance_ai, score_trust_ai
 
 # Logging
@@ -109,6 +109,71 @@ async def scheduled_scrape():
         }
 
 
+async def scheduled_deep_sweep():
+    """Deep sweep — looks back 7 days to catch jobs missed by regular scrapes.
+    Runs every 6 hours. Uses more results per query and wider time window."""
+    global last_scrape_result
+    try:
+        profiles = await get_profiles()
+        if not profiles:
+            return
+
+        logger.info(f"[Deep Sweep] Starting 7-day lookback for {len(profiles)} profiles...")
+        total_new = 0
+        for profile in profiles:
+            title = profile["title"]
+            expanded = profile.get("expanded_titles", [])
+            locations = profile.get("locations", [])
+            profile_id = profile["id"]
+
+            search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
+
+            for term in search_terms[:3]:  # fewer variants but deeper lookback
+                for loc in (locations if locations else [""]):
+                    try:
+                        new_jobs = await scrape_jobspy(
+                            search_term=term,
+                            location=loc,
+                            results_wanted=50,
+                            hours_old=168,  # 7 days
+                            profile_id=profile_id,
+                        )
+                        total_new += len(new_jobs)
+                    except Exception as e:
+                        logger.error(f"[Deep Sweep] Error: {e}")
+
+        # Score any new finds
+        if total_new > 0:
+            from database import get_jobs as _get_jobs
+            new_jobs = await _get_jobs(hours=1, status="new", limit=200)
+            for job in new_jobs:
+                for profile in profiles:
+                    relevance = await score_relevance_ai(
+                        job["title"], job.get("description", ""),
+                        profile["title"], profile.get("expanded_titles", []),
+                        profile.get("keywords", []), profile.get("excluded_keywords", []),
+                    )
+                    trust = await score_trust_ai(
+                        job["title"], job.get("company_name", ""),
+                        job.get("description", ""), job.get("salary_min", 0),
+                        job.get("salary_max", 0), job.get("company_domain", ""),
+                        job.get("source", ""),
+                    )
+                    await update_job_scores(job["id"], relevance, trust)
+
+        logger.info(f"[Deep Sweep] Complete — {total_new} new jobs discovered")
+        if total_new > 0:
+            last_scrape_result = {
+                "status": "ok",
+                "new_jobs": total_new,
+                "errors": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "sweep": True,
+            }
+    except Exception as e:
+        logger.error(f"[Deep Sweep] Failed: {e}")
+
+
 async def scheduled_cleanup():
     """Daily cleanup: archive old jobs and purge ancient archives."""
     try:
@@ -136,6 +201,13 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.add_job(
+        scheduled_deep_sweep,
+        "interval",
+        hours=6,
+        id="deep_sweep",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         scheduled_cleanup,
         "cron",
         hour=3, minute=0,
@@ -143,7 +215,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, cleanup daily at 3 AM)")
+    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, deep sweep every 6h, cleanup daily at 3 AM)")
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
