@@ -371,15 +371,6 @@
         <option value="1">Direct Apply Only</option>
       </select>
     </div>
-    <div class="filter-group">
-      <label>Relevance</label>
-      <select id="filterRelevance" onchange="loadJobs()">
-        <option value="0">All Scores</option>
-        <option value="50">50 and Above</option>
-        <option value="70">70 and Above</option>
-        <option value="85">85 and Above</option>
-      </select>
-    </div>
     <div class="filter-group skill-picker-group">
       <label>Skills</label>
       <div class="skill-picker" id="skillPicker">
@@ -785,7 +776,7 @@ loadBuildInfo();
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
   const postedHours = document.getElementById('filterPostedHours').value;
-  const relevance = document.getElementById('filterRelevance').value;
+  const relevance = 0;
   const source = document.getElementById('filterSource').value;
   const workType = document.getElementById('filterWorkType').value;
   const status = document.getElementById('filterStatus').value;

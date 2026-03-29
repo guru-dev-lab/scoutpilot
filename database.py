@@ -307,12 +307,14 @@ async def get_jobs(
                 params.append(f"%{lw}%")
 
         if skill:
-            # Filter by skill tags (AND logic — job must have ALL selected skills)
-            for sk in skill.split(","):
-                sk = sk.strip()
-                if sk:
-                    conditions.append("(',' || skills || ',') LIKE ?")
+            # Filter by skill tags (OR logic — job must have ANY selected skill)
+            skill_parts = [sk.strip() for sk in skill.split(",") if sk.strip()]
+            if skill_parts:
+                or_clauses = []
+                for sk in skill_parts:
+                    or_clauses.append("(',' || skills || ',') LIKE ?")
                     params.append(f"%,{sk},%")
+                conditions.append("(" + " OR ".join(or_clauses) + ")")
 
         if search:
             # Search title and company only — description matching is too noisy
