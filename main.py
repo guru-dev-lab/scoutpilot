@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.8.0"
+BUILD_VERSION = "0.8.1"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
+    {"version": "0.8.1", "date": "2026-03-28", "status": "active", "change": "Hotfix — infinite backfill loop on startup causing 502 crashes"},
     {"version": "0.8.0", "date": "2026-03-28", "status": "active", "change": "Major upgrade — full LinkedIn descriptions, Remotive + The Muse sources, 200+ skill patterns, server-side skill filter"},
     {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description, filter by skill"},
     {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD"},
@@ -413,7 +414,7 @@ async def api_top_skills():
         for row in rows:
             for skill in row[0].split(","):
                 s = skill.strip()
-                if s:
+                if s and s != "_none":
                     counts[s] = counts.get(s, 0) + 1
         # Sort by frequency descending
         top = sorted(counts.items(), key=lambda x: -x[1])

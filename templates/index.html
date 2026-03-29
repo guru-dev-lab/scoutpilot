@@ -912,8 +912,8 @@ function renderJobs(jobs, searchInfo) {
 
     // Use server-side extracted skills (stored in DB), fallback to client-side for old jobs
     var skills;
-    if (job.skills && job.skills.trim()) {
-      skills = job.skills.split(',').map(function(s) {
+    if (job.skills && job.skills.trim() && job.skills.trim() !== '_none') {
+      skills = job.skills.split(',').filter(function(s) { return s.trim() && s.trim() !== '_none'; }).map(function(s) {
         s = s.trim();
         for (var i = 0; i < SKILL_DB.length; i++) {
           if (SKILL_DB[i].k === s) return SKILL_DB[i];

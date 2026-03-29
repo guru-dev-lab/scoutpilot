@@ -109,26 +109,22 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN skills TEXT DEFAULT ''")
             await db.commit()
 
-        # Backfill: extract skills for ALL jobs missing skills (batched)
-        backfill_total = 0
-        while True:
-            cursor = await db.execute(
-                "SELECT id, title, description FROM jobs WHERE (skills IS NULL OR skills = '') LIMIT 1000"
-            )
-            rows = await cursor.fetchall()
-            if not rows:
-                break
+        # Backfill: extract skills for ALL jobs missing skills (one pass)
+        cursor = await db.execute(
+            "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
+        )
+        backfill_rows = await cursor.fetchall()
+        if backfill_rows:
             tagged = 0
-            for row in rows:
+            for row in backfill_rows:
                 skills = extract_skills(row[1] or "", row[2] or "")
-                await db.execute("UPDATE jobs SET skills = ? WHERE id = ?", (skills, row[0]))
+                # Use "_none" sentinel so this row is never re-selected
+                await db.execute("UPDATE jobs SET skills = ? WHERE id = ?",
+                                 (skills if skills else "_none", row[0]))
                 if skills:
                     tagged += 1
             await db.commit()
-            backfill_total += len(rows)
-            logger.info(f"[Backfill] Processed {len(rows)} jobs ({tagged} had skills)...")
-        if backfill_total:
-            logger.info(f"[Backfill] Complete — processed {backfill_total} total jobs")
+            logger.info(f"[Backfill] Complete — processed {len(backfill_rows)} jobs ({tagged} had skills)")
 
     finally:
         await db.close()
@@ -201,7 +197,7 @@ async def insert_job(job_data: dict) -> bool:
                     return False
 
         now = datetime.now(timezone.utc).isoformat()
-        skills = extract_skills(job_data.get("title", ""), job_data.get("description", ""))
+        skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
         await db.execute(
             """INSERT INTO jobs (hash, title, company_name, company_domain, location,
                is_remote, work_type, description, salary_min, salary_max, source, source_url,
