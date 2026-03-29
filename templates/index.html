@@ -81,8 +81,10 @@
   .skill-dropdown .skill-option.selected { background: rgba(99,102,241,0.1); color: #818cf8; }
   .skill-dropdown .no-results { padding: 8px 10px; color: var(--text3); font-size: 0.78rem; font-style: italic; }
 
-  .search-box { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 180px; flex-shrink: 0; }
-  .search-box label { font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  /* Smart Search bar — full width above filters */
+  .smart-search-bar { margin-bottom: 12px; }
+  .smart-search-inner { display: flex; flex-direction: column; gap: 4px; }
+  .smart-search-inner label { font-size: 0.72rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
   .search-row { display: flex; align-items: center; }
   .search-row input { padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px 0 0 6px; color: var(--text); font-size: 0.82rem; flex: 1; min-width: 0; }
   .search-row input:focus { outline: none; border-color: var(--primary); }
@@ -201,6 +203,15 @@
   .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
   .expanded-preview { margin-top: 6px; font-size: 0.78rem; color: var(--primary); }
 
+  /* Profile list in modal */
+  .profile-list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+  .profile-list-item .pl-info { flex: 1; min-width: 0; }
+  .profile-list-item .pl-title { font-size: 0.88rem; font-weight: 600; color: var(--text); }
+  .profile-list-item .pl-meta { font-size: 0.72rem; color: var(--text3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .profile-list-item .pl-delete { background: none; border: 1px solid var(--border); border-radius: 5px; color: var(--text3); padding: 4px 10px; cursor: pointer; font-size: 0.75rem; flex-shrink: 0; margin-left: 10px; transition: all 0.15s; }
+  .profile-list-item .pl-delete:hover { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+  .profile-list-empty { font-size: 0.82rem; color: var(--text3); padding: 12px; text-align: center; background: var(--bg); border-radius: 8px; border: 1px dashed var(--border); }
+
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -252,7 +263,7 @@
     .filter-group { flex: 1; min-width: 100px; }
     .filter-group select { font-size: 0.78rem; padding: 6px 8px; }
     .skill-picker-group { min-width: 150px; max-width: 100%; }
-    .search-box { min-width: 100%; order: -1; }
+    .smart-search-bar { margin-bottom: 8px; }
     .job-card { grid-template-columns: 1fr; padding: 10px 12px; }
     .job-title { font-size: 0.85rem; white-space: normal; }
     .job-actions { grid-row: auto; grid-column: auto; justify-content: flex-start; margin-top: 4px; }
@@ -304,6 +315,18 @@
   </div>
 
   <div class="profiles-bar" id="profilesBar"></div>
+
+  <!-- Smart Search — prominent, above filters -->
+  <div class="smart-search-bar">
+    <div class="smart-search-inner">
+      <label>Search Jobs <span style="font-size:0.6rem;color:var(--text3);font-weight:400;">(finds related titles too)</span></label>
+      <div class="search-row">
+        <input type="text" id="filterSearch" placeholder="e.g. Data Analyst, Software Engineer..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceSearch()">
+        <button class="search-clear-btn" id="searchClear" onclick="clearSearch()" style="display:none;">&times;</button>
+        <button onclick="loadJobs()" id="searchGoBtn">Go</button>
+      </div>
+    </div>
+  </div>
 
   <div class="filters">
     <div class="filter-group">
@@ -389,14 +412,6 @@
         <option value="company_name:ASC">Company A-Z</option>
       </select>
     </div>
-    <div class="search-box">
-      <label>Smart Search <span style="font-size:0.6rem;color:var(--text3);font-weight:400;">(finds related titles too)</span></label>
-      <div class="search-row">
-        <input type="text" id="filterSearch" placeholder="e.g. Data Analyst, Software Engineer..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceSearch()">
-        <button class="search-clear-btn" id="searchClear" onclick="clearSearch()" style="display:none;">&times;</button>
-        <button onclick="loadJobs()" id="searchGoBtn">Go</button>
-      </div>
-    </div>
   </div>
 
   <div class="results-bar" id="resultsBar"></div>
@@ -463,10 +478,22 @@
   </div>
 </div>
 
-<!-- Profile Modal -->
+<!-- Profile Management Modal -->
 <div class="modal-overlay" id="profileModal">
-  <div class="modal">
-    <h2 id="modalTitle">Add Search Profile</h2>
+  <div class="modal" style="max-width:580px;">
+    <h2 style="display:flex;align-items:center;justify-content:space-between;">
+      <span>Manage Searches</span>
+      <button onclick="closeProfileModal()" style="background:none;border:none;color:var(--text3);font-size:1.4rem;cursor:pointer;line-height:1;">&times;</button>
+    </h2>
+
+    <!-- Existing Profiles List -->
+    <div id="modalProfileList" style="margin-bottom:20px;"></div>
+
+    <!-- Divider -->
+    <div style="border-top:1px solid var(--border);margin:16px 0;"></div>
+
+    <!-- Add New Section -->
+    <h3 style="font-size:0.9rem;color:var(--primary-hover);margin-bottom:12px;">+ Add New Search</h3>
     <input type="hidden" id="editProfileId">
     <div class="form-group">
       <label>Job Title *</label>
@@ -1005,7 +1032,7 @@ async function loadProfiles() {
 function openInfoModal() { document.getElementById('infoModal').classList.add('show'); }
 function closeInfoModal() { document.getElementById('infoModal').classList.remove('show'); }
 
-function openProfileModal() {
+async function openProfileModal() {
   document.getElementById('profileModal').classList.add('show');
   document.getElementById('editProfileId').value = '';
   document.getElementById('profileTitleInput').value = '';
@@ -1014,7 +1041,33 @@ function openProfileModal() {
   document.getElementById('profileExcluded').value = '';
   document.getElementById('profileRemote').checked = false;
   document.getElementById('expandedPreview').textContent = '';
-  document.getElementById('modalTitle').textContent = 'Add Search Profile';
+
+  // Populate existing profiles in modal
+  var listEl = document.getElementById('modalProfileList');
+  try {
+    var res = await fetch(API + '/api/profiles');
+    var profiles = await res.json();
+    if (!profiles.length) {
+      listEl.innerHTML = '<div class="profile-list-empty">No search profiles yet. Add your first one below!</div>';
+    } else {
+      listEl.innerHTML = '<div style="font-size:0.72rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:8px;">Current Searches (' + profiles.length + ')</div>'
+        + profiles.map(function(p) {
+          var variants = (p.expanded_titles || []).length;
+          var locs = (p.locations || []).join(', ') || 'All locations';
+          var meta = variants + ' variant' + (variants !== 1 ? 's' : '') + ' · ' + locs;
+          if (p.remote_only) meta += ' · Remote only';
+          return '<div class="profile-list-item">'
+            + '<div class="pl-info">'
+            + '<div class="pl-title">' + esc(p.title) + '</div>'
+            + '<div class="pl-meta">' + esc(meta) + '</div>'
+            + '</div>'
+            + '<button class="pl-delete" onclick="removeProfileFromModal(' + p.id + ')">Remove</button>'
+            + '</div>';
+        }).join('');
+    }
+  } catch(e) {
+    listEl.innerHTML = '<div class="profile-list-empty">Could not load profiles</div>';
+  }
 }
 
 function closeProfileModal() {
@@ -1062,6 +1115,14 @@ async function removeProfile(id) {
   if (!confirm('Remove this search profile?')) return;
   await fetch(API + '/api/profiles/' + id, { method: 'DELETE' });
   loadProfiles();
+}
+
+async function removeProfileFromModal(id) {
+  if (!confirm('Remove this search profile?')) return;
+  await fetch(API + '/api/profiles/' + id, { method: 'DELETE' });
+  loadProfiles();
+  // Refresh the list inside the modal
+  openProfileModal();
 }
 
 // ── Actions ──

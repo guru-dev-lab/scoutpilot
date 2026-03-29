@@ -6,10 +6,11 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.8.2"
+BUILD_VERSION = "0.8.3"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
-    {"version": "0.8.2", "date": "2026-03-28", "status": "active", "change": "Multi-skill filter — search and select multiple skill tags with AND logic"},
+    {"version": "0.8.3", "date": "2026-03-28", "status": "active", "change": "Layout refresh — Smart Search above filters, profile management panel with add/remove in one window"},
+    {"version": "0.8.2", "date": "2026-03-28", "status": "active", "change": "Multi-skill filter — search and select multiple skill tags with OR logic"},
     {"version": "0.8.1", "date": "2026-03-28", "status": "active", "change": "Hotfix — infinite backfill loop on startup causing 502 crashes"},
     {"version": "0.8.0", "date": "2026-03-28", "status": "active", "change": "Major upgrade — full LinkedIn descriptions, Remotive + The Muse sources, 200+ skill patterns"},
     {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description"},
