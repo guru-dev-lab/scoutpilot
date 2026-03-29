@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.2"
+BUILD_VERSION = "0.9.3"
 BUILD_DATE = "2026-03-29"
 RECENT_CHANGES = [
+    {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
     {"version": "0.9.1", "date": "2026-03-29", "status": "active", "change": "AI engine live — dedup catches near-duplicates, auto-detects direct apply URLs, 5-min scrape interval"},
     {"version": "0.9.0", "date": "2026-03-28", "status": "active", "change": "Visual redesign — premium glass styling for stats and filters, refined search bar"},
     {"version": "0.8.4", "date": "2026-03-28", "status": "active", "change": "Compact layout — Smart Search beside stats, profiles managed in modal only"},
@@ -184,7 +185,16 @@ async def scheduled_deep_sweep():
 
             search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
-            for term in search_terms[:3]:  # fewer variants but deeper lookback
+            # Include keyword-based searches for deep sweep too
+            keywords = profile.get("keywords", [])
+            if isinstance(keywords, str):
+                keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+            for kw in keywords:
+                combo = f"{kw} {title}"
+                if combo.lower() not in [s.lower() for s in search_terms]:
+                    search_terms.append(combo)
+
+            for term in search_terms[:5]:  # allow more variants for deep sweep
                 for loc in (locations if locations else [""]):
                     try:
                         new_jobs = await scrape_jobspy(

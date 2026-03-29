@@ -760,8 +760,18 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
         profile_id = profile["id"]
         hours = profile.get("freshness_hours", 24)
 
-        # Build search queries from title + expanded titles
+        # Build search queries from title + expanded titles + keywords
         search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
+
+        # Also search for keywords (e.g. "Microstrategy", "Power BI") combined with title
+        keywords = profile.get("keywords", [])
+        if isinstance(keywords, str):
+            keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+        for kw in keywords:
+            # Add keyword-based search like "MicroStrategy Data Analyst"
+            combo = f"{kw} {title}"
+            if combo.lower() not in [s.lower() for s in search_terms]:
+                search_terms.append(combo)
 
         for term in search_terms[:5]:  # cap at 5 variants per cycle
             for loc in (locations if locations else [""]):
