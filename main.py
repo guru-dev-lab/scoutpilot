@@ -6,10 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.8.5"
+BUILD_VERSION = "0.9.0"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
-    {"version": "0.8.5", "date": "2026-03-28", "status": "active", "change": "UI polish — container backgrounds for stats and filters, filters stretch full width"},
+    {"version": "0.9.0", "date": "2026-03-28", "status": "active", "change": "Visual redesign — premium glass styling for stats and filters, refined search bar"},
     {"version": "0.8.4", "date": "2026-03-28", "status": "active", "change": "Compact layout — Smart Search beside stats, profiles managed in modal only"},
     {"version": "0.8.3", "date": "2026-03-28", "status": "active", "change": "Profile management panel with add/remove in one window"},
     {"version": "0.8.2", "date": "2026-03-28", "status": "active", "change": "Multi-skill filter — search and select multiple skill tags with OR logic"},
