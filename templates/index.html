@@ -38,11 +38,12 @@
   .changelog-ver { color: #818cf8; font-weight: 600; flex-shrink: 0; min-width: 36px; }
   .changelog-text { color: var(--muted); }
 
-  /* Stats */
-  .stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; }
-  .stat .num { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
-  .stat .label { font-size: 0.75rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
+  /* Stats + Search row */
+  .stats-search-row { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; flex-shrink: 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; }
+  .stat .num { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
+  .stat .label { font-size: 0.7rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
 
   /* Buttons */
   .btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
@@ -81,8 +82,8 @@
   .skill-dropdown .skill-option.selected { background: rgba(99,102,241,0.1); color: #818cf8; }
   .skill-dropdown .no-results { padding: 8px 10px; color: var(--text3); font-size: 0.78rem; font-style: italic; }
 
-  /* Smart Search bar — full width above filters */
-  .smart-search-bar { margin-bottom: 12px; }
+  /* Smart Search bar — right side of stats row */
+  .smart-search-bar { flex: 1; min-width: 220px; max-width: 400px; margin-left: auto; }
   .smart-search-inner { display: flex; flex-direction: column; gap: 4px; }
   .smart-search-inner label { font-size: 0.72rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
   .search-row { display: flex; align-items: center; }
@@ -255,6 +256,8 @@
     .app { padding: 10px; }
     .header { flex-direction: column; gap: 10px; align-items: flex-start; }
     .header-actions { width: 100%; justify-content: flex-end; }
+    .stats-search-row { flex-direction: column; gap: 10px; }
+    .smart-search-bar { max-width: 100%; }
     .stats { gap: 8px; }
     .stat { padding: 8px 12px; flex: 1; min-width: 60px; text-align: center; }
     .stat .num { font-size: 1.1rem; }
@@ -263,7 +266,7 @@
     .filter-group { flex: 1; min-width: 100px; }
     .filter-group select { font-size: 0.78rem; padding: 6px 8px; }
     .skill-picker-group { min-width: 150px; max-width: 100%; }
-    .smart-search-bar { margin-bottom: 8px; }
+    .smart-search-bar { max-width: 100%; }
     .job-card { grid-template-columns: 1fr; padding: 10px 12px; }
     .job-title { font-size: 0.85rem; white-space: normal; }
     .job-actions { grid-row: auto; grid-column: auto; justify-content: flex-start; margin-top: 4px; }
@@ -305,28 +308,30 @@
     </div>
   </div>
 
-  <div class="stats" id="stats">
-    <div class="stat"><div class="num" id="statTotal">0</div><div class="label">Total</div></div>
-    <div class="stat"><div class="num" id="statNew">0</div><div class="label">New</div></div>
-    <div class="stat"><div class="num" id="statViewed">0</div><div class="label">Viewed</div></div>
-    <div class="stat"><div class="num" id="statDirect">0</div><div class="label">Direct Apply</div></div>
-    <div class="stat" style="cursor:pointer;" onclick="document.getElementById('filterStatus').value='saved';loadJobs()"><div class="num" id="statSaved" style="color:var(--primary);">0</div><div class="label">Saved</div></div>
-    <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
-  </div>
-
-  <div class="profiles-bar" id="profilesBar"></div>
-
-  <!-- Smart Search — prominent, above filters -->
-  <div class="smart-search-bar">
-    <div class="smart-search-inner">
-      <label>Search Jobs <span style="font-size:0.6rem;color:var(--text3);font-weight:400;">(finds related titles too)</span></label>
-      <div class="search-row">
-        <input type="text" id="filterSearch" placeholder="e.g. Data Analyst, Software Engineer..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceSearch()">
-        <button class="search-clear-btn" id="searchClear" onclick="clearSearch()" style="display:none;">&times;</button>
-        <button onclick="loadJobs()" id="searchGoBtn">Go</button>
+  <!-- Stats + Smart Search on one row -->
+  <div class="stats-search-row">
+    <div class="stats" id="stats">
+      <div class="stat"><div class="num" id="statTotal">0</div><div class="label">Total</div></div>
+      <div class="stat"><div class="num" id="statNew">0</div><div class="label">New</div></div>
+      <div class="stat"><div class="num" id="statViewed">0</div><div class="label">Viewed</div></div>
+      <div class="stat"><div class="num" id="statDirect">0</div><div class="label">Direct Apply</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="document.getElementById('filterStatus').value='saved';loadJobs()"><div class="num" id="statSaved" style="color:var(--primary);">0</div><div class="label">Saved</div></div>
+      <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
+    </div>
+    <div class="smart-search-bar">
+      <div class="smart-search-inner">
+        <label>Search Jobs <span style="font-size:0.6rem;color:var(--text3);font-weight:400;">(finds related titles too)</span></label>
+        <div class="search-row">
+          <input type="text" id="filterSearch" placeholder="e.g. Data Analyst, Software Engineer..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceSearch()">
+          <button class="search-clear-btn" id="searchClear" onclick="clearSearch()" style="display:none;">&times;</button>
+          <button onclick="loadJobs()" id="searchGoBtn">Go</button>
+        </div>
       </div>
     </div>
   </div>
+
+  <!-- Hidden profiles bar (managed in modal) -->
+  <div class="profiles-bar" id="profilesBar" style="display:none;"></div>
 
   <div class="filters">
     <div class="filter-group">
