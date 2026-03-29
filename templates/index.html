@@ -360,8 +360,10 @@
       </select>
     </div>
     <div class="filter-group">
-      <label>Location</label>
-      <input type="text" class="location-input" id="filterLocation" placeholder="e.g. Remote, NYC..." onkeydown="if(event.key==='Enter'){event.preventDefault();loadJobs()}" oninput="debounceLocation()">
+      <label>Skill</label>
+      <select id="filterSkill" onchange="loadJobs()">
+        <option value="">Any Skill</option>
+      </select>
     </div>
     <div class="filter-group">
       <label>Sort By</label>
@@ -496,7 +498,6 @@
 <script>
 const API = '';
 let searchTimeout = null;
-let locationTimeout = null;
 
 // ── Smart Search: Related Title Expansion ──
 // Maps common job-title keywords to related terms so "Data Analyst" also finds
@@ -769,7 +770,7 @@ async function loadJobs() {
   const sortEl = document.getElementById('filterSort');
   const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
-  const location = document.getElementById('filterLocation').value.trim();
+  const skill = document.getElementById('filterSkill').value;
   // When searching, auto-switch to "Most Relevant" so best matches show first
   const effectiveSort = search ? 'relevance_score:DESC' : sortVal;
   const [sort_by, sort_dir] = effectiveSort.split(':');
@@ -783,7 +784,7 @@ async function loadJobs() {
     hours: effectiveHours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
     source, work_type: workType, status, direct_only: directOnly,
-    sort_by, sort_dir, search, location, limit: 500, offset: 0,
+    sort_by, sort_dir, search, skill, limit: 500, offset: 0,
   });
 
   // Show searching indicator
@@ -1199,10 +1200,6 @@ function clearSearch() {
   loadJobs();
 }
 
-function debounceLocation() {
-  clearTimeout(locationTimeout);
-  locationTimeout = setTimeout(loadJobs, 600);
-}
 
 function exportCSV() {
   const hours = document.getElementById('filterHours').value;
@@ -1210,18 +1207,36 @@ function exportCSV() {
   const status = document.getElementById('filterStatus').value;
   const workType = document.getElementById('filterWorkType').value;
   const source = document.getElementById('filterSource').value;
-  const location = document.getElementById('filterLocation').value.trim();
+  const skill = document.getElementById('filterSkill').value;
   const directOnly = document.getElementById('filterDirect').value;
-  const params = new URLSearchParams({ hours, search, status, work_type: workType, source, location, direct_only: directOnly });
+  const params = new URLSearchParams({ hours, search, status, work_type: workType, source, skill, direct_only: directOnly });
   window.open(API + '/api/export/csv?' + params.toString(), '_blank');
 }
 
 // ── Init ──
 loadProfiles();
+async function loadSkills() {
+  try {
+    const resp = await fetch(API + '/api/skills');
+    const data = await resp.json();
+    const sel = document.getElementById('filterSkill');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Any Skill</option>';
+    data.forEach(function(s) {
+      var opt = document.createElement('option');
+      opt.value = s.skill;
+      opt.textContent = s.skill + ' (' + s.count + ')';
+      sel.appendChild(opt);
+    });
+    sel.value = current; // restore selection
+  } catch(e) { console.error('Failed to load skills:', e); }
+}
+loadSkills();
 loadJobs();
 checkStatus();
 setInterval(checkStatus, 30000);
 setInterval(loadJobs, 60000);
+setInterval(loadSkills, 120000); // refresh skill counts every 2 min
 
 document.getElementById('profileModal').addEventListener('click', function(e) {
   if (e.target.classList.contains('modal-overlay')) closeProfileModal();

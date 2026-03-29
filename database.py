@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from rapidfuzz import fuzz
 from config import settings
+from skills import extract_skills
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ async def init_db():
                 relevance_score INTEGER DEFAULT 50,
                 trust_score INTEGER DEFAULT 50,
                 is_direct_apply INTEGER DEFAULT 0,
+                skills TEXT DEFAULT '',
                 status TEXT DEFAULT 'new',
                 search_profile_id INTEGER,
                 FOREIGN KEY (search_profile_id) REFERENCES search_profiles(id)
@@ -98,6 +100,28 @@ async def init_db():
         # Create work_type index (after migration ensures column exists)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_work_type ON jobs(work_type)")
         await db.commit()
+
+        # Migration: add skills column if missing
+        try:
+            await db.execute("SELECT skills FROM jobs LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding skills column to jobs table")
+            await db.execute("ALTER TABLE jobs ADD COLUMN skills TEXT DEFAULT ''")
+            await db.commit()
+
+        # Backfill: extract skills for any jobs that have descriptions but no skills yet
+        cursor = await db.execute(
+            "SELECT id, title, description FROM jobs WHERE (skills IS NULL OR skills = '') AND description != '' LIMIT 500"
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            logger.info(f"[Backfill] Extracting skills for {len(rows)} jobs...")
+            for row in rows:
+                skills = extract_skills(row[1] or "", row[2] or "")
+                if skills:
+                    await db.execute("UPDATE jobs SET skills = ? WHERE id = ?", (skills, row[0]))
+            await db.commit()
+            logger.info(f"[Backfill] Done — tagged {len(rows)} jobs")
 
     finally:
         await db.close()
@@ -170,12 +194,13 @@ async def insert_job(job_data: dict) -> bool:
                     return False
 
         now = datetime.now(timezone.utc).isoformat()
+        skills = extract_skills(job_data.get("title", ""), job_data.get("description", ""))
         await db.execute(
             """INSERT INTO jobs (hash, title, company_name, company_domain, location,
                is_remote, work_type, description, salary_min, salary_max, source, source_url,
                direct_apply_url, posted_at, first_seen_at, relevance_score, trust_score,
-               is_direct_apply, status, search_profile_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               is_direct_apply, skills, status, search_profile_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 h,
                 job_data.get("title", ""),
@@ -195,6 +220,7 @@ async def insert_job(job_data: dict) -> bool:
                 job_data.get("relevance_score", 50),
                 job_data.get("trust_score", 50),
                 1 if job_data.get("is_direct_apply") else 0,
+                skills,
                 "new",
                 job_data.get("search_profile_id"),
             ),
@@ -220,6 +246,7 @@ async def get_jobs(
     search: str = "",
     direct_only: bool = False,
     location: str = "",
+    skill: str = "",
 ) -> list[dict]:
     db = await get_db()
     try:
@@ -275,6 +302,11 @@ async def get_jobs(
             for lw in loc_words:
                 conditions.append("location LIKE ?")
                 params.append(f"%{lw}%")
+
+        if skill:
+            # Filter by skill tag (exact match within comma-separated list)
+            conditions.append("(',' || skills || ',') LIKE ?")
+            params.append(f"%,{skill},%")
 
         if search:
             # Search title and company only — description matching is too noisy

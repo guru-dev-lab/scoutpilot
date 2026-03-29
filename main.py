@@ -6,14 +6,14 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.6.3"
+BUILD_VERSION = "0.7.0"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
-    {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD, share different codes with different people"},
-    {"version": "0.6.2", "date": "2026-03-28", "status": "active", "change": "Day-based Posted filter — Today, Yesterday, Last 3/7/30 Days instead of hourly increments"},
+    {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description, filter by skill (Python, AWS, React, etc.)"},
+    {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD"},
+    {"version": "0.6.2", "date": "2026-03-28", "status": "active", "change": "Day-based Posted filter — Today, Yesterday, Last 3/7/30 Days"},
     {"version": "0.6.1", "date": "2026-03-28", "status": "active", "change": "Quality filter — block AI job sites, no LinkedIn EasyApply, reject homepage-only direct links"},
-    {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, location filter, CSV export, mobile-friendly layout"},
-    {"version": "0.5.1", "date": "2026-03-28", "status": "active", "change": "Clean timestamps — only show 'Posted' date, removed confusing 'Found' labels"},
+    {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, CSV export, mobile-friendly layout"},
 ]  # Keep only last 5 entries
 import asyncio
 import logging
@@ -325,6 +325,7 @@ async def api_get_jobs(
     search: str = "",
     direct_only: str = "",
     location: str = "",
+    skill: str = "",
 ):
     try:
         # When searching, expand time window to search ALL jobs (not just last 24h)
@@ -337,6 +338,7 @@ async def api_get_jobs(
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
             direct_only=is_direct, location=location,
+            skill=skill,
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}
@@ -394,6 +396,33 @@ async def api_delete_profile(profile_id: int):
 
 
 # ──────────────────────────────────────────────
+# Skills API
+# ──────────────────────────────────────────────
+
+@app.get("/api/skills")
+async def api_top_skills():
+    """Return the top skills across all jobs, sorted by frequency."""
+    from database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT skills FROM jobs WHERE skills IS NOT NULL AND skills != ''"
+        )
+        rows = await cursor.fetchall()
+        counts: dict[str, int] = {}
+        for row in rows:
+            for skill in row[0].split(","):
+                s = skill.strip()
+                if s:
+                    counts[s] = counts.get(s, 0) + 1
+        # Sort by frequency descending
+        top = sorted(counts.items(), key=lambda x: -x[1])
+        return [{"skill": s, "count": c} for s, c in top[:50]]
+    finally:
+        await db.close()
+
+
+# ──────────────────────────────────────────────
 # Export
 # ──────────────────────────────────────────────
 
@@ -406,6 +435,7 @@ async def api_export_csv(
     source: str = "",
     location: str = "",
     direct_only: str = "",
+    skill: str = "",
 ):
     """Export current filtered jobs as CSV."""
     effective_hours = 720 if search.strip() else hours
@@ -413,14 +443,14 @@ async def api_export_csv(
     jobs = await get_jobs(
         hours=effective_hours, search=search, status=status,
         work_type=work_type, source=source, location=location,
-        direct_only=is_direct, limit=500,
+        direct_only=is_direct, skill=skill, limit=500,
     )
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Title", "Company", "Location", "Work Type", "Source",
                       "Posted", "Salary Min", "Salary Max", "Direct Apply",
-                      "Status", "Apply URL"])
+                      "Skills", "Status", "Apply URL"])
     for j in jobs:
         writer.writerow([
             j.get("title", ""), j.get("company_name", ""),
@@ -428,6 +458,7 @@ async def api_export_csv(
             j.get("source", ""), j.get("posted_at", ""),
             j.get("salary_min", 0), j.get("salary_max", 0),
             "Yes" if j.get("is_direct_apply") else "No",
+            j.get("skills", ""),
             j.get("status", ""),
             j.get("direct_apply_url") or j.get("source_url", ""),
         ])
