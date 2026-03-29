@@ -376,7 +376,7 @@ async def scrape_jobspy(
                 "hours_old": hours_old,
                 "country_indeed": "USA",
                 "linkedin_fetch_description": True,   # Pull FULL descriptions from LinkedIn
-                "full_description": True,             # Full descriptions from all sources
+                "description_format": "markdown",     # Get rich descriptions where available
                 "verbose": 0,
             }
             if location:
@@ -621,9 +621,8 @@ async def scrape_remotive(
             is_direct = _is_direct_url(apply_url)
             description = item.get("description", "")
             # Remotive returns HTML descriptions — strip tags for plain text
-            import re as _re
-            clean_desc = _re.sub(r"<[^>]+>", " ", description)
-            clean_desc = _re.sub(r"\s+", " ", clean_desc).strip()
+            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
             location = item.get("candidate_required_location", "Remote")
             posted_at = _normalize_posted_at(item.get("publication_date", ""))
@@ -702,9 +701,8 @@ async def scrape_themuse(
 
             # Description (HTML → plain text)
             description = item.get("contents", "")
-            import re as _re
-            clean_desc = _re.sub(r"<[^>]+>", " ", description)
-            clean_desc = _re.sub(r"\s+", " ", clean_desc).strip()
+            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
             apply_url = item.get("refs", {}).get("landing_page", "")
             is_direct = _is_direct_url(apply_url)
