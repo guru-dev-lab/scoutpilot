@@ -276,6 +276,116 @@ def score_trust_heuristic(
 # Score new jobs in batch
 # ──────────────────────────────────────────────
 
+# ──────────────────────────────────────────────
+# AI-Powered Dedup (catch duplicates fuzzy matching misses)
+# ──────────────────────────────────────────────
+
+async def ai_is_duplicate(
+    job_a_title: str, job_a_company: str,
+    job_b_title: str, job_b_company: str,
+    fuzzy_score: int,
+) -> bool:
+    """Use Claude to determine if two jobs are really the same posting.
+    Only called when fuzzy score is borderline (70-87)."""
+    if not settings.anthropic_api_key:
+        return False  # Can't check without AI — let it through
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{
+                "role": "user",
+                "content": f"""Are these two job postings the same position? Answer only YES or NO.
+
+Job A: "{job_a_title}" at "{job_a_company}"
+Job B: "{job_b_title}" at "{job_b_company}"
+
+Fuzzy similarity: {fuzzy_score}%
+Consider: abbreviation differences (Sr vs Senior), minor wording changes, same company = likely same job.""",
+            }],
+        )
+        text = response.content[0].text.strip().upper()
+        is_dup = text.startswith("YES")
+        if is_dup:
+            logger.info(f"[AI Dedup] Confirmed duplicate: '{job_a_title}' @ {job_a_company} ≈ '{job_b_title}' @ {job_b_company}")
+        return is_dup
+    except Exception as e:
+        logger.error(f"[AI Dedup] Failed: {e}")
+        return False
+
+
+# ──────────────────────────────────────────────
+# AI-Powered Direct Job Link Detection
+# ──────────────────────────────────────────────
+
+async def extract_direct_link_ai(
+    description: str,
+    company_name: str,
+    company_domain: str = "",
+    source_url: str = "",
+) -> str:
+    """Use Claude to extract the actual company career page URL from a job description.
+    Returns the URL if found, empty string otherwise."""
+    if not settings.anthropic_api_key:
+        return ""
+
+    # Only try if description has URLs in it
+    url_pattern = re.compile(r'https?://[^\s<>"\')\]]+')
+    urls_in_desc = url_pattern.findall(description[:3000])
+    if not urls_in_desc:
+        return ""
+
+    # Filter out obviously non-career URLs
+    career_hints = []
+    non_career = {"linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
+                  "google.com", "facebook.com", "twitter.com", "instagram.com",
+                  "youtube.com", "github.com", "bit.ly", "tinyurl.com"}
+    for url in urls_in_desc:
+        domain = url.split("/")[2].lower() if len(url.split("/")) > 2 else ""
+        if not any(nc in domain for nc in non_career):
+            career_hints.append(url)
+
+    if not career_hints:
+        return ""
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": f"""From these URLs found in a job posting for "{company_name}", identify the direct application URL — the link that goes to the company's own career page or job application form (NOT a job board like LinkedIn/Indeed).
+
+URLs found: {career_hints[:10]}
+Company domain: {company_domain or 'unknown'}
+Source URL: {source_url}
+
+Rules:
+- Return ONLY the best direct application URL, nothing else
+- Look for: company career pages, workday/greenhouse/lever/ashby/smartrecruiters links
+- If no direct application URL exists, return "NONE"
+- Do NOT return job board URLs""",
+            }],
+        )
+        text = response.content[0].text.strip()
+        if text and text.upper() != "NONE" and text.startswith("http"):
+            # Clean up — remove trailing punctuation
+            clean_url = re.sub(r'[.,;:!?\s]+$', '', text)
+            logger.info(f"[AI Direct Link] Found: {clean_url} for {company_name}")
+            return clean_url
+    except Exception as e:
+        logger.error(f"[AI Direct Link] Failed: {e}")
+
+    return ""
+
+
 async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     """Score a batch of jobs for relevance and trust."""
     target_title = profile["title"]

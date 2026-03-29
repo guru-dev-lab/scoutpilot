@@ -183,7 +183,7 @@ async def insert_job(job_data: dict) -> bool:
         if company_norm and title_norm:
             # Pull recent jobs from this company (use LIKE for loose company match)
             cursor = await db.execute(
-                "SELECT id, title FROM jobs WHERE LOWER(company_name) LIKE ? LIMIT 50",
+                "SELECT id, title, company_name FROM jobs WHERE LOWER(company_name) LIKE ? LIMIT 50",
                 (f"%{company_norm[:20]}%",),
             )
             similar_jobs = await cursor.fetchall()
@@ -195,6 +195,18 @@ async def insert_job(job_data: dict) -> bool:
                         f"[Dedup] Fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
                     )
                     return False
+                # Borderline fuzzy (70-87): ask AI to confirm if it's a duplicate
+                if 70 <= score < FUZZY_TITLE_THRESHOLD:
+                    try:
+                        from ai_engine import ai_is_duplicate
+                        is_dup = await ai_is_duplicate(
+                            job_data.get("title", ""), job_data.get("company_name", ""),
+                            row[1] or "", row[2] or "", score,
+                        )
+                        if is_dup:
+                            return False
+                    except Exception as e:
+                        logger.debug(f"[Dedup] AI check failed: {e}")
 
         now = datetime.now(timezone.utc).isoformat()
         # If no posted_at from source, fall back to now (scrape time)

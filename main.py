@@ -6,17 +6,14 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.0"
-BUILD_DATE = "2026-03-28"
+BUILD_VERSION = "0.9.1"
+BUILD_DATE = "2026-03-29"
 RECENT_CHANGES = [
+    {"version": "0.9.1", "date": "2026-03-29", "status": "active", "change": "AI engine live — dedup catches near-duplicates, auto-detects direct apply URLs, 5-min scrape interval"},
     {"version": "0.9.0", "date": "2026-03-28", "status": "active", "change": "Visual redesign — premium glass styling for stats and filters, refined search bar"},
     {"version": "0.8.4", "date": "2026-03-28", "status": "active", "change": "Compact layout — Smart Search beside stats, profiles managed in modal only"},
     {"version": "0.8.3", "date": "2026-03-28", "status": "active", "change": "Profile management panel with add/remove in one window"},
     {"version": "0.8.2", "date": "2026-03-28", "status": "active", "change": "Multi-skill filter — search and select multiple skill tags with OR logic"},
-    {"version": "0.8.1", "date": "2026-03-28", "status": "active", "change": "Hotfix — infinite backfill loop on startup causing 502 crashes"},
-    {"version": "0.8.0", "date": "2026-03-28", "status": "active", "change": "Major upgrade — full LinkedIn descriptions, Remotive + The Muse sources, 200+ skill patterns"},
-    {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description"},
-    {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD"},
 ]  # Keep only last 5 entries
 import asyncio
 import logging
@@ -76,7 +73,8 @@ async def scheduled_scrape():
         result = await run_scrape_cycle(profiles)
 
         # Score new jobs
-        from database import get_jobs as _get_jobs
+        from database import get_jobs as _get_jobs, get_db as _get_db
+        from ai_engine import extract_direct_link_ai
         new_jobs = await _get_jobs(hours=1, status="new", limit=100)
         for job in new_jobs:
             for profile in profiles:
@@ -92,6 +90,35 @@ async def scheduled_scrape():
                     job.get("source", ""),
                 )
                 await update_job_scores(job["id"], relevance, trust)
+
+        # AI direct link detection — find actual company career page URLs
+        if settings.anthropic_api_key:
+            direct_found = 0
+            for job in new_jobs:
+                if job.get("direct_apply_url") or not job.get("description"):
+                    continue
+                try:
+                    direct_url = await extract_direct_link_ai(
+                        job["description"],
+                        job.get("company_name", ""),
+                        job.get("company_domain", ""),
+                        job.get("source_url", ""),
+                    )
+                    if direct_url:
+                        db = await _get_db()
+                        try:
+                            await db.execute(
+                                "UPDATE jobs SET direct_apply_url = ?, is_direct_apply = 1 WHERE id = ?",
+                                (direct_url, job["id"]),
+                            )
+                            await db.commit()
+                            direct_found += 1
+                        finally:
+                            await db.close()
+                except Exception as e:
+                    logger.debug(f"[AI Direct Link] Error for job {job['id']}: {e}")
+            if direct_found:
+                logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(new_jobs)} new jobs")
 
         last_scrape_result = {
             "status": "ok",
