@@ -331,6 +331,8 @@
         <option value="google_jobs">Google Jobs</option>
         <option value="zip_recruiter">ZipRecruiter</option>
         <option value="jsearch">JSearch</option>
+        <option value="remotive">Remotive</option>
+        <option value="themuse">The Muse</option>
       </select>
     </div>
     <div class="filter-group">
@@ -908,7 +910,19 @@ function renderJobs(jobs, searchInfo) {
     else if (trust >= 40) badges += '<span class="badge trust-mid">Trust: ' + trust + '</span>';
     else if (trust > 0) badges += '<span class="badge trust-low">Trust: ' + trust + '</span>';
 
-    const skills = extractSkills(job.title, job.description);
+    // Use server-side extracted skills (stored in DB), fallback to client-side for old jobs
+    var skills;
+    if (job.skills && job.skills.trim()) {
+      skills = job.skills.split(',').map(function(s) {
+        s = s.trim();
+        for (var i = 0; i < SKILL_DB.length; i++) {
+          if (SKILL_DB[i].k === s) return SKILL_DB[i];
+        }
+        return {k: s, r: null, c: 'other', i: ''};
+      });
+    } else {
+      skills = extractSkills(job.title, job.description);
+    }
     const skillHtml = renderSkillTags(skills);
 
     // Time — only show posted date (when the job was actually listed)

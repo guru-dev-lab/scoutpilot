@@ -6,14 +6,14 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.7.0"
+BUILD_VERSION = "0.8.0"
 BUILD_DATE = "2026-03-28"
 RECENT_CHANGES = [
-    {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description, filter by skill (Python, AWS, React, etc.)"},
+    {"version": "0.8.0", "date": "2026-03-28", "status": "active", "change": "Major upgrade — full LinkedIn descriptions, Remotive + The Muse sources, 200+ skill patterns, server-side skill filter"},
+    {"version": "0.7.0", "date": "2026-03-28", "status": "active", "change": "Skills engine — auto-extract tech tags from every job description, filter by skill"},
     {"version": "0.6.3", "date": "2026-03-28", "status": "active", "change": "Multi-password support — comma-separated passwords in SITE_PASSWORD"},
     {"version": "0.6.2", "date": "2026-03-28", "status": "active", "change": "Day-based Posted filter — Today, Yesterday, Last 3/7/30 Days"},
     {"version": "0.6.1", "date": "2026-03-28", "status": "active", "change": "Quality filter — block AI job sites, no LinkedIn EasyApply, reject homepage-only direct links"},
-    {"version": "0.6.0", "date": "2026-03-28", "status": "active", "change": "Save/bookmark jobs, CSV export, mobile-friendly layout"},
 ]  # Keep only last 5 entries
 import asyncio
 import logging

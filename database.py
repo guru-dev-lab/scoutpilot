@@ -109,19 +109,26 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN skills TEXT DEFAULT ''")
             await db.commit()
 
-        # Backfill: extract skills for any jobs that have descriptions but no skills yet
-        cursor = await db.execute(
-            "SELECT id, title, description FROM jobs WHERE (skills IS NULL OR skills = '') AND description != '' LIMIT 500"
-        )
-        rows = await cursor.fetchall()
-        if rows:
-            logger.info(f"[Backfill] Extracting skills for {len(rows)} jobs...")
+        # Backfill: extract skills for ALL jobs missing skills (batched)
+        backfill_total = 0
+        while True:
+            cursor = await db.execute(
+                "SELECT id, title, description FROM jobs WHERE (skills IS NULL OR skills = '') LIMIT 1000"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                break
+            tagged = 0
             for row in rows:
                 skills = extract_skills(row[1] or "", row[2] or "")
+                await db.execute("UPDATE jobs SET skills = ? WHERE id = ?", (skills, row[0]))
                 if skills:
-                    await db.execute("UPDATE jobs SET skills = ? WHERE id = ?", (skills, row[0]))
+                    tagged += 1
             await db.commit()
-            logger.info(f"[Backfill] Done — tagged {len(rows)} jobs")
+            backfill_total += len(rows)
+            logger.info(f"[Backfill] Processed {len(rows)} jobs ({tagged} had skills)...")
+        if backfill_total:
+            logger.info(f"[Backfill] Complete — processed {backfill_total} total jobs")
 
     finally:
         await db.close()

@@ -375,6 +375,9 @@ async def scrape_jobspy(
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
                 "country_indeed": "USA",
+                "linkedin_fetch_description": True,   # Pull FULL descriptions from LinkedIn
+                "full_description": True,             # Full descriptions from all sources
+                "verbose": 0,
             }
             if location:
                 kwargs["location"] = location
@@ -593,6 +596,157 @@ async def scrape_jsearch(
     return jobs
 
 
+async def scrape_remotive(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from Remotive API (free, no key needed)."""
+    logger.info(f"[Remotive] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://remotive.com/api/remote-jobs",
+                params={"search": search_term, "limit": 30},
+            )
+            data = resp.json()
+
+        for item in data.get("jobs", []):
+            company = item.get("company_name", "")
+            if _is_blocked_company(company):
+                continue
+
+            apply_url = item.get("url", "")
+            is_direct = _is_direct_url(apply_url)
+            description = item.get("description", "")
+            # Remotive returns HTML descriptions — strip tags for plain text
+            import re as _re
+            clean_desc = _re.sub(r"<[^>]+>", " ", description)
+            clean_desc = _re.sub(r"\s+", " ", clean_desc).strip()
+
+            location = item.get("candidate_required_location", "Remote")
+            posted_at = _normalize_posted_at(item.get("publication_date", ""))
+
+            # Detect work type
+            work_type = _detect_work_type({
+                "title": item.get("title", ""),
+                "location": location,
+                "description": clean_desc[:3000],
+                "is_remote": True,
+            })
+
+            job = {
+                "title": item.get("title", ""),
+                "company_name": company,
+                "company_domain": "",
+                "location": location,
+                "is_remote": True,
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "remotive",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+        logger.info(f"[Remotive] Found {len(data.get('jobs', []))} results, inserted {len(jobs)} new ({direct_count} direct apply)")
+    except Exception as e:
+        logger.error(f"[Remotive] Error: {e}")
+
+    return jobs
+
+
+async def scrape_themuse(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape jobs from The Muse API (free, no key needed)."""
+    logger.info(f"[TheMuse] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        # The Muse categories aren't exact search — use page param
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://www.themuse.com/api/public/jobs",
+                params={"page": 1, "descending": "true"},
+            )
+            data = resp.json()
+
+        search_lower = search_term.lower()
+        for item in data.get("results", []):
+            title = item.get("name", "")
+            company_data = item.get("company", {})
+            company = company_data.get("name", "") if isinstance(company_data, dict) else ""
+
+            if _is_blocked_company(company):
+                continue
+
+            # Filter by search term match in title
+            if search_lower not in title.lower():
+                continue
+
+            # Get locations
+            locs = item.get("locations", [])
+            loc_str = ", ".join(loc.get("name", "") for loc in locs if isinstance(loc, dict)) if locs else ""
+
+            # Description (HTML → plain text)
+            description = item.get("contents", "")
+            import re as _re
+            clean_desc = _re.sub(r"<[^>]+>", " ", description)
+            clean_desc = _re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = item.get("refs", {}).get("landing_page", "")
+            is_direct = _is_direct_url(apply_url)
+
+            posted_at = _normalize_posted_at(item.get("publication_date", ""))
+
+            work_type = _detect_work_type({
+                "title": title,
+                "location": loc_str,
+                "description": clean_desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": loc_str,
+                "is_remote": work_type == "remote",
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "themuse",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+        logger.info(f"[TheMuse] Found {len(data.get('results', []))} results, inserted {len(jobs)} new ({direct_count} direct apply)")
+    except Exception as e:
+        logger.error(f"[TheMuse] Error: {e}")
+
+    return jobs
+
+
 async def run_scrape_cycle(profiles: list[dict]) -> dict:
     """
     Run a full scrape cycle for all active profiles.
@@ -630,6 +784,14 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
 
                     # JSearch (tertiary)
                     new_jobs = await scrape_jsearch(term, loc, profile_id)
+                    total_new += len(new_jobs)
+
+                    # Remotive (remote jobs — free, no key)
+                    new_jobs = await scrape_remotive(term, profile_id)
+                    total_new += len(new_jobs)
+
+                    # The Muse (curated tech jobs — free, no key)
+                    new_jobs = await scrape_themuse(term, profile_id)
                     total_new += len(new_jobs)
 
                 except Exception as e:
