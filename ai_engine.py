@@ -512,3 +512,144 @@ async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
         scored.append(job)
 
     return scored
+
+
+# ============================================================================
+# AI DATA QUALITY VERIFICATION
+# ============================================================================
+
+async def verify_work_type_ai(
+    title: str,
+    description: str,
+    location: str,
+    current_type: str,
+) -> str:
+    """Use Claude to verify the actual work arrangement from the job description.
+    Returns: 'remote', 'hybrid', or 'onsite'."""
+    if not settings.anthropic_api_key or not description:
+        return current_type
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": f"""What is the ACTUAL work arrangement for this job? Answer REMOTE, HYBRID, or ONSITE only.
+
+Title: {title}
+Location: {location}
+Description (first 1500 chars): {description[:1500]}
+
+Rules:
+- REMOTE = 100% work from home, no office requirement
+- HYBRID = mix of remote and in-office (e.g. "3 days in office", "flexible")
+- ONSITE = must be in office full time
+- If location says a specific city with no mention of remote, it's ONSITE
+- "Remote" in title but description says "must be in office 2 days" = HYBRID
+- Look for clues like "on-site", "in-person", "office-based", "relocation"
+
+Answer with ONE word only: REMOTE, HYBRID, or ONSITE""",
+            }],
+        )
+        text = response.content[0].text.strip().upper()
+        if "REMOTE" in text and "HYBRID" not in text:
+            result = "remote"
+        elif "HYBRID" in text:
+            result = "hybrid"
+        elif "ONSITE" in text or "ON-SITE" in text or "ON SITE" in text:
+            result = "onsite"
+        else:
+            return current_type
+
+        if result != current_type:
+            logger.info(f"[AI Verify] Work type corrected: '{title}' {current_type} → {result}")
+        return result
+    except Exception as e:
+        logger.error(f"[AI Verify] Work type check failed: {e}")
+        return current_type
+
+
+async def verify_direct_apply_ai(
+    source_url: str,
+    direct_apply_url: str,
+    source: str,
+) -> tuple[bool, str]:
+    """Verify if a job link is actually a direct company application, not Easy Apply or Apply on Indeed.
+    Returns: (is_direct, cleaned_url)"""
+    # Quick heuristic checks — no AI needed for obvious cases
+    url_lower = (direct_apply_url or source_url or "").lower()
+
+    # These are NEVER direct apply
+    easy_apply_indicators = [
+        "linkedin.com/jobs/",
+        "linkedin.com/job/",
+        "indeed.com/viewjob",
+        "indeed.com/jobs",
+        "indeed.com/rc/",
+        "glassdoor.com/job-listing",
+        "glassdoor.com/partner",
+        "ziprecruiter.com/",
+        "google.com/search",
+        "monster.com/",
+        "careerbuilder.com/",
+        "dice.com/",
+        "snagajob.com/",
+    ]
+
+    for indicator in easy_apply_indicators:
+        if indicator in url_lower:
+            # This is a job board link, NOT direct apply
+            return (False, "")
+
+    # These ARE direct apply (company career portals / ATS systems)
+    direct_apply_domains = [
+        "greenhouse.io", "lever.co", "ashbylabs.com", "ashbyhq.com",
+        "workday.com", "myworkdayjobs.com", "smartrecruiters.com",
+        "icims.com", "ultipro.com", "breezy.hr", "bamboohr.com",
+        "jobvite.com", "jazz.co", "recruitee.com", "workable.com",
+        "applytojob.com", "careers-page.com", "successfactors.com",
+        "taleo.net", "oracle.com/careers", "phenom.com",
+    ]
+
+    for domain in direct_apply_domains:
+        if domain in url_lower:
+            return (True, direct_apply_url or source_url)
+
+    # If we have a direct_apply_url that's a company domain, keep it
+    if direct_apply_url and not any(ind in direct_apply_url.lower() for ind in easy_apply_indicators):
+        return (True, direct_apply_url)
+
+    return (False, "")
+
+
+async def verify_job_quality_ai(
+    title: str,
+    description: str,
+    location: str,
+    current_work_type: str,
+    source_url: str,
+    direct_apply_url: str,
+    source: str,
+) -> dict:
+    """Run all data quality checks on a job. Returns corrections dict."""
+    corrections = {}
+
+    # 1. Verify work type
+    verified_type = await verify_work_type_ai(title, description, location, current_work_type)
+    if verified_type != current_work_type:
+        corrections["work_type"] = verified_type
+        corrections["is_remote"] = verified_type == "remote"
+
+    # 2. Verify direct apply
+    is_direct, clean_url = await verify_direct_apply_ai(source_url, direct_apply_url, source)
+    if not is_direct and (direct_apply_url or source_url):
+        # Was marked direct but shouldn't be
+        corrections["is_direct_apply"] = False
+        corrections["direct_apply_url"] = ""
+    elif is_direct and clean_url:
+        corrections["is_direct_apply"] = True
+        corrections["direct_apply_url"] = clean_url
+
+    return corrections

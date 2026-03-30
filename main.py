@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.6"
+BUILD_VERSION = "0.9.7"
 BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
+    {"version": "0.9.7", "date": "2026-03-30", "status": "active", "change": "AI data quality — verifies remote vs hybrid vs onsite from descriptions, strips fake Direct Apply (Easy Apply / Indeed)"},
     {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
     {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
     {"version": "0.9.1", "date": "2026-03-29", "status": "active", "change": "AI engine live — dedup catches near-duplicates, auto-detects direct apply URLs, 5-min scrape interval"},
@@ -166,6 +167,43 @@ async def scheduled_scrape():
                 logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(new_jobs)} new jobs")
             if skills_found:
                 logger.info(f"[AI Skills] Tagged {skills_found} jobs that regex missed")
+
+            # AI data quality verification — fix mislabeled work types and fake direct apply
+            from ai_engine import verify_job_quality_ai
+            quality_fixes = 0
+            for job in new_jobs:
+                try:
+                    corrections = await verify_job_quality_ai(
+                        job.get("title", ""),
+                        job.get("description", ""),
+                        job.get("location", ""),
+                        job.get("work_type", "onsite"),
+                        job.get("source_url", ""),
+                        job.get("direct_apply_url", ""),
+                        job.get("source", ""),
+                    )
+                    if corrections:
+                        db = await _get_db()
+                        try:
+                            sets = []
+                            vals = []
+                            for k, v in corrections.items():
+                                sets.append(f"{k} = ?")
+                                vals.append(v)
+                            vals.append(job["id"])
+                            await db.execute(
+                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?",
+                                vals,
+                            )
+                            await db.commit()
+                            quality_fixes += 1
+                        finally:
+                            await db.close()
+                except Exception as e:
+                    logger.debug(f"[AI Quality] Error for job {job['id']}: {e}")
+
+            if quality_fixes:
+                logger.info(f"[AI Quality] Fixed {quality_fixes} jobs (work type / direct apply corrections)")
 
         last_scrape_result = {
             "status": "ok",
