@@ -782,7 +782,7 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
                 if kw.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(kw)
 
-        for term in search_terms[:8]:  # allow more terms since keywords are lean now
+        for term in search_terms[:5]:  # cap at 5 to keep scrape fast (< 5 min)
             for loc in (locations if locations else [""]):
                 try:
                     # JobSpy (primary)

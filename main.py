@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.5"
+BUILD_VERSION = "0.9.6"
 BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
     {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
@@ -72,6 +72,10 @@ async def scheduled_scrape():
             return
 
         logger.info(f"Starting scheduled scrape for {len(profiles)} profiles...")
+        last_scrape_result = {
+            "status": "running",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
         result = await run_scrape_cycle(profiles)
 
         # Score new jobs — take BEST relevance across all profiles
@@ -206,7 +210,7 @@ async def scheduled_deep_sweep():
                 if kw.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(kw)
 
-            for term in search_terms[:8]:  # allow more terms for deep sweep
+            for term in search_terms[:5]:  # cap terms for deep sweep
                 for loc in (locations if locations else [""]):
                     try:
                         new_jobs = await scrape_jobspy(
@@ -277,6 +281,7 @@ async def lifespan(app: FastAPI):
         minutes=settings.scrape_interval_minutes,
         id="scrape_cycle",
         replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),  # Run immediately on startup
     )
     scheduler.add_job(
         scheduled_deep_sweep,
@@ -628,10 +633,14 @@ async def api_export_csv(
 # Manual Controls
 # ──────────────────────────────────────────────
 
+_background_tasks = set()  # prevent GC of background tasks
+
 @app.post("/api/scrape")
 async def api_trigger_scrape():
     """Manually trigger a scrape cycle."""
-    asyncio.create_task(scheduled_scrape())
+    task = asyncio.create_task(scheduled_scrape())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "started", "message": "Scrape cycle triggered"}
 
 
