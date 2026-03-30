@@ -858,8 +858,8 @@ async function loadJobs() {
   const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
   const skill = _selectedSkills.join(',');
-  // When searching, auto-switch to "Most Relevant" so best matches show first
-  const effectiveSort = search ? 'relevance_score:DESC' : sortVal;
+  // Always respect the user's chosen sort order
+  const effectiveSort = sortVal;
   const [sort_by, sort_dir] = effectiveSort.split(':');
 
   // Smart search: expand query with synonyms
