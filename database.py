@@ -378,6 +378,7 @@ async def get_jobs(
 async def get_job_count(hours: int = 24) -> dict:
     db = await get_db()
     try:
+        # Filtered stats (for the current time window)
         cursor = await db.execute(
             """SELECT
                 COUNT(*) as total,
@@ -391,7 +392,14 @@ async def get_job_count(hours: int = 24) -> dict:
             (f"-{hours} hours",),
         )
         row = await cursor.fetchone()
-        return dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "saved_count": 0, "hidden_count": 0, "direct_count": 0}
+        result = dict(row) if row else {"total": 0, "new_count": 0, "viewed_count": 0, "applied_count": 0, "saved_count": 0, "hidden_count": 0, "direct_count": 0}
+
+        # All-time total (never goes down)
+        cursor2 = await db.execute("SELECT COUNT(*) as all_total FROM jobs")
+        row2 = await cursor2.fetchone()
+        result["all_total"] = row2["all_total"] if row2 else 0
+
+        return result
     finally:
         await db.close()
 

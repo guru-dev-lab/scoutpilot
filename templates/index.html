@@ -1060,7 +1060,7 @@ function renderStats(s, searchCount, searchTerm) {
     document.getElementById('statTotal').textContent = searchCount || 0;
     document.getElementById('statTotal').parentElement.querySelector('.label').textContent = 'Search Results';
   } else {
-    document.getElementById('statTotal').textContent = s.total || 0;
+    document.getElementById('statTotal').textContent = s.all_total || s.total || 0;
     document.getElementById('statTotal').parentElement.querySelector('.label').textContent = 'Total Jobs';
   }
   document.getElementById('statNew').textContent = s.new_count || 0;

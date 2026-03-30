@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.3"
-BUILD_DATE = "2026-03-29"
+BUILD_VERSION = "0.9.4"
+BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
+    {"version": "0.9.4", "date": "2026-03-30", "status": "active", "change": "Fixed keyword search — skips redundant job-title keywords, TOTAL JOBS shows all-time count"},
     {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
     {"version": "0.9.1", "date": "2026-03-29", "status": "active", "change": "AI engine live — dedup catches near-duplicates, auto-detects direct apply URLs, 5-min scrape interval"},
     {"version": "0.9.0", "date": "2026-03-28", "status": "active", "change": "Visual redesign — premium glass styling for stats and filters, refined search bar"},
@@ -185,11 +186,15 @@ async def scheduled_deep_sweep():
 
             search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
-            # Include keyword-based searches for deep sweep too
+            # Include tool/platform keyword searches for deep sweep too
             keywords = profile.get("keywords", [])
             if isinstance(keywords, str):
                 keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+            title_words = {"analyst", "engineer", "developer", "manager", "scientist",
+                           "architect", "consultant", "lead", "director", "head", "staff"}
             for kw in keywords:
+                if any(tw in kw.lower() for tw in title_words):
+                    continue
                 combo = f"{kw} {title}"
                 if combo.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(combo)

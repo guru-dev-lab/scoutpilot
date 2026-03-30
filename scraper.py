@@ -760,15 +760,21 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
         profile_id = profile["id"]
         hours = profile.get("freshness_hours", 24)
 
-        # Build search queries from title + expanded titles + keywords
+        # Build search queries from title + expanded titles
         search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
-        # Also search for keywords (e.g. "Microstrategy", "Power BI") combined with title
+        # Also search for tool/platform keywords (e.g. "Microstrategy", "Domo")
+        # combined with title — but skip keywords that are already job titles
         keywords = profile.get("keywords", [])
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+        # Words that indicate a keyword is actually a job title, not a tool/platform
+        title_words = {"analyst", "engineer", "developer", "manager", "scientist",
+                       "architect", "consultant", "lead", "director", "head", "staff"}
         for kw in keywords:
-            # Add keyword-based search like "MicroStrategy Data Analyst"
+            # Skip keywords that look like job titles (already covered by expanded_titles)
+            if any(tw in kw.lower() for tw in title_words):
+                continue
             combo = f"{kw} {title}"
             if combo.lower() not in [s.lower() for s in search_terms]:
                 search_terms.append(combo)
