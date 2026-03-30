@@ -745,15 +745,34 @@ async def scrape_themuse(
     return jobs
 
 
+_cycle_offset = 0  # Rotate which profiles get scraped each cycle
+
 async def run_scrape_cycle(profiles: list[dict]) -> dict:
     """
-    Run a full scrape cycle for all active profiles.
+    Run a fast scrape cycle for a batch of profiles (max 3 per cycle).
+    Profiles rotate each cycle so all get coverage over time.
     Returns summary stats.
     """
+    global _cycle_offset
     total_new = 0
     errors = []
 
-    for profile in profiles:
+    # Rotate: scrape 3 profiles per cycle, cycling through all
+    batch_size = 3
+    start = _cycle_offset % len(profiles) if profiles else 0
+    batch = []
+    for i in range(batch_size):
+        idx = (start + i) % len(profiles)
+        if len(batch) < len(profiles):  # don't exceed total profiles
+            batch.append(profiles[idx])
+    # Deduplicate in case fewer profiles than batch_size
+    seen_ids = set()
+    batch = [p for p in batch if p["id"] not in seen_ids and not seen_ids.add(p["id"])]
+    _cycle_offset += batch_size
+
+    logger.info(f"[Scrape] Cycle batch: {[p['title'] for p in batch]} ({len(batch)}/{len(profiles)} profiles)")
+
+    for profile in batch:
         title = profile["title"]
         expanded = profile.get("expanded_titles", [])
         locations = profile.get("locations", [])
@@ -782,33 +801,18 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
                 if kw.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(kw)
 
-        for term in search_terms[:5]:  # cap at 5 to keep scrape fast (< 5 min)
+        for term in search_terms[:3]:  # cap at 3 to keep cycle under 5 min
             for loc in (locations if locations else [""]):
                 try:
-                    # JobSpy (primary)
+                    # JobSpy only for regular cycles (fast)
+                    # SerpApi/JSearch/Remotive/TheMuse run in deep sweeps only
                     new_jobs = await scrape_jobspy(
                         search_term=term,
                         location=loc,
-                        results_wanted=30,
+                        results_wanted=20,
                         hours_old=hours,
                         profile_id=profile_id,
                     )
-                    total_new += len(new_jobs)
-
-                    # SerpApi (secondary)
-                    new_jobs = await scrape_serpapi(term, loc, profile_id)
-                    total_new += len(new_jobs)
-
-                    # JSearch (tertiary)
-                    new_jobs = await scrape_jsearch(term, loc, profile_id)
-                    total_new += len(new_jobs)
-
-                    # Remotive (remote jobs — free, no key)
-                    new_jobs = await scrape_remotive(term, profile_id)
-                    total_new += len(new_jobs)
-
-                    # The Muse (curated tech jobs — free, no key)
-                    new_jobs = await scrape_themuse(term, profile_id)
                     total_new += len(new_jobs)
 
                 except Exception as e:

@@ -6,10 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.8"
+BUILD_VERSION = "0.9.9"
 BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
-    {"version": "0.9.8", "date": "2026-03-30", "status": "active", "change": "Scrape throttle — prevents overlapping cycles, batches AI scoring, keeps CPU/API usage under control"},
+    {"version": "0.9.9", "date": "2026-03-30", "status": "active", "change": "Fast scrape — 3 profiles per cycle, JobSpy only, fuzzy scoring (no AI calls), heuristic quality checks. Deep sweep handles full AI."},
     {"version": "0.9.7", "date": "2026-03-30", "status": "active", "change": "AI data quality — verifies remote vs hybrid vs onsite from descriptions, strips fake Direct Apply (Easy Apply / Indeed)"},
     {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
     {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
@@ -88,12 +88,12 @@ async def scheduled_scrape():
         }
         result = await run_scrape_cycle(profiles)
 
-        # Score new jobs — take BEST relevance across all profiles
+        # Score new jobs — use FAST fuzzy scoring (no AI calls in regular cycle)
         from database import get_jobs as _get_jobs, get_db as _get_db
-        from ai_engine import extract_direct_link_ai
+        from ai_engine import score_relevance_fuzzy, extract_direct_link_ai
         new_jobs = await _get_jobs(hours=1, status="new", limit=100)
 
-        # Build combined keyword/exclusion lists across all profiles for efficient scoring
+        # Build combined keyword/exclusion lists across all profiles
         all_profiles_data = []
         for profile in profiles:
             kws = profile.get("keywords", [])
@@ -112,88 +112,41 @@ async def scheduled_scrape():
         for job in new_jobs:
             best_relevance = 0
             for pd in all_profiles_data:
-                relevance = await score_relevance_ai(
+                # Fast fuzzy scoring — no API calls, instant
+                relevance = score_relevance_fuzzy(
                     job["title"], job.get("description", ""),
                     pd["title"], pd["expanded"],
-                    pd["keywords"], pd["excluded"],
+                    pd["keywords"],
                 )
                 best_relevance = max(best_relevance, relevance)
 
-            # Trust score is profile-independent
-            trust = await score_trust_ai(
-                job["title"], job.get("company_name", ""),
-                job.get("description", ""), job.get("salary_min", 0),
-                job.get("salary_max", 0), job.get("company_domain", ""),
-                job.get("source", ""),
-            )
+            # Trust: use 50 as default (neutral) — deep sweep will refine with AI
+            trust = 50
             await update_job_scores(job["id"], best_relevance, trust)
 
         # AI enhancements for new jobs (capped at 20 per cycle to keep it fast)
-        if settings.anthropic_api_key and new_jobs:
-            from ai_engine import extract_skills_ai, verify_job_quality_ai
-
-            ai_batch = new_jobs[:20]  # Cap AI processing per cycle
-            direct_found = 0
-            skills_found = 0
+        # Light pass — heuristic-only quality checks (NO API calls)
+        # Full AI scoring (relevance AI, trust AI, skills, work type, direct links) runs in deep sweep
+        if new_jobs:
+            from ai_engine import verify_direct_apply_ai
             quality_fixes = 0
 
-            for job in ai_batch:
-                # Direct link detection
-                if not job.get("direct_apply_url") and job.get("description"):
-                    try:
-                        direct_url = await extract_direct_link_ai(
-                            job["description"],
-                            job.get("company_name", ""),
-                            job.get("company_domain", ""),
-                            job.get("source_url", ""),
-                        )
-                        if direct_url:
-                            db = await _get_db()
-                            try:
-                                await db.execute(
-                                    "UPDATE jobs SET direct_apply_url = ?, is_direct_apply = 1 WHERE id = ?",
-                                    (direct_url, job["id"]),
-                                )
-                                await db.commit()
-                                direct_found += 1
-                            finally:
-                                await db.close()
-                    except Exception as e:
-                        logger.debug(f"[AI Direct Link] Error for job {job['id']}: {e}")
-
-                # AI skill extraction — for jobs where regex found nothing
-                job_skills = job.get("skills", "")
-                if (not job_skills or job_skills == "_none") and job.get("description"):
-                    try:
-                        ai_skills = await extract_skills_ai(
-                            job.get("title", ""),
-                            job.get("description", ""),
-                        )
-                        if ai_skills:
-                            db = await _get_db()
-                            try:
-                                await db.execute(
-                                    "UPDATE jobs SET skills = ? WHERE id = ?",
-                                    (ai_skills, job["id"]),
-                                )
-                                await db.commit()
-                                skills_found += 1
-                            finally:
-                                await db.close()
-                    except Exception as e:
-                        logger.debug(f"[AI Skills] Error for job {job['id']}: {e}")
-
-                # AI data quality verification — fix mislabeled work types and fake direct apply
+            for job in new_jobs[:50]:
+                # Heuristic direct apply check only — no Claude API calls
                 try:
-                    corrections = await verify_job_quality_ai(
-                        job.get("title", ""),
-                        job.get("description", ""),
-                        job.get("location", ""),
-                        job.get("work_type", "onsite"),
+                    is_direct, clean_url = await verify_direct_apply_ai(
                         job.get("source_url", ""),
                         job.get("direct_apply_url", ""),
                         job.get("source", ""),
                     )
+                    corrections = {}
+                    if not is_direct and (job.get("direct_apply_url") or job.get("source_url")):
+                        corrections["is_direct_apply"] = False
+                        corrections["direct_apply_url"] = ""
+                    elif is_direct and clean_url:
+                        corrections["is_direct_apply"] = True
+                        corrections["direct_apply_url"] = clean_url
+
                     if corrections:
                         db = await _get_db()
                         try:
@@ -214,12 +167,8 @@ async def scheduled_scrape():
                 except Exception as e:
                     logger.debug(f"[AI Quality] Error for job {job['id']}: {e}")
 
-            if direct_found:
-                logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(ai_batch)} jobs")
-            if skills_found:
-                logger.info(f"[AI Skills] Tagged {skills_found} jobs that regex missed")
             if quality_fixes:
-                logger.info(f"[AI Quality] Fixed {quality_fixes} jobs (work type / direct apply corrections)")
+                logger.info(f"[Quality] Fixed {quality_fixes} jobs (work type / direct apply corrections)")
 
         last_scrape_result = {
             "status": "ok",
