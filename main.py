@@ -6,10 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.4"
+BUILD_VERSION = "0.9.5"
 BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
-    {"version": "0.9.4", "date": "2026-03-30", "status": "active", "change": "Fixed keyword search — skips redundant job-title keywords, TOTAL JOBS shows all-time count"},
+    {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
     {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
     {"version": "0.9.1", "date": "2026-03-29", "status": "active", "change": "AI engine live — dedup catches near-duplicates, auto-detects direct apply URLs, 5-min scrape interval"},
     {"version": "0.9.0", "date": "2026-03-28", "status": "active", "change": "Visual redesign — premium glass styling for stats and filters, refined search bar"},
@@ -74,24 +74,36 @@ async def scheduled_scrape():
         logger.info(f"Starting scheduled scrape for {len(profiles)} profiles...")
         result = await run_scrape_cycle(profiles)
 
-        # Score new jobs
+        # Score new jobs — take BEST relevance across all profiles
         from database import get_jobs as _get_jobs, get_db as _get_db
         from ai_engine import extract_direct_link_ai
         new_jobs = await _get_jobs(hours=1, status="new", limit=100)
         for job in new_jobs:
+            best_relevance = 0
             for profile in profiles:
+                # Normalize keywords to list
+                kws = profile.get("keywords", [])
+                if isinstance(kws, str):
+                    kws = [k.strip() for k in kws.split(",") if k.strip()]
+                excl = profile.get("excluded_keywords", [])
+                if isinstance(excl, str):
+                    excl = [k.strip() for k in excl.split(",") if k.strip()]
+
                 relevance = await score_relevance_ai(
                     job["title"], job.get("description", ""),
                     profile["title"], profile.get("expanded_titles", []),
-                    profile.get("keywords", []), profile.get("excluded_keywords", []),
+                    kws, excl,
                 )
-                trust = await score_trust_ai(
-                    job["title"], job.get("company_name", ""),
-                    job.get("description", ""), job.get("salary_min", 0),
-                    job.get("salary_max", 0), job.get("company_domain", ""),
-                    job.get("source", ""),
-                )
-                await update_job_scores(job["id"], relevance, trust)
+                best_relevance = max(best_relevance, relevance)
+
+            # Trust score is profile-independent
+            trust = await score_trust_ai(
+                job["title"], job.get("company_name", ""),
+                job.get("description", ""), job.get("salary_min", 0),
+                job.get("salary_max", 0), job.get("company_domain", ""),
+                job.get("source", ""),
+            )
+            await update_job_scores(job["id"], best_relevance, trust)
 
         # AI enhancements for new jobs
         if settings.anthropic_api_key:
@@ -186,20 +198,15 @@ async def scheduled_deep_sweep():
 
             search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
-            # Include tool/platform keyword searches for deep sweep too
+            # Include keywords as standalone search terms for deep sweep too
             keywords = profile.get("keywords", [])
             if isinstance(keywords, str):
                 keywords = [k.strip() for k in keywords.split(",") if k.strip()]
-            title_words = {"analyst", "engineer", "developer", "manager", "scientist",
-                           "architect", "consultant", "lead", "director", "head", "staff"}
             for kw in keywords:
-                if any(tw in kw.lower() for tw in title_words):
-                    continue
-                combo = f"{kw} {title}"
-                if combo.lower() not in [s.lower() for s in search_terms]:
-                    search_terms.append(combo)
+                if kw.lower() not in [s.lower() for s in search_terms]:
+                    search_terms.append(kw)
 
-            for term in search_terms[:5]:  # allow more variants for deep sweep
+            for term in search_terms[:8]:  # allow more terms for deep sweep
                 for loc in (locations if locations else [""]):
                     try:
                         new_jobs = await scrape_jobspy(

@@ -113,13 +113,22 @@ async def score_relevance_ai(
     """Use Claude to score how relevant a job is to the target role (0-100)."""
 
     desc_lower = job_description.lower()
+    title_lower = job_title.lower()
+
     for kw in excluded_keywords:
-        if kw.lower() in desc_lower or kw.lower() in job_title.lower():
+        if kw.lower() in desc_lower or kw.lower() in title_lower:
             return 5
 
-    fuzzy_score = score_relevance_fuzzy(job_title, target_title, expanded_titles, keywords)
+    fuzzy_score = score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
 
-    if fuzzy_score > 85 or fuzzy_score < 20:
+    # High confidence: skip AI
+    if fuzzy_score > 85:
+        return fuzzy_score
+
+    # Low title match BUT has keyword hits in description — let AI decide
+    # (don't return early for low fuzzy if keywords match description)
+    keyword_in_desc = any(kw.lower() in desc_lower for kw in keywords if kw.strip())
+    if fuzzy_score < 20 and not keyword_in_desc:
         return fuzzy_score
 
     if not settings.anthropic_api_key:
@@ -128,6 +137,7 @@ async def score_relevance_ai(
     try:
         import anthropic
 
+        kw_str = ", ".join(keywords[:10]) if keywords else "none"
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -135,13 +145,14 @@ async def score_relevance_ai(
             messages=[{
                 "role": "user",
                 "content": f"""Score how relevant this job is to someone looking for a "{target_title}" role.
+They care about these tools/skills: {kw_str}
 
 Job Title: {job_title}
 Job Description (first 1000 chars): {job_description[:1000]}
 
 Score 0-100 where:
-- 90-100: Perfect match, same role
-- 70-89: Very similar role, transferable
+- 90-100: Perfect match for the role AND uses the right tools
+- 70-89: Very similar role, or strong tool/skill overlap
 - 40-69: Some overlap but different focus
 - 0-39: Not relevant
 
@@ -160,11 +171,12 @@ Return ONLY the number. Nothing else.""",
 
 def score_relevance_fuzzy(
     job_title: str,
+    job_description: str,
     target_title: str,
     expanded_titles: list[str],
     keywords: list[str] = [],
 ) -> int:
-    """Fast fuzzy matching score without AI."""
+    """Fast fuzzy matching score — checks title AND description keywords."""
     best_score = 0
 
     all_targets = [target_title] + expanded_titles
@@ -175,9 +187,16 @@ def score_relevance_fuzzy(
         s2 = fuzz.partial_ratio(job_title.lower(), target.lower())
         best_score = max(best_score, int(s2 * 0.9))
 
+    # Keyword boost — check BOTH title and description
     title_lower = job_title.lower()
+    desc_lower = job_description.lower() if job_description else ""
     for kw in keywords:
-        if kw.lower() in title_lower:
+        kw_lower = kw.lower().strip()
+        if not kw_lower:
+            continue
+        if kw_lower in title_lower:
+            best_score = min(100, best_score + 15)
+        elif kw_lower in desc_lower:
             best_score = min(100, best_score + 10)
 
     return min(100, best_score)
@@ -470,7 +489,11 @@ async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     target_title = profile["title"]
     expanded = profile.get("expanded_titles", [])
     keywords = profile.get("keywords", [])
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
     excluded = profile.get("excluded_keywords", [])
+    if isinstance(excluded, str):
+        excluded = [k.strip() for k in excluded.split(",") if k.strip()]
 
     scored = []
     for job in jobs:
