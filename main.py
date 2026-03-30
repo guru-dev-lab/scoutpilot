@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.7"
+BUILD_VERSION = "0.9.8"
 BUILD_DATE = "2026-03-30"
 RECENT_CHANGES = [
+    {"version": "0.9.8", "date": "2026-03-30", "status": "active", "change": "Scrape throttle — prevents overlapping cycles, batches AI scoring, keeps CPU/API usage under control"},
     {"version": "0.9.7", "date": "2026-03-30", "status": "active", "change": "AI data quality — verifies remote vs hybrid vs onsite from descriptions, strips fake Direct Apply (Easy Apply / Indeed)"},
     {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
     {"version": "0.9.3", "date": "2026-03-29", "status": "active", "change": "Keyword-powered search — profile keywords (MicroStrategy, Domo, etc.) now generate actual search queries, not just scoring"},
@@ -58,11 +59,19 @@ logger = logging.getLogger("scoutpilot")
 # Scheduler
 scheduler = AsyncIOScheduler()
 last_scrape_result = {"status": "idle", "timestamp": None}
+_scrape_running = False  # Lock to prevent overlapping cycles
 
 
 async def scheduled_scrape():
-    """Background scrape cycle."""
-    global last_scrape_result
+    """Background scrape cycle — with overlap prevention."""
+    global last_scrape_result, _scrape_running
+
+    # Skip if a cycle is already running
+    if _scrape_running:
+        logger.info("[Scrape] Skipping — previous cycle still running")
+        return
+    _scrape_running = True
+
     try:
         profiles = await get_profiles()
         if not profiles:
@@ -83,21 +92,30 @@ async def scheduled_scrape():
         from database import get_jobs as _get_jobs, get_db as _get_db
         from ai_engine import extract_direct_link_ai
         new_jobs = await _get_jobs(hours=1, status="new", limit=100)
+
+        # Build combined keyword/exclusion lists across all profiles for efficient scoring
+        all_profiles_data = []
+        for profile in profiles:
+            kws = profile.get("keywords", [])
+            if isinstance(kws, str):
+                kws = [k.strip() for k in kws.split(",") if k.strip()]
+            excl = profile.get("excluded_keywords", [])
+            if isinstance(excl, str):
+                excl = [k.strip() for k in excl.split(",") if k.strip()]
+            all_profiles_data.append({
+                "title": profile["title"],
+                "expanded": profile.get("expanded_titles", []),
+                "keywords": kws,
+                "excluded": excl,
+            })
+
         for job in new_jobs:
             best_relevance = 0
-            for profile in profiles:
-                # Normalize keywords to list
-                kws = profile.get("keywords", [])
-                if isinstance(kws, str):
-                    kws = [k.strip() for k in kws.split(",") if k.strip()]
-                excl = profile.get("excluded_keywords", [])
-                if isinstance(excl, str):
-                    excl = [k.strip() for k in excl.split(",") if k.strip()]
-
+            for pd in all_profiles_data:
                 relevance = await score_relevance_ai(
                     job["title"], job.get("description", ""),
-                    profile["title"], profile.get("expanded_titles", []),
-                    kws, excl,
+                    pd["title"], pd["expanded"],
+                    pd["keywords"], pd["excluded"],
                 )
                 best_relevance = max(best_relevance, relevance)
 
@@ -110,14 +128,16 @@ async def scheduled_scrape():
             )
             await update_job_scores(job["id"], best_relevance, trust)
 
-        # AI enhancements for new jobs
-        if settings.anthropic_api_key:
-            from ai_engine import extract_skills_ai
+        # AI enhancements for new jobs (capped at 20 per cycle to keep it fast)
+        if settings.anthropic_api_key and new_jobs:
+            from ai_engine import extract_skills_ai, verify_job_quality_ai
 
-            # AI direct link detection — find actual company career page URLs
+            ai_batch = new_jobs[:20]  # Cap AI processing per cycle
             direct_found = 0
             skills_found = 0
-            for job in new_jobs:
+            quality_fixes = 0
+
+            for job in ai_batch:
                 # Direct link detection
                 if not job.get("direct_apply_url") and job.get("description"):
                     try:
@@ -163,15 +183,7 @@ async def scheduled_scrape():
                     except Exception as e:
                         logger.debug(f"[AI Skills] Error for job {job['id']}: {e}")
 
-            if direct_found:
-                logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(new_jobs)} new jobs")
-            if skills_found:
-                logger.info(f"[AI Skills] Tagged {skills_found} jobs that regex missed")
-
-            # AI data quality verification — fix mislabeled work types and fake direct apply
-            from ai_engine import verify_job_quality_ai
-            quality_fixes = 0
-            for job in new_jobs:
+                # AI data quality verification — fix mislabeled work types and fake direct apply
                 try:
                     corrections = await verify_job_quality_ai(
                         job.get("title", ""),
@@ -202,6 +214,10 @@ async def scheduled_scrape():
                 except Exception as e:
                     logger.debug(f"[AI Quality] Error for job {job['id']}: {e}")
 
+            if direct_found:
+                logger.info(f"[AI Direct Link] Found {direct_found} direct apply URLs from {len(ai_batch)} jobs")
+            if skills_found:
+                logger.info(f"[AI Skills] Tagged {skills_found} jobs that regex missed")
             if quality_fixes:
                 logger.info(f"[AI Quality] Fixed {quality_fixes} jobs (work type / direct apply corrections)")
 
@@ -219,12 +235,21 @@ async def scheduled_scrape():
             "error": str(e),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+    finally:
+        _scrape_running = False
 
 
 async def scheduled_deep_sweep():
     """Deep sweep — looks back 7 days to catch jobs missed by regular scrapes.
     Runs every 6 hours. Uses more results per query and wider time window."""
-    global last_scrape_result
+    global last_scrape_result, _scrape_running
+
+    # Don't deep sweep while a regular scrape is running
+    if _scrape_running:
+        logger.info("[Deep Sweep] Skipping — regular scrape is running")
+        return
+
+    _scrape_running = True
     try:
         profiles = await get_profiles()
         if not profiles:
@@ -292,6 +317,8 @@ async def scheduled_deep_sweep():
             }
     except Exception as e:
         logger.error(f"[Deep Sweep] Failed: {e}")
+    finally:
+        _scrape_running = False
 
 
 async def scheduled_cleanup():
@@ -320,6 +347,8 @@ async def lifespan(app: FastAPI):
         id="scrape_cycle",
         replace_existing=True,
         next_run_time=datetime.now(timezone.utc),  # Run immediately on startup
+        max_instances=1,  # Never overlap
+        misfire_grace_time=60,  # Skip if missed by > 60s
     )
     scheduler.add_job(
         scheduled_deep_sweep,
@@ -676,6 +705,8 @@ _background_tasks = set()  # prevent GC of background tasks
 @app.post("/api/scrape")
 async def api_trigger_scrape():
     """Manually trigger a scrape cycle."""
+    if _scrape_running:
+        return {"status": "already_running", "message": "A scrape cycle is already in progress"}
     task = asyncio.create_task(scheduled_scrape())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
