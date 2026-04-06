@@ -363,7 +363,7 @@ async def scrape_jobspy(
     Runs in a thread since JobSpy is synchronous.
     """
     if sites is None:
-        sites = ["indeed", "linkedin", "google"]  # Skip glassdoor/zip (slow/unreliable)
+        sites = ["indeed", "linkedin", "google"]
 
     logger.info(f"[JobSpy] Searching: '{search_term}' | location: '{location}' | sites: {sites}")
 
@@ -375,7 +375,7 @@ async def scrape_jobspy(
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
                 "country_indeed": "USA",
-                "linkedin_fetch_description": False,  # Skip — this hangs frequently
+                "linkedin_fetch_description": False,
                 "description_format": "markdown",
                 "verbose": 0,
             }
@@ -383,19 +383,22 @@ async def scrape_jobspy(
                 kwargs["location"] = location
 
             results = scrape_jobs(**kwargs)
+            logger.info(f"[JobSpy] Raw results for '{search_term}': {len(results) if results is not None and not results.empty else 0} rows")
             return results
         except Exception as e:
-            logger.error(f"[JobSpy] Error: {e}")
+            logger.error(f"[JobSpy] Error scraping '{search_term}': {e}")
+            import traceback
+            logger.error(f"[JobSpy] Traceback: {traceback.format_exc()}")
             return None
 
     loop = asyncio.get_event_loop()
     try:
         df = await asyncio.wait_for(
             loop.run_in_executor(None, _scrape),
-            timeout=60,  # Kill if takes longer than 60 seconds
+            timeout=120,  # 2 min per query — JobSpy hits multiple sites
         )
     except asyncio.TimeoutError:
-        logger.warning(f"[JobSpy] TIMEOUT after 60s for '{search_term}' — skipping")
+        logger.warning(f"[JobSpy] TIMEOUT after 120s for '{search_term}' — skipping")
         return []
 
     if df is None or df.empty:
@@ -810,22 +813,22 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
 
         for term in search_terms[:3]:  # cap at 3 to keep cycle under 5 min
             for loc in (locations if locations else [""]):
-                try:
-                    # JobSpy only for regular cycles (fast)
-                    # SerpApi/JSearch/Remotive/TheMuse run in deep sweeps only
-                    new_jobs = await scrape_jobspy(
-                        search_term=term,
-                        location=loc,
-                        results_wanted=20,
-                        hours_old=hours,
-                        profile_id=profile_id,
-                    )
-                    total_new += len(new_jobs)
-
-                except Exception as e:
-                    err_msg = f"Error scraping '{term}' in '{loc}': {e}"
-                    logger.error(err_msg)
-                    errors.append(err_msg)
+                # Scrape each site individually so one slow site doesn't block others
+                for site in ["indeed", "linkedin", "google"]:
+                    try:
+                        new_jobs = await scrape_jobspy(
+                            search_term=term,
+                            location=loc,
+                            results_wanted=15,
+                            hours_old=hours,
+                            profile_id=profile_id,
+                            sites=[site],
+                        )
+                        total_new += len(new_jobs)
+                    except Exception as e:
+                        err_msg = f"Error scraping '{term}' on {site}: {e}"
+                        logger.error(err_msg)
+                        errors.append(err_msg)
 
     return {
         "new_jobs": total_new,
