@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "0.9.9"
-BUILD_DATE = "2026-03-30"
+BUILD_VERSION = "1.0.0"
+BUILD_DATE = "2026-04-06"
 RECENT_CHANGES = [
+    {"version": "1.0.0", "date": "2026-04-06", "status": "active", "change": "Reliability — 60s timeout per scrape query (no more hanging), 5-day auto-archive, startup cleanup, reduced to 3 fast sites"},
     {"version": "0.9.9", "date": "2026-03-30", "status": "active", "change": "Fast scrape — 3 profiles per cycle, JobSpy only, fuzzy scoring (no AI calls), heuristic quality checks. Deep sweep handles full AI."},
     {"version": "0.9.7", "date": "2026-03-30", "status": "active", "change": "AI data quality — verifies remote vs hybrid vs onsite from descriptions, strips fake Direct Apply (Easy Apply / Indeed)"},
     {"version": "0.9.5", "date": "2026-03-30", "status": "active", "change": "Search overhaul — keywords searched standalone to find jobs by description, scoring checks descriptions not just titles, best-match scoring across profiles"},
@@ -288,6 +289,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_archive_table()
     logger.info("Database initialized (with archive table)")
+
+    # Run cleanup on startup to archive stale jobs immediately
+    try:
+        result = await cleanup_old_jobs()
+        logger.info(
+            f"[Startup Cleanup] Archived {result['archived']} jobs older than 5 days, "
+            f"purged {result['purged']}. Active: {result['active_jobs']}"
+        )
+    except Exception as e:
+        logger.error(f"[Startup Cleanup] Failed: {e}")
 
     scheduler.add_job(
         scheduled_scrape,

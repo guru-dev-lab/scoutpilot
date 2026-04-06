@@ -363,7 +363,7 @@ async def scrape_jobspy(
     Runs in a thread since JobSpy is synchronous.
     """
     if sites is None:
-        sites = ["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"]
+        sites = ["indeed", "linkedin", "google"]  # Skip glassdoor/zip (slow/unreliable)
 
     logger.info(f"[JobSpy] Searching: '{search_term}' | location: '{location}' | sites: {sites}")
 
@@ -375,8 +375,8 @@ async def scrape_jobspy(
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
                 "country_indeed": "USA",
-                "linkedin_fetch_description": True,   # Pull FULL descriptions from LinkedIn
-                "description_format": "markdown",     # Get rich descriptions where available
+                "linkedin_fetch_description": False,  # Skip — this hangs frequently
+                "description_format": "markdown",
                 "verbose": 0,
             }
             if location:
@@ -389,7 +389,14 @@ async def scrape_jobspy(
             return None
 
     loop = asyncio.get_event_loop()
-    df = await loop.run_in_executor(None, _scrape)
+    try:
+        df = await asyncio.wait_for(
+            loop.run_in_executor(None, _scrape),
+            timeout=60,  # Kill if takes longer than 60 seconds
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[JobSpy] TIMEOUT after 60s for '{search_term}' — skipping")
+        return []
 
     if df is None or df.empty:
         logger.info("[JobSpy] No results returned")

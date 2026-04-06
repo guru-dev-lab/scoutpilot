@@ -509,7 +509,7 @@ async def delete_profile(profile_id: int):
 
 # --- Data Retention / Cleanup ---
 
-ARCHIVE_AFTER_DAYS = 14   # Move jobs older than this to archive
+ARCHIVE_AFTER_DAYS = 5    # Move jobs older than 5 days to archive
 PURGE_AFTER_DAYS = 90     # Delete archived jobs older than this
 
 
