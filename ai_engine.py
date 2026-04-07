@@ -110,29 +110,19 @@ async def score_relevance_ai(
     keywords: list[str] = [],
     excluded_keywords: list[str] = [],
 ) -> int:
-    """Use Claude to score how relevant a job is to the target role (0-100)."""
+    """Use Claude AI to score how relevant a job is to the target role (0-100).
+    AI is the SOLE scorer — no fuzzy gates. Understands role families natively."""
 
+    # Quick exclude check — blocked keywords = instant reject
     desc_lower = job_description.lower()
     title_lower = job_title.lower()
-
     for kw in excluded_keywords:
         if kw.lower() in desc_lower or kw.lower() in title_lower:
             return 5
 
-    fuzzy_score = score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
-
-    # High confidence: skip AI
-    if fuzzy_score > 85:
-        return fuzzy_score
-
-    # Low title match BUT has keyword hits in description — let AI decide
-    # (don't return early for low fuzzy if keywords match description)
-    keyword_in_desc = any(kw.lower() in desc_lower for kw in keywords if kw.strip())
-    if fuzzy_score < 20 and not keyword_in_desc:
-        return fuzzy_score
-
+    # Fall back to fuzzy only if no API key
     if not settings.anthropic_api_key:
-        return fuzzy_score
+        return score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
 
     try:
         import anthropic
@@ -141,25 +131,23 @@ async def score_relevance_ai(
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=50,
+            max_tokens=10,
             messages=[{
                 "role": "user",
-                "content": f"""Score how relevant this job is to someone looking for a "{target_title}" role.
-They care about these tools/skills: {kw_str}
+                "content": f"""Does this job match the "{target_title}" profile? Tools/skills they want: {kw_str}
 
-IMPORTANT: Related roles should score HIGH. For example:
-- "Data Analyst" ≈ "BI Analyst" ≈ "Business Intelligence Analyst" ≈ "BI Developer" ≈ "Analytics Engineer" ≈ "Reporting Analyst"
-- "Civil Engineer" ≈ "Structural Engineer" ≈ "Infrastructure Engineer"
-- "Security Engineer" ≈ "SOC Analyst" ≈ "InfoSec Engineer"
+Job: {job_title}
+Description: {job_description[:600]}
 
-Job Title: {job_title}
-Job Description (first 800 chars): {job_description[:800]}
+Score 0-100. Related roles = HIGH score:
+Data Analyst ≈ BI Analyst ≈ BI Developer ≈ Analytics Engineer ≈ Reporting Analyst ≈ Business Intelligence
+Civil Engineer ≈ Structural Engineer ≈ Infrastructure Engineer
+Security Engineer ≈ SOC Analyst ≈ InfoSec Engineer
 
-Score 0-100:
-- 90-100: Same role family (Data Analyst ↔ BI Analyst) or perfect title match
-- 75-89: Closely related role with overlapping skills/tools
-- 40-74: Some overlap but different career path
-- 0-39: Not relevant at all
+90-100 = same role family or exact match
+75-89 = closely related, overlapping skills
+40-74 = some overlap, different path
+0-39 = not relevant
 
 Return ONLY the number.""",
             }],
@@ -171,7 +159,8 @@ Return ONLY the number.""",
     except Exception as e:
         logger.error(f"[AI] Relevance scoring failed: {e}")
 
-    return fuzzy_score
+    # Fallback to fuzzy if AI call fails
+    return score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
 
 
 def score_relevance_fuzzy(

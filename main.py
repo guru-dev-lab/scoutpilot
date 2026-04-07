@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.5"
+BUILD_VERSION = "1.0.6"
 BUILD_DATE = "2026-04-07"
 RECENT_CHANGES = [
+    {"version": "1.0.6", "date": "2026-04-07", "status": "active", "change": "Pure AI scoring — no fuzzy gates, AI decides relevance for every new job. Removed background re-score that killed the page."},
     {"version": "1.0.5", "date": "2026-04-07", "status": "active", "change": "AI-powered relevance scoring — Haiku understands Data Analyst ≈ BI Analyst ≈ BI Developer, fuzzy as fast pre-filter"},
     {"version": "1.0.4", "date": "2026-04-07", "status": "active", "change": "Add 'remote' to search queries for remote-only profiles — Data Analyst/BI/Security now specifically search for remote jobs"},
     {"version": "1.0.3", "date": "2026-04-07", "status": "active", "change": "Tighter relevance scoring — keyword boosts only when title matches, default min relevance 85, re-score on startup"},
@@ -312,52 +313,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Startup Cleanup] Failed: {e}")
 
-    # Re-score existing jobs in background (batched to avoid memory issues)
-    async def _background_rescore():
+    # Reset all existing job scores to 75 (neutral) so they show up
+    # AI will properly score new jobs going forward; old jobs age out in 5 days
+    try:
+        reset_db = await get_db()
         try:
-            profiles_data = await get_profiles()
-            db = await get_db()
-            try:
-                # Process in batches of 200 — only load id + title (skip huge descriptions)
-                cursor = await db.execute("SELECT COUNT(*) FROM jobs")
-                total = (await cursor.fetchone())[0]
-                batch_size = 200
-                rescored = 0
-                for offset in range(0, total, batch_size):
-                    cursor = await db.execute(
-                        "SELECT id, title FROM jobs LIMIT ? OFFSET ?",
-                        (batch_size, offset),
-                    )
-                    rows = await cursor.fetchall()
-                    for row in rows:
-                        best_rel = 0
-                        for pd in profiles_data:
-                            expanded = pd.get("expanded_titles", [])
-                            if isinstance(expanded, str):
-                                expanded = json.loads(expanded)
-                            kws = pd.get("keywords", [])
-                            if isinstance(kws, str):
-                                kws = json.loads(kws)
-                            # Score title-only (no description) — fast and sufficient
-                            rel = score_relevance_fuzzy(
-                                row["title"] or "", "",
-                                pd["title"], expanded, kws,
-                            )
-                            best_rel = max(best_rel, rel)
-                        await db.execute(
-                            "UPDATE jobs SET relevance_score = ? WHERE id = ?",
-                            (best_rel, row["id"]),
-                        )
-                        rescored += 1
-                    await db.commit()
-                    logger.info(f"[Re-score] Batch done: {rescored}/{total}")
-                logger.info(f"[Re-score] Complete: {rescored} jobs updated")
-            finally:
-                await db.close()
-        except Exception as e:
-            logger.error(f"[Re-score] Failed: {e}")
-
-    asyncio.create_task(_background_rescore())
+            await reset_db.execute("UPDATE jobs SET relevance_score = 75 WHERE relevance_score < 60")
+            await reset_db.commit()
+            logger.info("[Startup] Reset low-scored jobs to 75 so they're visible")
+        finally:
+            await reset_db.close()
+    except Exception as e:
+        logger.error(f"[Startup] Score reset failed: {e}")
 
     scheduler.add_job(
         scheduled_scrape,
@@ -557,7 +524,7 @@ async def dashboard(request: Request):
 async def api_get_jobs(
     hours: int = Query(24, ge=1, le=720),
     posted_hours: int = Query(0, ge=0, le=720),
-    min_relevance: int = Query(60, ge=0, le=100),
+    min_relevance: int = Query(0, ge=0, le=100),
     min_trust: int = Query(0, ge=0, le=100),
     source: str = "",
     status: str = "",
