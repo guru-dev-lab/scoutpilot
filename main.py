@@ -557,7 +557,7 @@ async def dashboard(request: Request):
 async def api_get_jobs(
     hours: int = Query(24, ge=1, le=720),
     posted_hours: int = Query(0, ge=0, le=720),
-    min_relevance: int = Query(85, ge=0, le=100),
+    min_relevance: int = Query(60, ge=0, le=100),
     min_trust: int = Query(0, ge=0, le=100),
     source: str = "",
     status: str = "",

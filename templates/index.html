@@ -330,7 +330,7 @@
 
   <div class="header">
     <div>
-      <h1>ScoutPilot <span id="buildBadge" class="build-badge" onclick="toggleChangelog()" title="Click for changelog"></span></h1>
+      <h1>ScoutPilot</h1>
       <div class="scrape-status" id="scrapeStatus">
         <span class="dot gray"></span> Initializing...
       </div>
@@ -849,7 +849,7 @@ loadBuildInfo();
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
   const postedHours = document.getElementById('filterPostedHours').value;
-  const relevance = 85;
+  const relevance = 60;
   const source = document.getElementById('filterSource').value;
   const workType = document.getElementById('filterWorkType').value;
   const status = document.getElementById('filterStatus').value;
