@@ -193,13 +193,22 @@ def score_relevance_fuzzy(
     for target in all_targets:
         target_lower = target.lower()
 
+        # Exact substring — if "Data Analyst" appears verbatim in the job title,
+        # that's a strong signal even if the title has extra words like salary/location
+        if target_lower in job_lower:
+            # Score based on how much of the job title the target covers
+            coverage = len(target_lower) / max(len(job_lower), 1)
+            # "Data Analyst" in "Data Analyst" = 100, in "Senior Data Analyst" = 93
+            # "Data Analyst" in "Data Analyst (Annotation) | $30/hr Remote" = 90
+            # "Manager" in "Millwork Installation Project Manager" = only ~80
+            substr_score = int(85 + coverage * 15)
+            best_score = max(best_score, min(100, substr_score))
+
         # Full token sort — best for rearranged words ("Sr Data Analyst" ≈ "Data Analyst Sr")
         s = fuzz.token_sort_ratio(job_lower, target_lower)
         best_score = max(best_score, s)
 
-        # Partial ratio — catches substring matches but weight it down
-        # so "Project Manager" inside "Millwork Installation Project Manager"
-        # doesn't score as high as a real Project Manager match
+        # Partial ratio — catches near-matches but weighted down
         s2 = fuzz.partial_ratio(job_lower, target_lower)
         best_score = max(best_score, int(s2 * 0.75))
 
