@@ -6,10 +6,11 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.3"
+BUILD_VERSION = "1.0.4"
 BUILD_DATE = "2026-04-07"
 RECENT_CHANGES = [
-    {"version": "1.0.3", "date": "2026-04-07", "status": "active", "change": "Tighter relevance scoring — keyword boosts only when title matches, default min relevance 70, re-score on startup"},
+    {"version": "1.0.4", "date": "2026-04-07", "status": "active", "change": "Add 'remote' to search queries for remote-only profiles — Data Analyst/BI/Security now specifically search for remote jobs"},
+    {"version": "1.0.3", "date": "2026-04-07", "status": "active", "change": "Tighter relevance scoring — keyword boosts only when title matches, default min relevance 85, re-score on startup"},
     {"version": "1.0.2", "date": "2026-04-07", "status": "active", "change": "All 10 profiles scraped every cycle (1 rotating search term each) — no more skipping Data Analyst for 20min"},
     {"version": "1.0.1", "date": "2026-04-06", "status": "active", "change": "Scrape each site individually (Indeed/LinkedIn/Google) so one slow site doesn't block others, 2min timeout, better error logging"},
     {"version": "1.0.0", "date": "2026-04-06", "status": "active", "change": "Reliability — 60s timeout per scrape query (no more hanging), 5-day auto-archive, startup cleanup, reduced to 3 fast sites"},

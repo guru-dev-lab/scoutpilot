@@ -798,6 +798,10 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
                 if kw.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(kw)
 
+        # When profile is remote-only, add "remote" to the search term
+        # so job boards return remote positions instead of mostly onsite
+        is_remote_only = profile.get("remote_only", 0)
+
         # Rotate: pick 1 term per cycle for this profile, cycling through all terms
         all_terms = search_terms[:5]  # max 5 possible terms
         pid = profile_id or 0
@@ -805,12 +809,15 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
         term = all_terms[term_idx] if all_terms else title
         _term_offset[pid] = term_idx + 1
 
+        # Append "remote" to search for remote-only profiles
+        effective_term = f"{term} remote" if is_remote_only else term
+
         for loc in (locations if locations else [""]):
             # Scrape each site individually so one slow site doesn't block others
             for site in ["indeed", "linkedin", "google"]:
                 try:
                     new_jobs = await scrape_jobspy(
-                        search_term=term,
+                        search_term=effective_term,
                         location=loc,
                         results_wanted=15,
                         hours_old=hours,
@@ -823,7 +830,7 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
                     logger.error(err_msg)
                     errors.append(err_msg)
 
-        logger.info(f"[Scrape] Profile '{title}' term='{term}' (idx {term_idx}/{len(all_terms)})")
+        logger.info(f"[Scrape] Profile '{title}' term='{effective_term}' (idx {term_idx}/{len(all_terms)}, remote_only={is_remote_only})")
 
     return {
         "new_jobs": total_new,
