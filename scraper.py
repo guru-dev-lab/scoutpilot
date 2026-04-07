@@ -755,34 +755,21 @@ async def scrape_themuse(
     return jobs
 
 
-_cycle_offset = 0  # Rotate which profiles get scraped each cycle
+_term_offset = {}  # Track which search term each profile is on
 
 async def run_scrape_cycle(profiles: list[dict]) -> dict:
     """
-    Run a fast scrape cycle for a batch of profiles (max 3 per cycle).
-    Profiles rotate each cycle so all get coverage over time.
-    Returns summary stats.
+    Run a scrape cycle for ALL profiles every time.
+    Each profile gets 1 search term per cycle, rotating through its terms.
+    This ensures every profile gets fresh data every 5 minutes.
     """
-    global _cycle_offset
+    global _term_offset
     total_new = 0
     errors = []
 
-    # Rotate: scrape 3 profiles per cycle, cycling through all
-    batch_size = 3
-    start = _cycle_offset % len(profiles) if profiles else 0
-    batch = []
-    for i in range(batch_size):
-        idx = (start + i) % len(profiles)
-        if len(batch) < len(profiles):  # don't exceed total profiles
-            batch.append(profiles[idx])
-    # Deduplicate in case fewer profiles than batch_size
-    seen_ids = set()
-    batch = [p for p in batch if p["id"] not in seen_ids and not seen_ids.add(p["id"])]
-    _cycle_offset += batch_size
+    logger.info(f"[Scrape] Cycle for all {len(profiles)} profiles (1 term each)")
 
-    logger.info(f"[Scrape] Cycle batch: {[p['title'] for p in batch]} ({len(batch)}/{len(profiles)} profiles)")
-
-    for profile in batch:
+    for profile in profiles:
         title = profile["title"]
         expanded = profile.get("expanded_titles", [])
         locations = profile.get("locations", [])
@@ -811,24 +798,32 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
                 if kw.lower() not in [s.lower() for s in search_terms]:
                     search_terms.append(kw)
 
-        for term in search_terms[:3]:  # cap at 3 to keep cycle under 5 min
-            for loc in (locations if locations else [""]):
-                # Scrape each site individually so one slow site doesn't block others
-                for site in ["indeed", "linkedin", "google"]:
-                    try:
-                        new_jobs = await scrape_jobspy(
-                            search_term=term,
-                            location=loc,
-                            results_wanted=15,
-                            hours_old=hours,
-                            profile_id=profile_id,
-                            sites=[site],
-                        )
-                        total_new += len(new_jobs)
-                    except Exception as e:
-                        err_msg = f"Error scraping '{term}' on {site}: {e}"
-                        logger.error(err_msg)
-                        errors.append(err_msg)
+        # Rotate: pick 1 term per cycle for this profile, cycling through all terms
+        all_terms = search_terms[:5]  # max 5 possible terms
+        pid = profile_id or 0
+        term_idx = _term_offset.get(pid, 0) % len(all_terms) if all_terms else 0
+        term = all_terms[term_idx] if all_terms else title
+        _term_offset[pid] = term_idx + 1
+
+        for loc in (locations if locations else [""]):
+            # Scrape each site individually so one slow site doesn't block others
+            for site in ["indeed", "linkedin", "google"]:
+                try:
+                    new_jobs = await scrape_jobspy(
+                        search_term=term,
+                        location=loc,
+                        results_wanted=15,
+                        hours_old=hours,
+                        profile_id=profile_id,
+                        sites=[site],
+                    )
+                    total_new += len(new_jobs)
+                except Exception as e:
+                    err_msg = f"Error scraping '{term}' on {site}: {e}"
+                    logger.error(err_msg)
+                    errors.append(err_msg)
+
+        logger.info(f"[Scrape] Profile '{title}' term='{term}' (idx {term_idx}/{len(all_terms)})")
 
     return {
         "new_jobs": total_new,

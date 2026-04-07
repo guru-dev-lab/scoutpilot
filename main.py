@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.1"
-BUILD_DATE = "2026-04-06"
+BUILD_VERSION = "1.0.2"
+BUILD_DATE = "2026-04-07"
 RECENT_CHANGES = [
+    {"version": "1.0.2", "date": "2026-04-07", "status": "active", "change": "All 10 profiles scraped every cycle (1 rotating search term each) — no more skipping Data Analyst for 20min"},
     {"version": "1.0.1", "date": "2026-04-06", "status": "active", "change": "Scrape each site individually (Indeed/LinkedIn/Google) so one slow site doesn't block others, 2min timeout, better error logging"},
     {"version": "1.0.0", "date": "2026-04-06", "status": "active", "change": "Reliability — 60s timeout per scrape query (no more hanging), 5-day auto-archive, startup cleanup, reduced to 3 fast sites"},
     {"version": "0.9.9", "date": "2026-03-30", "status": "active", "change": "Fast scrape — 3 profiles per cycle, JobSpy only, fuzzy scoring (no AI calls), heuristic quality checks. Deep sweep handles full AI."},
