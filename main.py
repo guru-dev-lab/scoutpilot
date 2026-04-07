@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.2"
+BUILD_VERSION = "1.0.3"
 BUILD_DATE = "2026-04-07"
 RECENT_CHANGES = [
+    {"version": "1.0.3", "date": "2026-04-07", "status": "active", "change": "Tighter relevance scoring — keyword boosts only when title matches, default min relevance 70, re-score on startup"},
     {"version": "1.0.2", "date": "2026-04-07", "status": "active", "change": "All 10 profiles scraped every cycle (1 rotating search term each) — no more skipping Data Analyst for 20min"},
     {"version": "1.0.1", "date": "2026-04-06", "status": "active", "change": "Scrape each site individually (Indeed/LinkedIn/Google) so one slow site doesn't block others, 2min timeout, better error logging"},
     {"version": "1.0.0", "date": "2026-04-06", "status": "active", "change": "Reliability — 60s timeout per scrape query (no more hanging), 5-day auto-archive, startup cleanup, reduced to 3 fast sites"},
@@ -302,6 +303,40 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Startup Cleanup] Failed: {e}")
 
+    # Re-score ALL existing jobs with updated fuzzy scoring
+    try:
+        all_profiles_data = await get_profiles()
+        rescore_db = await get_db()
+        try:
+            cursor = await rescore_db.execute("SELECT id, title, description FROM jobs")
+            rows = await cursor.fetchall()
+            rescored = 0
+            for row in rows:
+                best_relevance = 0
+                for pd in all_profiles_data:
+                    expanded = pd.get("expanded_titles", [])
+                    if isinstance(expanded, str):
+                        expanded = json.loads(expanded)
+                    kws = pd.get("keywords", [])
+                    if isinstance(kws, str):
+                        kws = json.loads(kws)
+                    relevance = score_relevance_fuzzy(
+                        row["title"] or "", row["description"] or "",
+                        pd["title"], expanded, kws,
+                    )
+                    best_relevance = max(best_relevance, relevance)
+                await rescore_db.execute(
+                    "UPDATE jobs SET relevance_score = ? WHERE id = ?",
+                    (best_relevance, row["id"]),
+                )
+                rescored += 1
+            await rescore_db.commit()
+            logger.info(f"[Startup Re-score] Updated {rescored} jobs with tighter scoring")
+        finally:
+            await rescore_db.close()
+    except Exception as e:
+        logger.error(f"[Startup Re-score] Failed: {e}")
+
     scheduler.add_job(
         scheduled_scrape,
         "interval",
@@ -500,7 +535,7 @@ async def dashboard(request: Request):
 async def api_get_jobs(
     hours: int = Query(24, ge=1, le=720),
     posted_hours: int = Query(0, ge=0, le=720),
-    min_relevance: int = Query(0, ge=0, le=100),
+    min_relevance: int = Query(70, ge=0, le=100),
     min_trust: int = Query(0, ge=0, le=100),
     source: str = "",
     status: str = "",

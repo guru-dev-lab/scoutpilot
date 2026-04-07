@@ -176,28 +176,52 @@ def score_relevance_fuzzy(
     expanded_titles: list[str],
     keywords: list[str] = [],
 ) -> int:
-    """Fast fuzzy matching score — checks title AND description keywords."""
-    best_score = 0
+    """
+    Fast fuzzy matching score — checks title similarity then keyword boosts.
 
+    Scoring tiers:
+      - token_sort_ratio:  full weight (good for reordered words)
+      - partial_ratio:     0.75× weight (penalize partial-only matches)
+      - keyword boost:     only if base title score >= 40 (prevents generic
+        keywords like "SQL" from inflating completely unrelated jobs)
+    """
+    best_score = 0
+    job_lower = job_title.lower()
+
+    # --- Title matching ---
     all_targets = [target_title] + expanded_titles
     for target in all_targets:
-        s = fuzz.token_sort_ratio(job_title.lower(), target.lower())
+        target_lower = target.lower()
+
+        # Full token sort — best for rearranged words ("Sr Data Analyst" ≈ "Data Analyst Sr")
+        s = fuzz.token_sort_ratio(job_lower, target_lower)
         best_score = max(best_score, s)
 
-        s2 = fuzz.partial_ratio(job_title.lower(), target.lower())
-        best_score = max(best_score, int(s2 * 0.9))
+        # Partial ratio — catches substring matches but weight it down
+        # so "Project Manager" inside "Millwork Installation Project Manager"
+        # doesn't score as high as a real Project Manager match
+        s2 = fuzz.partial_ratio(job_lower, target_lower)
+        best_score = max(best_score, int(s2 * 0.75))
 
-    # Keyword boost — check BOTH title and description
-    title_lower = job_title.lower()
-    desc_lower = job_description.lower() if job_description else ""
-    for kw in keywords:
-        kw_lower = kw.lower().strip()
-        if not kw_lower:
-            continue
-        if kw_lower in title_lower:
-            best_score = min(100, best_score + 15)
-        elif kw_lower in desc_lower:
-            best_score = min(100, best_score + 10)
+    base_title_score = best_score
+
+    # --- Keyword boost (only if title already has a reasonable match) ---
+    # This prevents generic keywords ("SQL", "Excel", "CRM") from inflating
+    # scores for completely unrelated jobs like "Customer Success Manager"
+    if base_title_score >= 40:
+        title_lower = job_lower
+        desc_lower = job_description.lower() if job_description else ""
+        keyword_boost = 0
+        for kw in keywords:
+            kw_lower = kw.lower().strip()
+            if not kw_lower:
+                continue
+            if kw_lower in title_lower:
+                keyword_boost += 12
+            elif kw_lower in desc_lower:
+                keyword_boost += 5
+        # Cap total keyword boost at 20 points
+        best_score = min(100, best_score + min(keyword_boost, 20))
 
     return min(100, best_score)
 
