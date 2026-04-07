@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.4"
+BUILD_VERSION = "1.0.5"
 BUILD_DATE = "2026-04-07"
 RECENT_CHANGES = [
+    {"version": "1.0.5", "date": "2026-04-07", "status": "active", "change": "AI-powered relevance scoring — Haiku understands Data Analyst ≈ BI Analyst ≈ BI Developer, fuzzy as fast pre-filter"},
     {"version": "1.0.4", "date": "2026-04-07", "status": "active", "change": "Add 'remote' to search queries for remote-only profiles — Data Analyst/BI/Security now specifically search for remote jobs"},
     {"version": "1.0.3", "date": "2026-04-07", "status": "active", "change": "Tighter relevance scoring — keyword boosts only when title matches, default min relevance 85, re-score on startup"},
     {"version": "1.0.2", "date": "2026-04-07", "status": "active", "change": "All 10 profiles scraped every cycle (1 rotating search term each) — no more skipping Data Analyst for 20min"},
@@ -93,9 +94,11 @@ async def scheduled_scrape():
         }
         result = await run_scrape_cycle(profiles)
 
-        # Score new jobs — use FAST fuzzy scoring (no AI calls in regular cycle)
+        # Score new jobs — AI-powered relevance scoring
+        # Uses Haiku for smart matching: understands "Data Analyst" ≈ "BI Analyst" ≈ "BI Developer"
+        # Fuzzy runs first as fast pre-filter; AI only called when score is ambiguous (20-85)
         from database import get_jobs as _get_jobs, get_db as _get_db
-        from ai_engine import score_relevance_fuzzy, extract_direct_link_ai
+        from ai_engine import score_relevance_ai, score_relevance_fuzzy, extract_direct_link_ai
         new_jobs = await _get_jobs(hours=1, status="new", limit=100)
 
         # Build combined keyword/exclusion lists across all profiles
@@ -114,20 +117,25 @@ async def scheduled_scrape():
                 "excluded": excl,
             })
 
+        ai_scored = 0
         for job in new_jobs:
             best_relevance = 0
             for pd in all_profiles_data:
-                # Fast fuzzy scoring — no API calls, instant
-                relevance = score_relevance_fuzzy(
+                # AI scoring — calls Haiku only when fuzzy is ambiguous (20-85)
+                # High fuzzy (>85) and low fuzzy (<20) skip the API call
+                relevance = await score_relevance_ai(
                     job["title"], job.get("description", ""),
                     pd["title"], pd["expanded"],
-                    pd["keywords"],
+                    pd["keywords"], pd["excluded"],
                 )
                 best_relevance = max(best_relevance, relevance)
 
-            # Trust: use 50 as default (neutral) — deep sweep will refine with AI
-            trust = 50
+            trust = 50  # Deep sweep refines trust with AI
             await update_job_scores(job["id"], best_relevance, trust)
+            ai_scored += 1
+
+        if ai_scored:
+            logger.info(f"[Scrape] AI-scored {ai_scored} new jobs")
 
         # AI enhancements for new jobs (capped at 20 per cycle to keep it fast)
         # Light pass — heuristic-only quality checks (NO API calls)

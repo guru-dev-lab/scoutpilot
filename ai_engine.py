@@ -147,16 +147,21 @@ async def score_relevance_ai(
                 "content": f"""Score how relevant this job is to someone looking for a "{target_title}" role.
 They care about these tools/skills: {kw_str}
 
+IMPORTANT: Related roles should score HIGH. For example:
+- "Data Analyst" ≈ "BI Analyst" ≈ "Business Intelligence Analyst" ≈ "BI Developer" ≈ "Analytics Engineer" ≈ "Reporting Analyst"
+- "Civil Engineer" ≈ "Structural Engineer" ≈ "Infrastructure Engineer"
+- "Security Engineer" ≈ "SOC Analyst" ≈ "InfoSec Engineer"
+
 Job Title: {job_title}
-Job Description (first 1000 chars): {job_description[:1000]}
+Job Description (first 800 chars): {job_description[:800]}
 
-Score 0-100 where:
-- 90-100: Perfect match for the role AND uses the right tools
-- 70-89: Very similar role, or strong tool/skill overlap
-- 40-69: Some overlap but different focus
-- 0-39: Not relevant
+Score 0-100:
+- 90-100: Same role family (Data Analyst ↔ BI Analyst) or perfect title match
+- 75-89: Closely related role with overlapping skills/tools
+- 40-74: Some overlap but different career path
+- 0-39: Not relevant at all
 
-Return ONLY the number. Nothing else.""",
+Return ONLY the number.""",
             }],
         )
         text = response.content[0].text.strip()
