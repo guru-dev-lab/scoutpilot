@@ -303,39 +303,52 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Startup Cleanup] Failed: {e}")
 
-    # Re-score ALL existing jobs with updated fuzzy scoring
-    try:
-        all_profiles_data = await get_profiles()
-        rescore_db = await get_db()
+    # Re-score existing jobs in background (batched to avoid memory issues)
+    async def _background_rescore():
         try:
-            cursor = await rescore_db.execute("SELECT id, title, description FROM jobs")
-            rows = await cursor.fetchall()
-            rescored = 0
-            for row in rows:
-                best_relevance = 0
-                for pd in all_profiles_data:
-                    expanded = pd.get("expanded_titles", [])
-                    if isinstance(expanded, str):
-                        expanded = json.loads(expanded)
-                    kws = pd.get("keywords", [])
-                    if isinstance(kws, str):
-                        kws = json.loads(kws)
-                    relevance = score_relevance_fuzzy(
-                        row["title"] or "", row["description"] or "",
-                        pd["title"], expanded, kws,
+            profiles_data = await get_profiles()
+            db = await get_db()
+            try:
+                # Process in batches of 200 — only load id + title (skip huge descriptions)
+                cursor = await db.execute("SELECT COUNT(*) FROM jobs")
+                total = (await cursor.fetchone())[0]
+                batch_size = 200
+                rescored = 0
+                for offset in range(0, total, batch_size):
+                    cursor = await db.execute(
+                        "SELECT id, title FROM jobs LIMIT ? OFFSET ?",
+                        (batch_size, offset),
                     )
-                    best_relevance = max(best_relevance, relevance)
-                await rescore_db.execute(
-                    "UPDATE jobs SET relevance_score = ? WHERE id = ?",
-                    (best_relevance, row["id"]),
-                )
-                rescored += 1
-            await rescore_db.commit()
-            logger.info(f"[Startup Re-score] Updated {rescored} jobs with tighter scoring")
-        finally:
-            await rescore_db.close()
-    except Exception as e:
-        logger.error(f"[Startup Re-score] Failed: {e}")
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        best_rel = 0
+                        for pd in profiles_data:
+                            expanded = pd.get("expanded_titles", [])
+                            if isinstance(expanded, str):
+                                expanded = json.loads(expanded)
+                            kws = pd.get("keywords", [])
+                            if isinstance(kws, str):
+                                kws = json.loads(kws)
+                            # Score title-only (no description) — fast and sufficient
+                            rel = score_relevance_fuzzy(
+                                row["title"] or "", "",
+                                pd["title"], expanded, kws,
+                            )
+                            best_rel = max(best_rel, rel)
+                        await db.execute(
+                            "UPDATE jobs SET relevance_score = ? WHERE id = ?",
+                            (best_rel, row["id"]),
+                        )
+                        rescored += 1
+                    await db.commit()
+                    logger.info(f"[Re-score] Batch done: {rescored}/{total}")
+                logger.info(f"[Re-score] Complete: {rescored} jobs updated")
+            finally:
+                await db.close()
+        except Exception as e:
+            logger.error(f"[Re-score] Failed: {e}")
+
+    asyncio.create_task(_background_rescore())
 
     scheduler.add_job(
         scheduled_scrape,
