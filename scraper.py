@@ -1089,12 +1089,12 @@ async def _scrape_one_profile(profile: dict) -> dict:
 
     is_remote_only = profile.get("remote_only", 0)
 
-    # Pick 5 rotating terms per cycle for maximum coverage
+    # Pick 3 rotating terms per cycle (balances coverage vs task count)
     all_terms = search_terms[:15]
     pid = profile_id or 0
     term_idx = _term_offset.get(pid, 0) % len(all_terms) if all_terms else 0
     terms_this_cycle = []
-    for i in range(min(5, len(all_terms))):
+    for i in range(min(3, len(all_terms))):
         idx = (term_idx + i) % len(all_terms)
         terms_this_cycle.append(all_terms[idx])
     _term_offset[pid] = term_idx + len(terms_this_cycle)
@@ -1102,20 +1102,29 @@ async def _scrape_one_profile(profile: dict) -> dict:
     # ── Build ALL scrape tasks for this profile (run concurrently) ──
     tasks = []
 
-    # Each JobSpy site runs as a SEPARATE task so one site failing doesn't kill others
-    JOBSPY_SITES = ["indeed", "linkedin", "google", "glassdoor", "zip_recruiter"]
+    # Group 1: Indeed + LinkedIn together (reliable, fast)
+    # Group 2: Google + Glassdoor + ZipRecruiter together (may fail, but won't block group 1)
+    MAIN_SITES = ["indeed", "linkedin"]
+    EXTRA_SITES = ["google", "glassdoor", "zip_recruiter"]
 
     for term in terms_this_cycle:
         effective_term = f"{term} remote" if is_remote_only else term
 
-        # JobSpy — each site is its own independent task
-        for site in JOBSPY_SITES:
-            for loc in (locations if locations else [""]):
-                tasks.append((f"JobSpy/{site}", scrape_jobspy(
-                    search_term=effective_term, location=loc,
-                    results_wanted=15, hours_old=hours, profile_id=profile_id,
-                    sites=[site],
-                )))
+        # Main boards — Indeed + LinkedIn (reliable)
+        for loc in (locations if locations else [""]):
+            tasks.append(("JobSpy/main", scrape_jobspy(
+                search_term=effective_term, location=loc,
+                results_wanted=25, hours_old=hours, profile_id=profile_id,
+                sites=MAIN_SITES,
+            )))
+
+        # Extra boards — Google, Glassdoor, ZipRecruiter (separate so failures are isolated)
+        for loc in (locations if locations else [""]):
+            tasks.append(("JobSpy/extra", scrape_jobspy(
+                search_term=effective_term, location=loc,
+                results_wanted=15, hours_old=hours, profile_id=profile_id,
+                sites=EXTRA_SITES,
+            )))
 
         # Remote-specific APIs — Remotive, RemoteOK, Jobicy, Himalayas
         if is_remote_only:
