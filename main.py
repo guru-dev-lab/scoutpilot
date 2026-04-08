@@ -357,9 +357,6 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, deep sweep every 6h, cleanup daily at 3 AM)")
 
-    # Re-expand all profile titles with improved AI prompt on each deploy
-    asyncio.create_task(_re_expand_profiles())
-
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
 
@@ -600,7 +597,8 @@ async def api_create_profile(request: Request):
 @app.put("/api/profiles/{profile_id}")
 async def api_update_profile(profile_id: int, request: Request):
     data = await request.json()
-    if data.get("title"):
+    # Only auto-expand if title changed AND no manual expanded_titles provided
+    if data.get("title") and "expanded_titles" not in data:
         expanded = await expand_title_ai(data["title"])
         data["expanded_titles"] = expanded
     await update_profile(profile_id, data)
