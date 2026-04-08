@@ -25,8 +25,8 @@ async def expand_title_ai(title: str) -> list[str]:
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
             messages=[{
@@ -128,8 +128,8 @@ async def score_relevance_ai(
         import anthropic
 
         kw_str = ", ".join(keywords[:10]) if keywords else "none"
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
             messages=[{
@@ -250,8 +250,8 @@ async def score_trust_ai(
         try:
             import anthropic
 
-            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            response = client.messages.create(
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            response = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=50,
                 messages=[{
@@ -339,8 +339,8 @@ async def ai_is_duplicate(
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
             messages=[{
@@ -401,8 +401,8 @@ async def extract_direct_link_ai(
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
             messages=[{
@@ -464,8 +464,8 @@ async def extract_skills_ai(title: str, description: str) -> str:
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
             messages=[{
@@ -557,8 +557,8 @@ async def verify_work_type_ai(
         return current_type
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,
             messages=[{
