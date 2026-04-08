@@ -28,15 +28,18 @@
   .header > div:first-child { position: relative; }
   .build-badge { font-size: 0.55rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: rgba(129,140,248,0.15); color: #818cf8; -webkit-text-fill-color: #818cf8; cursor: pointer; vertical-align: middle; letter-spacing: 0.03em; transition: background 0.2s; }
   .build-badge:hover { background: rgba(129,140,248,0.3); }
-  .changelog-panel { position: absolute; top: 100%; left: 0; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-width: 360px; max-width: 440px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin-top: 6px; }
-  .changelog-header { font-size: 0.75rem; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
-  .changelog-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+  .changelog-panel { position: absolute; top: 100%; left: 0; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; min-width: 320px; max-width: 380px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin-top: 6px; }
+  .changelog-header { font-size: 0.7rem; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .changelog-list { max-height: 240px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(129,140,248,0.3) transparent; }
+  .changelog-list::-webkit-scrollbar { width: 4px; }
+  .changelog-list::-webkit-scrollbar-thumb { background: rgba(129,140,248,0.3); border-radius: 4px; }
+  .changelog-item { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.7rem; line-height: 1.3; }
   .changelog-item:last-child { border-bottom: none; }
-  .changelog-status { font-size: 0.6rem; font-weight: 700; padding: 1px 6px; border-radius: 6px; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; }
+  .changelog-status { font-size: 0.5rem; font-weight: 700; padding: 1px 4px; border-radius: 4px; text-transform: uppercase; flex-shrink: 0; }
   .changelog-status.active { background: rgba(52,211,153,0.15); color: #34d399; }
   .changelog-status.pending { background: rgba(251,191,36,0.15); color: #fbbf24; }
-  .changelog-ver { color: #818cf8; font-weight: 600; flex-shrink: 0; min-width: 36px; }
-  .changelog-text { color: var(--muted); }
+  .changelog-ver { color: #818cf8; font-weight: 600; flex-shrink: 0; font-size: 0.65rem; }
+  .changelog-text { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 
   /* Stats + Search row */
   .stats-search-row {
@@ -336,7 +339,7 @@
       </div>
       <div id="changelogPanel" class="changelog-panel" style="display:none;">
         <div class="changelog-header">Recent Changes</div>
-        <div id="changelogList"></div>
+        <div class="changelog-list" id="changelogList"></div>
       </div>
     </div>
     <div class="header-actions">
@@ -826,13 +829,19 @@ async function loadBuildInfo() {
     if (badge) badge.textContent = 'v' + data.version;
     var list = document.getElementById('changelogList');
     if (list && data.changes) {
-      list.innerHTML = data.changes.map(function(c) {
-        return '<div class="changelog-item">'
-          + '<span class="changelog-status ' + c.status + '">' + c.status + '</span>'
+      // Show only last 8 changes to keep it compact
+      var recent = data.changes.slice(0, 8);
+      list.innerHTML = recent.map(function(c) {
+        // Truncate long change descriptions
+        var text = c.change.length > 60 ? c.change.substring(0, 57) + '...' : c.change;
+        return '<div class="changelog-item" title="' + c.change.replace(/"/g, '&quot;') + '">'
           + '<span class="changelog-ver">v' + c.version + '</span>'
-          + '<span class="changelog-text">' + c.change + '</span>'
+          + '<span class="changelog-text">' + text + '</span>'
           + '</div>';
       }).join('');
+      if (data.changes.length > 8) {
+        list.innerHTML += '<div style="text-align:center;font-size:0.6rem;color:var(--text3);padding:4px 0;">+' + (data.changes.length - 8) + ' older</div>';
+      }
     }
   } catch(e) { console.log('Build info unavailable'); }
 }
