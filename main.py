@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.1.1"
+BUILD_VERSION = "1.1.2"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
@@ -634,6 +634,39 @@ async def api_top_skills():
         # Sort by frequency descending
         top = sorted(counts.items(), key=lambda x: -x[1])
         return [{"skill": s, "count": c} for s, c in top[:50]]
+    finally:
+        await db.close()
+
+
+# ──────────────────────────────────────────────
+# Debug / Source Stats
+# ──────────────────────────────────────────────
+
+@app.get("/api/debug/sources")
+async def api_debug_sources():
+    """Show job counts per source — helps diagnose which scrapers are working."""
+    from database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT source, COUNT(*) as cnt, "
+            "MIN(first_seen_at) as first_seen, MAX(first_seen_at) as last_seen "
+            "FROM jobs GROUP BY source ORDER BY cnt DESC"
+        )
+        rows = await cursor.fetchall()
+        sources = [
+            {"source": r[0], "count": r[1], "first_seen": r[2], "last_seen": r[3]}
+            for r in rows
+        ]
+        # Also check last 24h
+        cursor2 = await db.execute(
+            "SELECT source, COUNT(*) as cnt FROM jobs "
+            "WHERE first_seen_at > datetime('now', '-24 hours') "
+            "GROUP BY source ORDER BY cnt DESC"
+        )
+        rows2 = await cursor2.fetchall()
+        recent = [{"source": r[0], "count": r[1]} for r in rows2]
+        return {"all_time": sources, "last_24h": recent}
     finally:
         await db.close()
 

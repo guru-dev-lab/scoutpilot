@@ -932,15 +932,20 @@ async def _scrape_one_profile(profile: dict) -> dict:
     # ── Build ALL scrape tasks for this profile (run concurrently) ──
     tasks = []
 
+    # Each JobSpy site runs as a SEPARATE task so one site failing doesn't kill others
+    JOBSPY_SITES = ["indeed", "linkedin", "google", "glassdoor", "zip_recruiter"]
+
     for term in terms_this_cycle:
         effective_term = f"{term} remote" if is_remote_only else term
 
-        # JobSpy — all 5 boards at once per term
-        for loc in (locations if locations else [""]):
-            tasks.append(("JobSpy", scrape_jobspy(
-                search_term=effective_term, location=loc,
-                results_wanted=25, hours_old=hours, profile_id=profile_id,
-            )))
+        # JobSpy — each site is its own independent task
+        for site in JOBSPY_SITES:
+            for loc in (locations if locations else [""]):
+                tasks.append((f"JobSpy/{site}", scrape_jobspy(
+                    search_term=effective_term, location=loc,
+                    results_wanted=15, hours_old=hours, profile_id=profile_id,
+                    sites=[site],
+                )))
 
         # Remotive + RemoteOK — only for remote profiles
         if is_remote_only:
