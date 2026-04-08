@@ -930,12 +930,12 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
 
         is_remote_only = profile.get("remote_only", 0)
 
-        # Pick 3 rotating terms per cycle for broad coverage
-        all_terms = search_terms[:8]  # allow more terms in rotation
+        # Pick 5 rotating terms per cycle for maximum coverage
+        all_terms = search_terms[:15]  # allow up to 15 distinct role names
         pid = profile_id or 0
         term_idx = _term_offset.get(pid, 0) % len(all_terms) if all_terms else 0
         terms_this_cycle = []
-        for i in range(min(3, len(all_terms))):
+        for i in range(min(5, len(all_terms))):
             idx = (term_idx + i) % len(all_terms)
             terms_this_cycle.append(all_terms[idx])
         _term_offset[pid] = term_idx + len(terms_this_cycle)

@@ -28,18 +28,24 @@ async def expand_title_ai(title: str) -> list[str]:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=500,
+            max_tokens=800,
             messages=[{
                 "role": "user",
-                "content": f"""Given the job title "{title}", generate ALL possible alternative titles that describe
-the same or very similar role. Include:
-- Abbreviations (e.g., PM for Product Manager)
-- Seniority variations (Senior, Lead, Head of, Principal, Staff, Director of)
-- Alternate naming conventions across companies
-- Related titles that would have 80%+ overlap in responsibilities
+                "content": f"""Given the job title "{title}", generate ALL DISTINCT role names that describe
+the same or very similar role. Focus on DIFFERENT role families, NOT seniority levels.
 
-Return ONLY a JSON array of strings. No explanation. Example:
-["Product Manager", "PM", "Senior Product Manager", "Product Lead"]
+IMPORTANT RULES:
+- DO NOT include seniority prefixes (no "Senior X", "Junior X", "Lead X", "Principal X", "Staff X", "Head of X", "Director of X")
+- DO include abbreviations (BI, DA, SOC, etc.)
+- DO include all industry naming conventions for the SAME role
+- DO include tool-specific titles (e.g., "Tableau Developer" for BI roles)
+- DO include related roles with 70%+ skill overlap
+- Think about what a recruiter or hiring manager might TITLE this exact role differently
+
+Example for "Data Analyst":
+["Data Analyst", "DA", "BI Analyst", "Business Intelligence Analyst", "BI Developer", "Reporting Analyst", "Analytics Analyst", "Insights Analyst", "Data Visualization Analyst", "Tableau Analyst", "Power BI Analyst", "Analytics Engineer", "Reporting Engineer", "Dashboard Analyst", "Data Reporting Specialist", "Business Analyst", "Quantitative Analyst", "Research Analyst", "Data Specialist"]
+
+Return ONLY a JSON array of strings. No explanation. Generate at least 15 distinct role names.
 
 Title to expand: "{title}"
 """,
@@ -139,15 +145,17 @@ async def score_relevance_ai(
 Job: {job_title}
 Description: {job_description[:600]}
 
-Score 0-100. Related roles = HIGH score:
-Data Analyst ≈ BI Analyst ≈ BI Developer ≈ Analytics Engineer ≈ Reporting Analyst ≈ Business Intelligence
-Civil Engineer ≈ Structural Engineer ≈ Infrastructure Engineer
-Security Engineer ≈ SOC Analyst ≈ InfoSec Engineer
+Score 0-100. Think about whether someone qualified for "{target_title}" would be qualified and interested in this job.
 
-90-100 = same role family or exact match
-75-89 = closely related, overlapping skills
-40-74 = some overlap, different path
-0-39 = not relevant
+SAME ROLE FAMILY = HIGH SCORE (90-100):
+Data Analyst ≈ BI Analyst ≈ BI Developer ≈ Business Intelligence Analyst ≈ Analytics Engineer ≈ Reporting Analyst ≈ Insights Analyst ≈ Data Visualization Analyst ≈ Tableau Developer ≈ Power BI Developer ≈ Dashboard Analyst ≈ Analytics Specialist ≈ Data Specialist ≈ Quantitative Analyst ≈ Research Analyst ≈ Data Reporting Analyst
+Civil Engineer ≈ Structural Engineer ≈ Infrastructure Engineer ≈ Transportation Engineer ≈ Geotechnical Engineer ≈ Site Engineer ≈ Design Engineer ≈ Project Engineer
+Security Engineer ≈ SOC Analyst ≈ InfoSec Engineer ≈ Security Analyst ≈ Cybersecurity Analyst ≈ Security Operations Analyst ≈ GRC Analyst ≈ Cloud Security Engineer
+
+90-100 = same role family or exact match (would apply to this job)
+75-89 = closely related, overlapping daily work
+40-74 = some skill overlap, different career path
+0-39 = not relevant at all
 
 Return ONLY the number.""",
             }],

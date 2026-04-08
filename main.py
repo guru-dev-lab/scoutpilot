@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.9"
+BUILD_VERSION = "1.1.0"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
+    {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
     {"version": "1.0.9", "date": "2026-04-08", "status": "active", "change": "MAX scraping — 7 sources (JobSpy 5 boards + Remotive + RemoteOK + Arbeitnow + TheMuse + SerpApi + JSearch), 3 terms/profile, 25 results, remote default"},
     {"version": "1.0.8", "date": "2026-04-08", "status": "active", "change": "Fix dead page — all AI calls now async (were blocking event loop, freezing API during scoring)"},
     {"version": "1.0.7", "date": "2026-04-07", "status": "active", "change": "Fix empty page — default filter widened to 30 days so existing jobs always show on load."},
@@ -355,6 +356,9 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, deep sweep every 6h, cleanup daily at 3 AM)")
+
+    # Re-expand all profile titles with improved AI prompt on each deploy
+    asyncio.create_task(_re_expand_profiles())
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
@@ -707,6 +711,29 @@ async def api_reprocess_jobs():
     """Re-scan existing jobs to fix direct_apply detection and posted_at normalization."""
     asyncio.create_task(_reprocess_existing_jobs())
     return {"status": "started", "message": "Reprocessing jobs in background"}
+
+
+async def _re_expand_profiles():
+    """Re-expand all profile titles with the latest AI prompt on each deploy.
+    This ensures search terms stay up-to-date with the best role families."""
+    try:
+        await asyncio.sleep(5)  # Let the app fully start first
+        profiles = await get_profiles()
+        for profile in profiles:
+            title = profile["title"]
+            logger.info(f"[Startup] Re-expanding titles for '{title}'...")
+            try:
+                expanded = await expand_title_ai(title)
+                if expanded and len(expanded) > 3:
+                    await update_profile(profile["id"], {"expanded_titles": expanded})
+                    logger.info(f"[Startup] '{title}' expanded to {len(expanded)} distinct role names")
+                else:
+                    logger.info(f"[Startup] '{title}' expansion returned too few results, keeping existing")
+            except Exception as e:
+                logger.error(f"[Startup] Failed to expand '{title}': {e}")
+        logger.info("[Startup] Profile re-expansion complete")
+    except Exception as e:
+        logger.error(f"[Startup] Profile re-expansion failed: {e}")
 
 
 async def _reprocess_existing_jobs():
