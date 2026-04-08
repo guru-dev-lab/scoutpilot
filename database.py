@@ -474,24 +474,33 @@ async def get_profiles() -> list[dict]:
 async def update_profile(profile_id: int, data: dict):
     db = await get_db()
     try:
+        # Build dynamic UPDATE — only set fields that were provided
+        sets = []
+        vals = []
+        field_map = {
+            "title": ("title", lambda v: v),
+            "expanded_titles": ("expanded_titles", lambda v: json.dumps(v) if isinstance(v, list) else v),
+            "keywords": ("keywords", lambda v: json.dumps(v) if isinstance(v, list) else v),
+            "excluded_keywords": ("excluded_keywords", lambda v: json.dumps(v) if isinstance(v, list) else v),
+            "locations": ("locations", lambda v: json.dumps(v) if isinstance(v, list) else v),
+            "remote_only": ("remote_only", lambda v: 1 if v else 0),
+            "min_salary": ("min_salary", lambda v: v),
+            "freshness_hours": ("freshness_hours", lambda v: v),
+            "min_relevance": ("min_relevance", lambda v: v),
+            "min_trust": ("min_trust", lambda v: v),
+        }
+        for key, (col, transform) in field_map.items():
+            if key in data:
+                sets.append(f"{col} = ?")
+                vals.append(transform(data[key]))
+
+        if not sets:
+            return  # nothing to update
+
+        vals.append(profile_id)
         await db.execute(
-            """UPDATE search_profiles SET title=?, expanded_titles=?, keywords=?,
-               excluded_keywords=?, locations=?, remote_only=?, min_salary=?,
-               freshness_hours=?, min_relevance=?, min_trust=?
-               WHERE id=?""",
-            (
-                data["title"],
-                json.dumps(data.get("expanded_titles", [])),
-                json.dumps(data.get("keywords", [])),
-                json.dumps(data.get("excluded_keywords", [])),
-                json.dumps(data.get("locations", [])),
-                1 if data.get("remote_only") else 0,
-                data.get("min_salary", 0),
-                data.get("freshness_hours", 24),
-                data.get("min_relevance", 0),
-                data.get("min_trust", 0),
-                profile_id,
-            ),
+            f"UPDATE search_profiles SET {', '.join(sets)} WHERE id = ?",
+            vals,
         )
         await db.commit()
     finally:
