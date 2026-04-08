@@ -363,7 +363,7 @@ async def scrape_jobspy(
     Runs in a thread since JobSpy is synchronous.
     """
     if sites is None:
-        sites = ["indeed", "linkedin", "google"]
+        sites = ["indeed", "linkedin", "google", "glassdoor", "zip_recruiter"]
 
     logger.info(f"[JobSpy] Searching: '{search_term}' | location: '{location}' | sites: {sites}")
 
@@ -375,7 +375,7 @@ async def scrape_jobspy(
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
                 "country_indeed": "USA",
-                "linkedin_fetch_description": False,
+                "linkedin_fetch_description": True,
                 "description_format": "markdown",
                 "verbose": 0,
             }
@@ -755,19 +755,158 @@ async def scrape_themuse(
     return jobs
 
 
+async def scrape_remoteok(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from RemoteOK (free JSON API, no key needed)."""
+    logger.info(f"[RemoteOK] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://remoteok.com/api",
+                headers={"User-Agent": "ScoutPilot/1.0"},
+            )
+            data = resp.json()
+
+        # RemoteOK returns all jobs — filter by search term
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
+        for item in data:
+            if not isinstance(item, dict) or not item.get("position"):
+                continue
+
+            title = item.get("position", "")
+            company = item.get("company", "")
+            description = item.get("description", "")
+
+            # Match: any search word in title or tags
+            title_lower = title.lower()
+            tags = " ".join(item.get("tags", [])).lower() if item.get("tags") else ""
+            combined = f"{title_lower} {tags}"
+            if not any(w in combined for w in search_words):
+                continue
+
+            if _is_blocked_company(company):
+                continue
+
+            apply_url = item.get("url", "")
+            if apply_url and not apply_url.startswith("http"):
+                apply_url = f"https://remoteok.com{apply_url}"
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(item.get("date", ""))
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": item.get("location", "Remote"),
+                "is_remote": True,
+                "work_type": "remote",
+                "description": re.sub(r"<[^>]+>", " ", description).strip()[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "remoteok",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[RemoteOK] Matched {len(jobs)} new jobs for '{search_term}'")
+    except Exception as e:
+        logger.error(f"[RemoteOK] Error: {e}")
+
+    return jobs
+
+
+async def scrape_arbeitnow(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape jobs from Arbeitnow (free API, remote-friendly, no key needed)."""
+    logger.info(f"[Arbeitnow] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://www.arbeitnow.com/api/job-board-api",
+            )
+            data = resp.json()
+
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
+        for item in data.get("data", []):
+            title = item.get("title", "")
+            company = item.get("company_name", "")
+
+            title_lower = title.lower()
+            tags = " ".join(item.get("tags", [])).lower() if item.get("tags") else ""
+            combined = f"{title_lower} {tags}"
+            if not any(w in combined for w in search_words):
+                continue
+
+            if _is_blocked_company(company):
+                continue
+
+            apply_url = item.get("url", "")
+            is_direct = _is_direct_url(apply_url)
+            is_remote = item.get("remote", False)
+            description = item.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": item.get("location", ""),
+                "is_remote": is_remote,
+                "work_type": "remote" if is_remote else _detect_work_type({"title": title, "location": item.get("location", ""), "description": clean_desc}),
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "arbeitnow",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": _normalize_posted_at(item.get("created_at", "")),
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[Arbeitnow] Matched {len(jobs)} new jobs for '{search_term}'")
+    except Exception as e:
+        logger.error(f"[Arbeitnow] Error: {e}")
+
+    return jobs
+
+
 _term_offset = {}  # Track which search term each profile is on
 
 async def run_scrape_cycle(profiles: list[dict]) -> dict:
     """
-    Run a scrape cycle for ALL profiles every time.
-    Each profile gets 1 search term per cycle, rotating through its terms.
-    This ensures every profile gets fresh data every 5 minutes.
+    Run a FULL scrape cycle across ALL sources for ALL profiles.
+    Sources: JobSpy (5 boards), Remotive, TheMuse, RemoteOK, Arbeitnow, SerpApi, JSearch.
+    Each profile gets 3 rotating search terms per cycle.
     """
     global _term_offset
     total_new = 0
     errors = []
 
-    logger.info(f"[Scrape] Cycle for all {len(profiles)} profiles (1 term each)")
+    logger.info(f"[Scrape] FULL cycle for {len(profiles)} profiles × all sources")
 
     for profile in profiles:
         title = profile["title"]
@@ -779,58 +918,95 @@ async def run_scrape_cycle(profiles: list[dict]) -> dict:
         # Build search queries from title + expanded titles
         search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
-        # Keywords get searched as STANDALONE terms (not combined with title).
-        # This way "Microstrategy" finds ANY job mentioning it in the description,
-        # and "Power BI" finds all Power BI jobs regardless of title.
-        # Keywords that are already job titles get added to search_terms directly.
+        # Add keyword-based search terms
         keywords = profile.get("keywords", [])
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",") if k.strip()]
         title_words = {"analyst", "engineer", "developer", "manager", "scientist",
                        "architect", "consultant", "lead", "director", "head", "staff"}
         for kw in keywords:
-            if any(tw in kw.lower() for tw in title_words):
-                # It's a job title variant — add directly as a search term
-                if kw.lower() not in [s.lower() for s in search_terms]:
-                    search_terms.append(kw)
-            else:
-                # It's a tool/platform — search standalone to find it in descriptions
-                if kw.lower() not in [s.lower() for s in search_terms]:
-                    search_terms.append(kw)
+            if kw.lower() not in [s.lower() for s in search_terms]:
+                search_terms.append(kw)
 
-        # When profile is remote-only, add "remote" to the search term
-        # so job boards return remote positions instead of mostly onsite
         is_remote_only = profile.get("remote_only", 0)
 
-        # Rotate: pick 1 term per cycle for this profile, cycling through all terms
-        all_terms = search_terms[:5]  # max 5 possible terms
+        # Pick 3 rotating terms per cycle for broad coverage
+        all_terms = search_terms[:8]  # allow more terms in rotation
         pid = profile_id or 0
         term_idx = _term_offset.get(pid, 0) % len(all_terms) if all_terms else 0
-        term = all_terms[term_idx] if all_terms else title
-        _term_offset[pid] = term_idx + 1
+        terms_this_cycle = []
+        for i in range(min(3, len(all_terms))):
+            idx = (term_idx + i) % len(all_terms)
+            terms_this_cycle.append(all_terms[idx])
+        _term_offset[pid] = term_idx + len(terms_this_cycle)
 
-        # Append "remote" to search for remote-only profiles
-        effective_term = f"{term} remote" if is_remote_only else term
+        for term in terms_this_cycle:
+            effective_term = f"{term} remote" if is_remote_only else term
 
-        for loc in (locations if locations else [""]):
-            # Scrape each site individually so one slow site doesn't block others
-            for site in ["indeed", "linkedin", "google"]:
+            # ─── Source 1: JobSpy (Indeed, LinkedIn, Google, Glassdoor, ZipRecruiter) ───
+            for loc in (locations if locations else [""]):
                 try:
                     new_jobs = await scrape_jobspy(
                         search_term=effective_term,
                         location=loc,
-                        results_wanted=15,
+                        results_wanted=25,
                         hours_old=hours,
                         profile_id=profile_id,
-                        sites=[site],
                     )
                     total_new += len(new_jobs)
                 except Exception as e:
-                    err_msg = f"Error scraping '{term}' on {site}: {e}"
-                    logger.error(err_msg)
-                    errors.append(err_msg)
+                    errors.append(f"JobSpy '{term}': {e}")
+                    logger.error(f"[Scrape] JobSpy error for '{term}': {e}")
 
-        logger.info(f"[Scrape] Profile '{title}' term='{effective_term}' (idx {term_idx}/{len(all_terms)}, remote_only={is_remote_only})")
+            # ─── Source 2: Remotive (free, remote jobs) ───
+            if is_remote_only:
+                try:
+                    new_jobs = await scrape_remotive(term, profile_id)
+                    total_new += len(new_jobs)
+                except Exception as e:
+                    logger.error(f"[Scrape] Remotive error: {e}")
+
+            # ─── Source 3: RemoteOK (free, remote jobs) ───
+            if is_remote_only:
+                try:
+                    new_jobs = await scrape_remoteok(term, profile_id)
+                    total_new += len(new_jobs)
+                except Exception as e:
+                    logger.error(f"[Scrape] RemoteOK error: {e}")
+
+            # ─── Source 4: Arbeitnow (free, global jobs) ───
+            try:
+                new_jobs = await scrape_arbeitnow(term, profile_id)
+                total_new += len(new_jobs)
+            except Exception as e:
+                logger.error(f"[Scrape] Arbeitnow error: {e}")
+
+        # ─── Source 5: TheMuse (free, 1 call per profile) ───
+        try:
+            new_jobs = await scrape_themuse(title, profile_id)
+            total_new += len(new_jobs)
+        except Exception as e:
+            logger.error(f"[Scrape] TheMuse error: {e}")
+
+        # ─── Source 6: SerpApi (if key configured) ───
+        if settings.serpapi_key:
+            try:
+                eff = f"{title} remote" if is_remote_only else title
+                new_jobs = await scrape_serpapi(eff, locations[0] if locations else "", profile_id)
+                total_new += len(new_jobs)
+            except Exception as e:
+                logger.error(f"[Scrape] SerpApi error: {e}")
+
+        # ─── Source 7: JSearch (if key configured) ───
+        if settings.rapidapi_key:
+            try:
+                eff = f"{title} remote" if is_remote_only else title
+                new_jobs = await scrape_jsearch(eff, locations[0] if locations else "", profile_id)
+                total_new += len(new_jobs)
+            except Exception as e:
+                logger.error(f"[Scrape] JSearch error: {e}")
+
+        logger.info(f"[Scrape] Profile '{title}' done — terms={terms_this_cycle} remote={is_remote_only}")
 
     return {
         "new_jobs": total_new,

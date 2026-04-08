@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.0.8"
+BUILD_VERSION = "1.0.9"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
+    {"version": "1.0.9", "date": "2026-04-08", "status": "active", "change": "MAX scraping — 7 sources (JobSpy 5 boards + Remotive + RemoteOK + Arbeitnow + TheMuse + SerpApi + JSearch), 3 terms/profile, 25 results, remote default"},
     {"version": "1.0.8", "date": "2026-04-08", "status": "active", "change": "Fix dead page — all AI calls now async (were blocking event loop, freezing API during scoring)"},
     {"version": "1.0.7", "date": "2026-04-07", "status": "active", "change": "Fix empty page — default filter widened to 30 days so existing jobs always show on load."},
     {"version": "1.0.6", "date": "2026-04-07", "status": "active", "change": "Pure AI scoring — no fuzzy gates, AI decides relevance for every new job. Removed background re-score that killed the page."},
