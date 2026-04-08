@@ -178,8 +178,8 @@ BLOCKED_COMPANIES = {
     "upwork", "hired", "vettery", "triplebyte", "wellfound",
     # AI job sites / aggregator clones (same as us — not real employers)
     "otta", "cord", "jobright", "jobright.ai", "sonara", "lazyapply",
-    "teal", "jobscan", "huntr", "careerflow", "jobgether", "remotive",
-    "himalayas", "flexjobs", "pangian", "remoteok", "remote ok",
+    "teal", "jobscan", "huntr", "careerflow", "jobgether",
+    "flexjobs", "pangian",
     "weworkremotely", "we work remotely", "nodesk", "jobspresso",
     "builtin", "built in", "4dayweek", "skipthedrive", "virtualvocations",
     # Known spam / fake job reposters
@@ -615,11 +615,15 @@ async def scrape_remotive(
 
     jobs = []
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(
                 "https://remotive.com/api/remote-jobs",
-                params={"search": search_term, "limit": 30},
+                params={"search": search_term, "limit": 50},
             )
+            if resp.status_code != 200:
+                logger.error(f"[Remotive] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
             data = resp.json()
 
         for item in data.get("jobs", []):
@@ -684,16 +688,28 @@ async def scrape_themuse(
 
     jobs = []
     try:
-        # The Muse categories aren't exact search — use page param
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                "https://www.themuse.com/api/public/jobs",
-                params={"page": 1, "descending": "true"},
-            )
-            data = resp.json()
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        # Fetch multiple pages to maximize matches
+        all_results = []
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            for page in range(1, 4):  # 3 pages
+                resp = await client.get(
+                    "https://www.themuse.com/api/public/jobs",
+                    params={"page": page, "descending": "true"},
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"[TheMuse] HTTP {resp.status_code} on page {page}")
+                    break
+                page_data = resp.json()
+                results = page_data.get("results", [])
+                if not results:
+                    break
+                all_results.extend(results)
 
         search_lower = search_term.lower()
-        for item in data.get("results", []):
+        search_words = search_lower.replace(" remote", "").strip().split()
+
+        for item in all_results:
             title = item.get("name", "")
             company_data = item.get("company", {})
             company = company_data.get("name", "") if isinstance(company_data, dict) else ""
@@ -701,8 +717,9 @@ async def scrape_themuse(
             if _is_blocked_company(company):
                 continue
 
-            # Filter by search term match in title
-            if search_lower not in title.lower():
+            # Match: any search word in title (more flexible than exact match)
+            title_lower = title.lower()
+            if not any(w in title_lower for w in search_words):
                 continue
 
             # Get locations
@@ -837,10 +854,14 @@ async def scrape_arbeitnow(
 
     jobs = []
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(
                 "https://www.arbeitnow.com/api/job-board-api",
             )
+            if resp.status_code != 200:
+                logger.error(f"[Arbeitnow] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
             data = resp.json()
 
         search_lower = search_term.lower().replace(" remote", "").strip()
@@ -890,6 +911,155 @@ async def scrape_arbeitnow(
         logger.info(f"[Arbeitnow] Matched {len(jobs)} new jobs for '{search_term}'")
     except Exception as e:
         logger.error(f"[Arbeitnow] Error: {e}")
+
+    return jobs
+
+
+async def scrape_jobicy(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from Jobicy (free API, no key needed)."""
+    logger.info(f"[Jobicy] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        tag = search_term.lower().replace(" remote", "").strip().replace(" ", "-")
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            resp = await client.get(
+                f"https://jobicy.com/api/v2/remote-jobs",
+                params={"count": 50, "tag": tag},
+            )
+            if resp.status_code != 200:
+                logger.error(f"[Jobicy] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
+        for item in data.get("jobs", []):
+            title = item.get("jobTitle", "")
+            company = item.get("companyName", "")
+
+            if _is_blocked_company(company):
+                continue
+
+            # Basic relevance: any search word in title
+            title_lower = title.lower()
+            if not any(w in title_lower for w in search_words):
+                continue
+
+            apply_url = item.get("url", "")
+            is_direct = _is_direct_url(apply_url)
+            geo = item.get("jobGeo", "Remote")
+            description = item.get("jobDescription", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
+
+            salary_min = 0
+            salary_max = 0
+            try:
+                salary_min = int(float(item.get("annualSalaryMin", 0) or 0))
+                salary_max = int(float(item.get("annualSalaryMax", 0) or 0))
+            except (ValueError, TypeError):
+                pass
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": geo,
+                "is_remote": True,
+                "work_type": "remote",
+                "description": clean_desc[:10000],
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "source": "jobicy",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": _normalize_posted_at(item.get("pubDate", "")),
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[Jobicy] Matched {len(jobs)} new jobs for '{search_term}'")
+    except Exception as e:
+        logger.error(f"[Jobicy] Error: {e}")
+
+    return jobs
+
+
+async def scrape_himalayas(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from Himalayas (free API, no key needed)."""
+    logger.info(f"[Himalayas] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            resp = await client.get(
+                "https://himalayas.app/jobs/api",
+                params={"limit": 50},
+            )
+            if resp.status_code != 200:
+                logger.error(f"[Himalayas] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
+        for item in data.get("jobs", []):
+            title = item.get("title", "")
+            company = item.get("companyName", item.get("company_name", ""))
+
+            if _is_blocked_company(company):
+                continue
+
+            title_lower = title.lower()
+            if not any(w in title_lower for w in search_words):
+                continue
+
+            apply_url = item.get("applicationUrl", item.get("url", ""))
+            if not apply_url:
+                continue
+            is_direct = _is_direct_url(apply_url)
+            description = item.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": item.get("location", "Remote"),
+                "is_remote": True,
+                "work_type": "remote",
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "himalayas",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": _normalize_posted_at(item.get("pubDate", item.get("created_at", ""))),
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[Himalayas] Matched {len(jobs)} new jobs for '{search_term}'")
+    except Exception as e:
+        logger.error(f"[Himalayas] Error: {e}")
 
     return jobs
 
@@ -947,15 +1117,17 @@ async def _scrape_one_profile(profile: dict) -> dict:
                     sites=[site],
                 )))
 
-        # Remotive + RemoteOK — only for remote profiles
+        # Remote-specific APIs — Remotive, RemoteOK, Jobicy, Himalayas
         if is_remote_only:
             tasks.append(("Remotive", scrape_remotive(term, profile_id)))
             tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
+            tasks.append(("Jobicy", scrape_jobicy(term, profile_id)))
+            tasks.append(("Himalayas", scrape_himalayas(term, profile_id)))
 
-        # Arbeitnow — all profiles
+        # Arbeitnow — all profiles (has both remote and onsite)
         tasks.append(("Arbeitnow", scrape_arbeitnow(term, profile_id)))
 
-    # TheMuse — 1 call per profile
+    # TheMuse — 1 call per profile (fetches multiple pages)
     tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
     # SerpApi (if key)
