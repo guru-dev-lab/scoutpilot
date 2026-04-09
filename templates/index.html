@@ -455,8 +455,8 @@
     <div class="filter-group">
       <label>Sort By</label>
       <select id="filterSort" onchange="loadJobs()">
+        <option value="first_seen_at:DESC" selected>Recently Added</option>
         <option value="posted_at:DESC">Newest Posted</option>
-        <option value="first_seen_at:DESC">Recently Added</option>
         <option value="relevance_score:DESC">Most Relevant</option>
         <option value="salary_max:DESC">Highest Salary</option>
         <option value="company_name:ASC">Company A-Z</option>
@@ -862,7 +862,7 @@ loadBuildInfo();
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
   const postedHours = document.getElementById('filterPostedHours').value;
-  const relevance = 60;
+  const relevance = 75;
   const source = document.getElementById('filterSource').value;
   const workType = document.getElementById('filterWorkType').value;
   const status = document.getElementById('filterStatus').value;

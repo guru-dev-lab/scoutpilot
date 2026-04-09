@@ -209,8 +209,9 @@ async def insert_job(job_data: dict) -> bool:
                         logger.debug(f"[Dedup] AI check failed: {e}")
 
         now = datetime.now(timezone.utc).isoformat()
-        # If no posted_at from source, fall back to now (scrape time)
-        posted_at = job_data.get("posted_at", "") or now
+        # If no posted_at from source, leave empty — DON'T fake it with scrape time
+        # first_seen_at always has the real scrape time for sorting
+        posted_at = job_data.get("posted_at", "") or ""
         skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
         await db.execute(
             """INSERT INTO jobs (hash, title, company_name, company_domain, location,

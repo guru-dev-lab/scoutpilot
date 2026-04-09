@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.2.0"
+BUILD_VERSION = "1.2.1"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
@@ -392,6 +392,23 @@ async def lifespan(app: FastAPI):
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
+
+    # One-time fix: clear fake posted_at where it was set to scrape time
+    # LinkedIn doesn't give real post dates, so posted_at=first_seen_at is fake
+    async def _fix_fake_posted_at():
+        from database import get_db
+        db = await get_db()
+        try:
+            result = await db.execute(
+                "UPDATE jobs SET posted_at = '' WHERE posted_at = first_seen_at AND posted_at != ''"
+            )
+            await db.commit()
+            logger.info(f"[Startup] Cleared {result.rowcount} fake posted_at timestamps")
+        except Exception as e:
+            logger.error(f"[Startup] Fix fake posted_at failed: {e}")
+        finally:
+            await db.close()
+    asyncio.create_task(_fix_fake_posted_at())
 
     yield
     scheduler.shutdown()
