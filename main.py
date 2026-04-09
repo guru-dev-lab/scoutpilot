@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.2.2"
-BUILD_DATE = "2026-04-08"
+BUILD_VERSION = "1.3.0"
+BUILD_DATE = "2026-04-09"
 RECENT_CHANGES = [
+    {"version": "1.3.0", "date": "2026-04-09", "status": "active", "change": "Fix sorting (newest posted first with fallback), restore freshness animations, slash API costs — wider fuzzy gate, shorter prompts, heuristic trust, deep sweep every 12h"},
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
     {"version": "1.0.9", "date": "2026-04-08", "status": "active", "change": "MAX scraping — 7 sources (JobSpy 5 boards + Remotive + RemoteOK + Arbeitnow + TheMuse + SerpApi + JSearch), 3 terms/profile, 25 results, remote default"},
     {"version": "1.0.8", "date": "2026-04-08", "status": "active", "change": "Fix dead page — all AI calls now async (were blocking event loop, freezing API during scoring)"},
@@ -366,7 +367,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         scheduled_deep_sweep,
         "interval",
-        hours=6,
+        hours=12,
         id="deep_sweep",
         replace_existing=True,
     )
@@ -378,7 +379,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, deep sweep every 6h, cleanup daily at 3 AM)")
+    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes} min, deep sweep every 12h, cleanup daily at 3 AM)")
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())

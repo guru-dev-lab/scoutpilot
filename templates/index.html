@@ -455,8 +455,8 @@
     <div class="filter-group">
       <label>Sort By</label>
       <select id="filterSort" onchange="loadJobs()">
-        <option value="first_seen_at:DESC" selected>Recently Added</option>
-        <option value="posted_at:DESC">Newest Posted</option>
+        <option value="posted_at:DESC" selected>Newest First</option>
+        <option value="first_seen_at:DESC">Recently Added</option>
         <option value="relevance_score:DESC">Most Relevant</option>
         <option value="salary_max:DESC">Highest Salary</option>
         <option value="company_name:ASC">Company A-Z</option>
@@ -1023,8 +1023,8 @@ function renderJobs(jobs, searchInfo) {
     }
     const skillHtml = renderSkillTags(skills);
 
-    // Time — show posted date, fall back to "Found X ago" if missing
-    var timeStr = postedAgo ? ('Posted ' + postedAgo) : (foundAgo ? 'Found ' + foundAgo : '');
+    // Time — show posted date if real, otherwise show found time (no prefix to keep it clean)
+    var timeStr = postedAgo ? (postedAgo) : (foundAgo ? foundAgo : '');
 
     // Row 1: title
     // Row 2: company · location · source · time
@@ -1320,10 +1320,17 @@ function getTimeAgo(str) {
 }
 
 function getPostedMs(job) {
-  // If date-only, return null so we don't show fake freshness badges
-  if (isDateOnly(job.posted_at)) return null;
-  var d = parseDate(job.posted_at);
-  return d ? Date.now() - d.getTime() : null;
+  // Try posted_at first (real post date from job board)
+  if (job.posted_at && !isDateOnly(job.posted_at)) {
+    var d = parseDate(job.posted_at);
+    if (d) return Date.now() - d.getTime();
+  }
+  // Fall back to first_seen_at (when we found it) for freshness badges
+  if (job.first_seen_at && !isDateOnly(job.first_seen_at)) {
+    var d2 = parseDate(job.first_seen_at);
+    if (d2) return Date.now() - d2.getTime();
+  }
+  return null;
 }
 
 function fmtMs(ms) {

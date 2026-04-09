@@ -28,27 +28,10 @@ async def expand_title_ai(title: str) -> list[str]:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=800,
+            max_tokens=500,
             messages=[{
                 "role": "user",
-                "content": f"""Given the job title "{title}", generate ALL DISTINCT role names that describe
-the same or very similar role. Focus on DIFFERENT role families, NOT seniority levels.
-
-IMPORTANT RULES:
-- DO NOT include seniority prefixes (no "Senior X", "Junior X", "Lead X", "Principal X", "Staff X", "Head of X", "Director of X")
-- DO include abbreviations (BI, DA, SOC, etc.)
-- DO include all industry naming conventions for the SAME role
-- DO include tool-specific titles (e.g., "Tableau Developer" for BI roles)
-- DO include related roles with 70%+ skill overlap
-- Think about what a recruiter or hiring manager might TITLE this exact role differently
-
-Example for "Data Analyst":
-["Data Analyst", "DA", "BI Analyst", "Business Intelligence Analyst", "BI Developer", "Reporting Analyst", "Analytics Analyst", "Insights Analyst", "Data Visualization Analyst", "Tableau Analyst", "Power BI Analyst", "Analytics Engineer", "Reporting Engineer", "Dashboard Analyst", "Data Reporting Specialist", "Business Analyst", "Quantitative Analyst", "Research Analyst", "Data Specialist"]
-
-Return ONLY a JSON array of strings. No explanation. Generate at least 15 distinct role names.
-
-Title to expand: "{title}"
-""",
+                "content": f"""List all distinct role names for "{title}". No seniority prefixes. Include abbreviations, industry variants, tool-specific titles, related roles with 70%+ overlap. JSON array only, 15+ names.""",
             }],
         )
         text = response.content[0].text.strip()
@@ -139,11 +122,11 @@ async def score_relevance_ai(
     if not settings.anthropic_api_key:
         return fuzzy
 
-    # COST GATE: skip AI for obvious cases
-    if fuzzy < 25:
-        return fuzzy  # "Employee Wellness Assistant" vs "Data Analyst" = 0 API calls
-    if fuzzy > 85:
-        return fuzzy  # "BI Analyst" vs "Data Analyst" = 0 API calls
+    # COST GATE: skip AI for obvious cases (wider gate = fewer API calls)
+    if fuzzy < 35:
+        return fuzzy  # obvious mismatch — NO API call
+    if fuzzy > 75:
+        return fuzzy  # strong match — NO API call
 
     try:
         import anthropic
@@ -152,26 +135,12 @@ async def score_relevance_ai(
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=10,
+            max_tokens=5,
             messages=[{
                 "role": "user",
-                "content": f"""Does this job match the "{target_title}" profile? Tools/skills they want: {kw_str}
-
-Job: {job_title}
-Description: {job_description[:600]}
-
-Score 0-100. Think about whether someone qualified for "{target_title}" would be qualified and interested in this job.
-
-SAME ROLE FAMILY = HIGH SCORE (90-100):
-Data Analyst ≈ BI Analyst ≈ BI Developer ≈ Business Intelligence Analyst ≈ Analytics Engineer ≈ Reporting Analyst ≈ Insights Analyst ≈ Data Visualization Analyst ≈ Tableau Developer ≈ Power BI Developer ≈ Dashboard Analyst ≈ Analytics Specialist ≈ Data Specialist ≈ Quantitative Analyst ≈ Research Analyst ≈ Data Reporting Analyst
-Civil Engineer ≈ Structural Engineer ≈ Infrastructure Engineer ≈ Transportation Engineer ≈ Geotechnical Engineer ≈ Site Engineer ≈ Design Engineer ≈ Project Engineer
-Security Engineer ≈ SOC Analyst ≈ InfoSec Engineer ≈ Security Analyst ≈ Cybersecurity Analyst ≈ Security Operations Analyst ≈ GRC Analyst ≈ Cloud Security Engineer
-
-90-100 = same role family or exact match (would apply to this job)
-75-89 = closely related, overlapping daily work
-40-74 = some skill overlap, different career path
-0-39 = not relevant at all
-
+                "content": f"""Rate 0-100 match: "{job_title}" for a "{target_title}" role. Skills: {kw_str}
+Desc: {job_description[:400]}
+90-100=same role family, 75-89=closely related, 40-74=some overlap, 0-39=not relevant.
 Return ONLY the number.""",
             }],
         )
@@ -490,22 +459,11 @@ async def extract_skills_ai(title: str, description: str) -> str:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=200,
             messages=[{
                 "role": "user",
-                "content": f"""Extract technical skills and tools mentioned in this job posting.
-
-Title: {title}
-Description (first 2000 chars): {description[:2000]}
-
-Return ONLY a JSON array of skill/tool names. Pick from these known skills when possible:
-Python, JavaScript, TypeScript, Java, SQL, Power BI, Tableau, Excel, AWS, Azure, GCP,
-Docker, Kubernetes, React, Node.js, TensorFlow, PyTorch, Machine Learning, Data Warehouse,
-ETL, Airflow, Spark, Kafka, Agile, Scrum, JIRA, Git, CI/CD, REST API, GraphQL,
-Salesforce, SAP, ServiceNow, Figma, LLM, GenAI, Prompt Engineering, etc.
-
-If you find skills not in this list but clearly technical, include them too.
-Return [] if no technical skills are mentioned. No explanation.""",
+                "content": f"""Extract skills from: "{title}" — {description[:1000]}
+JSON array only. Use known names: Python, SQL, Power BI, Tableau, Excel, AWS, Azure, etc.""",
             }],
         )
         text = response.content[0].text.strip()
@@ -535,7 +493,8 @@ Return [] if no technical skills are mentioned. No explanation.""",
 
 
 async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
-    """Score a batch of jobs for relevance and trust."""
+    """Score a batch of jobs for relevance and trust.
+    Uses AI for relevance (with fuzzy gate) but heuristic-only for trust (no API calls)."""
     target_title = profile["title"]
     expanded = profile.get("expanded_titles", [])
     keywords = profile.get("keywords", [])
@@ -551,7 +510,8 @@ async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
             job["title"], job.get("description", ""),
             target_title, expanded, keywords, excluded,
         )
-        trust = await score_trust_ai(
+        # Heuristic trust only — NO API call (saves ~50% of Anthropic costs)
+        trust = score_trust_heuristic(
             job["title"], job.get("company_name", ""),
             job.get("description", ""), job.get("salary_min", 0),
             job.get("salary_max", 0), job.get("company_domain", ""),
