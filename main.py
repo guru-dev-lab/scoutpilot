@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.2.1"
+BUILD_VERSION = "1.2.2"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
@@ -350,18 +350,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Startup Cleanup] Failed: {e}")
 
-    # Reset all existing job scores to 75 (neutral) so they show up
-    # AI will properly score new jobs going forward; old jobs age out in 5 days
-    try:
-        reset_db = await get_db()
-        try:
-            await reset_db.execute("UPDATE jobs SET relevance_score = 75 WHERE relevance_score < 60")
-            await reset_db.commit()
-            logger.info("[Startup] Reset low-scored jobs to 75 so they're visible")
-        finally:
-            await reset_db.close()
-    except Exception as e:
-        logger.error(f"[Startup] Score reset failed: {e}")
+    # NOTE: removed startup score inflation (was forcing all jobs to 75)
+    # Let real AI/fuzzy scores stand — filter handles visibility
 
     scheduler.add_job(
         scheduled_scrape,
