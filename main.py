@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.3.2"
+BUILD_VERSION = "1.4.0"
 BUILD_DATE = "2026-04-09"
 RECENT_CHANGES = [
+    {"version": "1.4.0", "date": "2026-04-09", "status": "active", "change": "FULL OVERHAUL — scrape EVERYTHING (no remote/onsite filter), all free APIs hit for ALL profiles, AI generates 25+ title variants, WeWorkRemotely RSS added, 50 results/query, 72h search window, 3-day default display, independent profile bots"},
     {"version": "1.3.2", "date": "2026-04-09", "status": "active", "change": "Max freshness — ALL search terms every cycle (not rotating 3), scrape every 5min, smarter status display showing new job counts"},
     {"version": "1.3.1", "date": "2026-04-09", "status": "active", "change": "Live feed — client-side sort, time group headers (Just Now/Today/Yesterday), slide-in animations, warm cards, auto-refresh 45s, scrape every 7min with 60% more results"},
     {"version": "1.3.0", "date": "2026-04-09", "status": "active", "change": "Fix sorting (newest posted first with fallback), restore freshness animations, slash API costs — wider fuzzy gate, shorter prompts, heuristic trust, deep sweep every 12h"},
@@ -382,6 +383,9 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes}min, deep sweep every 12h, cleanup daily at 3AM)")
+
+    # Re-expand ALL profile titles with latest AI prompt (25+ titles per profile)
+    asyncio.create_task(_re_expand_profiles())
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())

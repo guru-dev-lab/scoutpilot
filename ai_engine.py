@@ -28,10 +28,17 @@ async def expand_title_ai(title: str) -> list[str]:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=500,
+            max_tokens=800,
             messages=[{
                 "role": "user",
-                "content": f"""List all distinct role names for "{title}". No seniority prefixes. Include abbreviations, industry variants, tool-specific titles, related roles with 70%+ overlap. JSON array only, 15+ names.""",
+                "content": f"""List ALL distinct job title variants for "{title}". Include:
+- Abbreviations (BI, DA, SWE etc)
+- Industry variants (fintech, healthcare, govt etc)
+- Tool-specific titles (Tableau Analyst, Power BI Developer etc)
+- Related roles with 60%+ skill overlap
+- Broader parent roles (e.g. "Analyst" for "Data Analyst")
+- Hybrid titles (Data & Analytics, Business Data etc)
+No seniority prefixes. JSON array only. 25+ names minimum.""",
             }],
         )
         text = response.content[0].text.strip()

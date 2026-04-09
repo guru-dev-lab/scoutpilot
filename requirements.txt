@@ -11,3 +11,4 @@ rapidfuzz==3.9.0
 pydantic==2.9.0
 pydantic-settings==2.5.0
 python-multipart==0.0.9
+feedparser==6.0.11

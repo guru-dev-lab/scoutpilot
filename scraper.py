@@ -1064,18 +1064,102 @@ async def scrape_himalayas(
     return jobs
 
 
-_term_offset = {}  # Track which search term each profile is on
+async def scrape_weworkremotely(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from WeWorkRemotely RSS feed (free, no key needed)."""
+    logger.info(f"[WWR] Searching: '{search_term}'")
+
+    jobs = []
+    try:
+        import feedparser
+
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        # WWR has category-based RSS feeds — use the main programming feed
+        rss_urls = [
+            "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+            "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
+            "https://weworkremotely.com/categories/remote-data-jobs.rss",
+            "https://weworkremotely.com/categories/remote-business-exec-management-jobs.rss",
+            "https://weworkremotely.com/categories/remote-finance-legal-jobs.rss",
+        ]
+
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            for rss_url in rss_urls:
+                try:
+                    resp = await client.get(rss_url)
+                    if resp.status_code != 200:
+                        continue
+                    feed = feedparser.parse(resp.text)
+
+                    for entry in feed.entries:
+                        title = entry.get("title", "")
+                        # WWR titles often have format "Company: Job Title"
+                        parts = title.split(":", 1)
+                        if len(parts) == 2:
+                            company = parts[0].strip()
+                            job_title = parts[1].strip()
+                        else:
+                            company = ""
+                            job_title = title
+
+                        # Match: any search word in title
+                        title_lower = job_title.lower()
+                        if not any(w in title_lower for w in search_words):
+                            continue
+
+                        if _is_blocked_company(company):
+                            continue
+
+                        apply_url = entry.get("link", "")
+                        description = entry.get("summary", entry.get("description", ""))
+                        clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
+                        posted_at = _normalize_posted_at(entry.get("published", ""))
+
+                        job = {
+                            "title": job_title,
+                            "company_name": company,
+                            "company_domain": "",
+                            "location": "Remote",
+                            "is_remote": True,
+                            "work_type": "remote",
+                            "description": clean_desc[:10000],
+                            "salary_min": 0,
+                            "salary_max": 0,
+                            "source": "weworkremotely",
+                            "source_url": apply_url,
+                            "direct_apply_url": apply_url if _is_direct_url(apply_url) else "",
+                            "posted_at": posted_at,
+                            "is_direct_apply": _is_direct_url(apply_url),
+                            "search_profile_id": profile_id,
+                        }
+
+                        was_inserted = await insert_job(job)
+                        if was_inserted:
+                            jobs.append(job)
+                except Exception as e:
+                    logger.debug(f"[WWR] RSS error for {rss_url}: {e}")
+
+        logger.info(f"[WWR] Matched {len(jobs)} new jobs for '{search_term}'")
+    except ImportError:
+        logger.warning("[WWR] feedparser not installed — skipping")
+    except Exception as e:
+        logger.error(f"[WWR] Error: {e}")
+
+    return jobs
 
 
 async def _scrape_one_profile(profile: dict) -> dict:
-    """Scrape ALL sources for ONE profile — all terms and sources run concurrently."""
-    global _term_offset
+    """Scrape ALL sources for ONE profile — all terms and sources run concurrently.
+    Each profile is an independent 'bot' that searches everything."""
     title = profile["title"]
     expanded = profile.get("expanded_titles", [])
     locations = profile.get("locations", [])
     profile_id = profile["id"]
-    hours = profile.get("freshness_hours", 24)
-
     # Build search queries from title + expanded titles
     search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
 
@@ -1087,14 +1171,14 @@ async def _scrape_one_profile(profile: dict) -> dict:
         if kw.lower() not in [s.lower() for s in search_terms]:
             search_terms.append(kw)
 
-    is_remote_only = profile.get("remote_only", 0)
-
     # Search ALL terms every cycle — they run concurrently so it's fast
     # More terms = more chances to find freshly posted jobs
-    all_terms = search_terms[:15]
+    all_terms = search_terms[:20]  # Allow up to 20 expanded titles
     terms_this_cycle = all_terms if all_terms else [title]
 
     # ── Build ALL scrape tasks for this profile (run concurrently) ──
+    # STRATEGY: Scrape EVERYTHING — do NOT filter by remote/onsite at scrape time.
+    # Let the UI filters handle work type. This catches 5x more jobs.
     tasks = []
 
     # Group 1: Indeed + LinkedIn together (reliable, fast)
@@ -1103,13 +1187,14 @@ async def _scrape_one_profile(profile: dict) -> dict:
     EXTRA_SITES = ["google", "glassdoor", "zip_recruiter"]
 
     for term in terms_this_cycle:
-        effective_term = f"{term} remote" if is_remote_only else term
+        # NO "remote" appended — scrape everything, filter in UI
+        effective_term = term
 
         # Main boards — Indeed + LinkedIn (reliable, get more results)
         for loc in (locations if locations else [""]):
             tasks.append(("JobSpy/main", scrape_jobspy(
                 search_term=effective_term, location=loc,
-                results_wanted=40, hours_old=hours, profile_id=profile_id,
+                results_wanted=50, hours_old=72, profile_id=profile_id,
                 sites=MAIN_SITES,
             )))
 
@@ -1117,32 +1202,30 @@ async def _scrape_one_profile(profile: dict) -> dict:
         for loc in (locations if locations else [""]):
             tasks.append(("JobSpy/extra", scrape_jobspy(
                 search_term=effective_term, location=loc,
-                results_wanted=25, hours_old=hours, profile_id=profile_id,
+                results_wanted=30, hours_old=72, profile_id=profile_id,
                 sites=EXTRA_SITES,
             )))
 
-        # Remote-specific APIs — Remotive, RemoteOK, Jobicy, Himalayas
-        if is_remote_only:
-            tasks.append(("Remotive", scrape_remotive(term, profile_id)))
-            tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
-            tasks.append(("Jobicy", scrape_jobicy(term, profile_id)))
-            tasks.append(("Himalayas", scrape_himalayas(term, profile_id)))
-
-        # Arbeitnow — all profiles (has both remote and onsite)
+        # ALL free APIs run for ALL profiles — scrape everything
+        tasks.append(("Remotive", scrape_remotive(term, profile_id)))
+        tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
+        tasks.append(("Jobicy", scrape_jobicy(term, profile_id)))
+        tasks.append(("Himalayas", scrape_himalayas(term, profile_id)))
         tasks.append(("Arbeitnow", scrape_arbeitnow(term, profile_id)))
 
     # TheMuse — 1 call per profile (fetches multiple pages)
     tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
+    # WeWorkRemotely RSS — 1 call per profile
+    tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
+
     # SerpApi (if key)
     if settings.serpapi_key:
-        eff = f"{title} remote" if is_remote_only else title
-        tasks.append(("SerpApi", scrape_serpapi(eff, locations[0] if locations else "", profile_id)))
+        tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
 
     # JSearch (if key)
     if settings.rapidapi_key:
-        eff = f"{title} remote" if is_remote_only else title
-        tasks.append(("JSearch", scrape_jsearch(eff, locations[0] if locations else "", profile_id)))
+        tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
 
     # ── Fire all tasks concurrently ──
     total_new = 0
