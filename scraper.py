@@ -1110,11 +1110,11 @@ async def _scrape_one_profile(profile: dict) -> dict:
     for term in terms_this_cycle:
         effective_term = f"{term} remote" if is_remote_only else term
 
-        # Main boards — Indeed + LinkedIn (reliable)
+        # Main boards — Indeed + LinkedIn (reliable, get more results)
         for loc in (locations if locations else [""]):
             tasks.append(("JobSpy/main", scrape_jobspy(
                 search_term=effective_term, location=loc,
-                results_wanted=25, hours_old=hours, profile_id=profile_id,
+                results_wanted=40, hours_old=hours, profile_id=profile_id,
                 sites=MAIN_SITES,
             )))
 
@@ -1122,7 +1122,7 @@ async def _scrape_one_profile(profile: dict) -> dict:
         for loc in (locations if locations else [""]):
             tasks.append(("JobSpy/extra", scrape_jobspy(
                 search_term=effective_term, location=loc,
-                results_wanted=15, hours_old=hours, profile_id=profile_id,
+                results_wanted=25, hours_old=hours, profile_id=profile_id,
                 sites=EXTRA_SITES,
             )))
 
