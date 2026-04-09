@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.1.6"
+BUILD_VERSION = "1.2.0"
 BUILD_DATE = "2026-04-08"
 RECENT_CHANGES = [
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},
@@ -123,20 +123,33 @@ async def scheduled_scrape():
             })
 
         ai_scored = 0
+        from ai_engine import score_relevance_fuzzy
         for job in new_jobs:
-            best_relevance = 0
+            # STEP 1: Find best-matching profile using FREE fuzzy scoring
+            best_fuzzy = 0
+            best_profile = all_profiles_data[0] if all_profiles_data else None
             for pd in all_profiles_data:
-                # AI scoring — calls Haiku only when fuzzy is ambiguous (20-85)
-                # High fuzzy (>85) and low fuzzy (<20) skip the API call
+                fuzzy = score_relevance_fuzzy(
+                    job["title"], job.get("description", ""),
+                    pd["title"], pd["expanded"], pd["keywords"],
+                )
+                if fuzzy > best_fuzzy:
+                    best_fuzzy = fuzzy
+                    best_profile = pd
+
+            # STEP 2: Only call AI for the BEST matching profile (not all 5)
+            # Fuzzy pre-filter inside score_relevance_ai handles obvious cases
+            if best_profile:
                 relevance = await score_relevance_ai(
                     job["title"], job.get("description", ""),
-                    pd["title"], pd["expanded"],
-                    pd["keywords"], pd["excluded"],
+                    best_profile["title"], best_profile["expanded"],
+                    best_profile["keywords"], best_profile["excluded"],
                 )
-                best_relevance = max(best_relevance, relevance)
+            else:
+                relevance = best_fuzzy
 
-            trust = 50  # Deep sweep refines trust with AI
-            await update_job_scores(job["id"], best_relevance, trust)
+            trust = 50
+            await update_job_scores(job["id"], relevance, trust)
             ai_scored += 1
 
         if ai_scored:
@@ -254,24 +267,44 @@ async def scheduled_deep_sweep():
                     except Exception as e:
                         logger.error(f"[Deep Sweep] Error: {e}")
 
-        # Score any new finds
+        # Score any new finds — best-profile-only + fuzzy gate (same as regular scrape)
         if total_new > 0:
             from database import get_jobs as _get_jobs
+            from ai_engine import score_relevance_fuzzy
             new_jobs = await _get_jobs(hours=1, status="new", limit=200)
+
+            # Build profile data once
+            all_pd = []
+            for profile in profiles:
+                kws = profile.get("keywords", [])
+                if isinstance(kws, str):
+                    kws = [k.strip() for k in kws.split(",") if k.strip()]
+                excl = profile.get("excluded_keywords", [])
+                if isinstance(excl, str):
+                    excl = [k.strip() for k in excl.split(",") if k.strip()]
+                all_pd.append({"title": profile["title"], "expanded": profile.get("expanded_titles", []), "keywords": kws, "excluded": excl})
+
             for job in new_jobs:
-                for profile in profiles:
+                # Find best profile with FREE fuzzy, then AI only for that one
+                best_fuzzy = 0
+                best_pd = all_pd[0] if all_pd else None
+                for pd in all_pd:
+                    f = score_relevance_fuzzy(job["title"], job.get("description", ""), pd["title"], pd["expanded"], pd["keywords"])
+                    if f > best_fuzzy:
+                        best_fuzzy = f
+                        best_pd = pd
+
+                if best_pd:
                     relevance = await score_relevance_ai(
                         job["title"], job.get("description", ""),
-                        profile["title"], profile.get("expanded_titles", []),
-                        profile.get("keywords", []), profile.get("excluded_keywords", []),
+                        best_pd["title"], best_pd["expanded"],
+                        best_pd["keywords"], best_pd["excluded"],
                     )
-                    trust = await score_trust_ai(
-                        job["title"], job.get("company_name", ""),
-                        job.get("description", ""), job.get("salary_min", 0),
-                        job.get("salary_max", 0), job.get("company_domain", ""),
-                        job.get("source", ""),
-                    )
-                    await update_job_scores(job["id"], relevance, trust)
+                else:
+                    relevance = best_fuzzy
+
+                trust = 50  # Heuristic trust — no API call
+                await update_job_scores(job["id"], relevance, trust)
 
         logger.info(f"[Deep Sweep] Complete — {total_new} new jobs discovered")
         if total_new > 0:

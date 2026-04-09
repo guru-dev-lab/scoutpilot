@@ -116,8 +116,14 @@ async def score_relevance_ai(
     keywords: list[str] = [],
     excluded_keywords: list[str] = [],
 ) -> int:
-    """Use Claude AI to score how relevant a job is to the target role (0-100).
-    AI is the SOLE scorer — no fuzzy gates. Understands role families natively."""
+    """Smart relevance scoring — fuzzy pre-filter saves API calls.
+
+    Strategy:
+      - Fuzzy score < 25  → obvious mismatch, return fuzzy score (NO API call)
+      - Fuzzy score > 85  → obvious match, return fuzzy score (NO API call)
+      - Fuzzy score 25-85 → ambiguous, ask AI to decide (API call)
+
+    This skips ~70-80% of API calls while keeping AI for the hard cases."""
 
     # Quick exclude check — blocked keywords = instant reject
     desc_lower = job_description.lower()
@@ -126,9 +132,18 @@ async def score_relevance_ai(
         if kw.lower() in desc_lower or kw.lower() in title_lower:
             return 5
 
+    # Always run fuzzy first (free, instant)
+    fuzzy = score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
+
     # Fall back to fuzzy only if no API key
     if not settings.anthropic_api_key:
-        return score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
+        return fuzzy
+
+    # COST GATE: skip AI for obvious cases
+    if fuzzy < 25:
+        return fuzzy  # "Employee Wellness Assistant" vs "Data Analyst" = 0 API calls
+    if fuzzy > 85:
+        return fuzzy  # "BI Analyst" vs "Data Analyst" = 0 API calls
 
     try:
         import anthropic
