@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.3.1"
+BUILD_VERSION = "1.3.2"
 BUILD_DATE = "2026-04-09"
 RECENT_CHANGES = [
+    {"version": "1.3.2", "date": "2026-04-09", "status": "active", "change": "Max freshness — ALL search terms every cycle (not rotating 3), scrape every 5min, smarter status display showing new job counts"},
     {"version": "1.3.1", "date": "2026-04-09", "status": "active", "change": "Live feed — client-side sort, time group headers (Just Now/Today/Yesterday), slide-in animations, warm cards, auto-refresh 45s, scrape every 7min with 60% more results"},
     {"version": "1.3.0", "date": "2026-04-09", "status": "active", "change": "Fix sorting (newest posted first with fallback), restore freshness animations, slash API costs — wider fuzzy gate, shorter prompts, heuristic trust, deep sweep every 12h"},
     {"version": "1.1.0", "date": "2026-04-08", "status": "active", "change": "Smart title expansion — AI generates distinct role families (BI Analyst ≈ Data Analyst ≈ Reporting Analyst etc.), 5 terms/cycle, 15 term rotation, re-expands on every deploy"},

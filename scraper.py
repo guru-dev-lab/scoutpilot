@@ -1089,15 +1089,10 @@ async def _scrape_one_profile(profile: dict) -> dict:
 
     is_remote_only = profile.get("remote_only", 0)
 
-    # Pick 3 rotating terms per cycle (balances coverage vs task count)
+    # Search ALL terms every cycle — they run concurrently so it's fast
+    # More terms = more chances to find freshly posted jobs
     all_terms = search_terms[:15]
-    pid = profile_id or 0
-    term_idx = _term_offset.get(pid, 0) % len(all_terms) if all_terms else 0
-    terms_this_cycle = []
-    for i in range(min(3, len(all_terms))):
-        idx = (term_idx + i) % len(all_terms)
-        terms_this_cycle.append(all_terms[idx])
-    _term_offset[pid] = term_idx + len(terms_this_cycle)
+    terms_this_cycle = all_terms if all_terms else [title]
 
     # ── Build ALL scrape tasks for this profile (run concurrently) ──
     tasks = []

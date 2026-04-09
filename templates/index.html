@@ -281,6 +281,8 @@
   .dot.orange { background: var(--orange); }
   .dot.red { background: var(--red); }
   .dot.gray { background: var(--text3); }
+  .pulse-dot { animation: pulse-glow 1.5s ease-in-out infinite; }
+  @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 4px var(--green); } 50% { box-shadow: 0 0 12px var(--green); } }
 
   /* Info Modal */
   .info-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: flex-start; justify-content: center; padding-top: 60px; overflow-y: auto; }
@@ -486,7 +488,7 @@
 
     <div class="info-section">
       <h3>Getting Started</h3>
-      <p>Click <strong>+ Add Search</strong> to create a search profile with your target job title. ScoutPilot automatically scrapes jobs from LinkedIn, Indeed, Glassdoor, and more every 10 minutes. Use <strong>Scrape Now</strong> to pull fresh results immediately.</p>
+      <p>Click <strong>+ Add Search</strong> to create a search profile with your target job title. ScoutPilot automatically scrapes ALL search terms across LinkedIn, Indeed, Glassdoor, and 7+ sources every 5 minutes. Use <strong>Scrape Now</strong> to pull fresh results immediately.</p>
     </div>
 
     <div class="info-section">
@@ -1300,13 +1302,19 @@ function updateScrapeStatus(status) {
   if (!s || !s.timestamp) {
     el.innerHTML = '<span class="dot gray"></span> Waiting for first scrape...';
   } else if (s.status === 'ok') {
-    el.innerHTML = '<span class="dot green"></span> Last scrape: ' + formatDateTime(s.timestamp) + ' (' + getTimeAgo(s.timestamp) + ') \u2014 ' + (s.new_jobs || 0) + ' new jobs';
+    var ago = getTimeAgo(s.timestamp);
+    var nj = s.new_jobs || 0;
+    if (nj > 0) {
+      el.innerHTML = '<span class="dot green pulse-dot"></span> +' + nj + ' new jobs found ' + ago;
+    } else {
+      el.innerHTML = '<span class="dot green"></span> Watching \u2014 checked ' + ago + ', no new listings yet';
+    }
   } else if (s.status === 'error') {
-    el.innerHTML = '<span class="dot red"></span> Last scrape failed at ' + formatDateTime(s.timestamp);
+    el.innerHTML = '<span class="dot red"></span> Last scrape failed ' + getTimeAgo(s.timestamp);
   } else if (s.status === 'no_profiles') {
     el.innerHTML = '<span class="dot orange"></span> No profiles configured';
   } else {
-    el.innerHTML = '<span class="dot orange"></span> Scraping...';
+    el.innerHTML = '<span class="dot orange"></span> Scraping all sources...';
   }
 }
 
@@ -1515,7 +1523,7 @@ function _renderSkillDropdown(filter) {
 loadSkills();
 loadJobs();
 checkStatus();
-setInterval(checkStatus, 20000);
+setInterval(checkStatus, 10000);
 setInterval(loadJobs, 45000);  // refresh jobs every 45s for live feel
 setInterval(loadSkills, 120000);
 

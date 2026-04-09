@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     rapidapi_key: str = ""
 
     # Scraping
-    scrape_interval_minutes: int = 7
+    scrape_interval_minutes: int = 5
 
     # Database
     database_path: str = "/data/scoutpilot.db"
