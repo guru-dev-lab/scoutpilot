@@ -109,6 +109,19 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN skills TEXT DEFAULT ''")
             await db.commit()
 
+        # Migration: add hash_cross column for cross-source dedup
+        try:
+            await db.execute("SELECT hash_cross FROM jobs LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding hash_cross column for cross-source dedup")
+            await db.execute("ALTER TABLE jobs ADD COLUMN hash_cross TEXT DEFAULT ''")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_hash_cross ON jobs(hash_cross)")
+            await db.commit()
+
+        # Migration: add source_url index for URL dedup
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_source_url ON jobs(source_url)")
+        await db.commit()
+
         # Backfill: extract skills for ALL jobs missing skills (one pass)
         cursor = await db.execute(
             "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
@@ -164,7 +177,7 @@ def make_job_hash(company: str, title: str, location: str) -> str:
 
 
 async def insert_job(job_data: dict) -> bool:
-    """Insert a job if it doesn't already exist (exact hash + fuzzy title check). Returns True if inserted."""
+    """Insert a job if it doesn't already exist (exact hash + fuzzy title + URL check). Returns True if inserted."""
     h = make_job_hash(
         job_data.get("company_name", ""),
         job_data.get("title", ""),
@@ -176,6 +189,28 @@ async def insert_job(job_data: dict) -> bool:
         existing = await db.execute("SELECT id FROM jobs WHERE hash = ?", (h,))
         if await existing.fetchone():
             return False
+
+        # 1b. Source URL dedup — same URL from different scrape cycles
+        source_url = job_data.get("source_url", "")
+        if source_url:
+            existing_url = await db.execute(
+                "SELECT id FROM jobs WHERE source_url = ? LIMIT 1", (source_url,)
+            )
+            if await existing_url.fetchone():
+                return False
+
+        # 1c. Cross-source dedup — same company + normalized title (ignore location diffs)
+        company_norm_hash = _normalize_company(job_data.get("company_name", ""))
+        title_norm_hash = _normalize_text(job_data.get("title", ""))
+        if company_norm_hash and title_norm_hash:
+            cross_hash = hashlib.md5(f"{company_norm_hash}|{title_norm_hash}".encode()).hexdigest()
+            existing_cross = await db.execute(
+                "SELECT id FROM jobs WHERE hash_cross = ? LIMIT 1", (cross_hash,)
+            )
+            if await existing_cross.fetchone():
+                return False
+        else:
+            cross_hash = None
 
         # 2. Fuzzy dedup — catch "Sr Data Analyst" vs "Senior Data Analyst" etc.
         company_norm = _normalize_company(job_data.get("company_name", ""))
@@ -214,13 +249,14 @@ async def insert_job(job_data: dict) -> bool:
         posted_at = job_data.get("posted_at", "") or ""
         skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
         await db.execute(
-            """INSERT INTO jobs (hash, title, company_name, company_domain, location,
+            """INSERT INTO jobs (hash, hash_cross, title, company_name, company_domain, location,
                is_remote, work_type, description, salary_min, salary_max, source, source_url,
                direct_apply_url, posted_at, first_seen_at, relevance_score, trust_score,
                is_direct_apply, skills, status, search_profile_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 h,
+                cross_hash or "",
                 job_data.get("title", ""),
                 job_data.get("company_name", ""),
                 job_data.get("company_domain", ""),
