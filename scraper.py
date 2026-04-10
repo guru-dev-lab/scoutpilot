@@ -690,16 +690,38 @@ async def scrape_remotive(
         search_words = search_lower.split()
 
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            # Broad fetch first — Remotive's server-side search is too strict
-            # for niche terms. Fetch latest 100 jobs and filter client-side.
-            resp = await client.get(
-                "https://remotive.com/api/remote-jobs",
-                params={"limit": 100},
-            )
-            if resp.status_code != 200:
-                logger.error(f"[Remotive] HTTP {resp.status_code}: {resp.text[:200]}")
-                return []
-            data = resp.json()
+            # Fetch from multiple relevant categories to maximize coverage
+            # Remotive caps at ~20 per request, so hit multiple categories
+            categories = [
+                "",                    # all categories (latest 20)
+                "data",                # data/analytics roles
+                "software-dev",        # engineering/dev roles
+                "devops",              # devops/security roles
+                "business",            # business analyst roles
+                "all-others",          # catch-all
+            ]
+            all_items = []
+            seen_ids = set()
+            for cat in categories:
+                try:
+                    params = {"limit": 50}
+                    if cat:
+                        params["category"] = cat
+                    resp = await client.get(
+                        "https://remotive.com/api/remote-jobs",
+                        params=params,
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    cat_data = resp.json()
+                    for item in cat_data.get("jobs", []):
+                        item_id = item.get("id")
+                        if item_id and item_id not in seen_ids:
+                            seen_ids.add(item_id)
+                            all_items.append(item)
+                except Exception:
+                    continue
+            data = {"jobs": all_items}
 
         for item in data.get("jobs", []):
             # Client-side filter — any search word in title or category
@@ -1301,10 +1323,9 @@ def _get_jobspy_semaphore() -> asyncio.Semaphore:
 
 async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     """
-    Independent bot for ONE profile — runs all sources for this profile.
+    Independent bot for ONE profile — ALL sources fire EVERY cycle.
     Light sources run immediately in parallel.
     JobSpy calls acquire the global semaphore (only 1 at a time).
-    Each bot runs concurrently with other profile bots.
     """
     title = profile["title"]
     profile_id = profile["id"]
@@ -1313,29 +1334,28 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     effective_locations = locations if locations else (["USA"] if remote_only else [""])
     terms = _build_profile_terms(profile)
 
-    run_jobspy = (cycle_number % 3 == 1)
-    run_strict = (cycle_number % 5 == 1)
-
     total_new = 0
     errors = []
 
-    logger.info(f"[Bot:{title}] Starting — {len(terms)} terms, jobspy={'ON' if run_jobspy else 'OFF'}")
+    logger.info(f"[Bot:{title}] Starting — {len(terms)} terms, ALL sources ON")
 
-    # ── Light sources: fire ALL in parallel (fast, no anti-bot) ──
+    # ── ALL light sources: fire in parallel (fast APIs, no anti-bot) ──
     light_tasks = []
+
+    # Remotive + RemoteOK — every term
     for term in terms:
         light_tasks.append(("Remotive", scrape_remotive(term, profile_id)))
         light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
+    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — one call per profile
     light_tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
+    light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
+    light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
+    light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
+    light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
-    if run_strict:
-        light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
-        light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
-        light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
-        light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
-
-    if settings.serpapi_key and run_jobspy:
+    # SerpApi / JSearch if keys available
+    if settings.serpapi_key:
         light_tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
     if settings.rapidapi_key:
         light_tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
@@ -1351,27 +1371,25 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
 
     logger.info(f"[Bot:{title}] Light sources done — {total_new} new jobs")
 
-    # ── JobSpy: acquire global semaphore (only 1 bot scrapes at a time) ──
-    if run_jobspy:
-        MAIN_SITES = ["indeed", "linkedin"]
-        jobspy_terms = terms[:3]  # Top 3 terms to keep it fast
+    # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
+    MAIN_SITES = ["indeed", "linkedin"]
+    jobspy_terms = terms[:3]
 
-        for term in jobspy_terms:
-            effective_term = f"{term} remote" if remote_only else term
-            for loc in effective_locations:
-                async with _get_jobspy_semaphore():
-                    try:
-                        result = await scrape_jobspy(
-                            search_term=effective_term, location=loc,
-                            results_wanted=50, hours_old=72, profile_id=profile_id,
-                            sites=MAIN_SITES,
-                        )
-                        total_new += len(result) if isinstance(result, list) else 0
-                    except Exception as e:
-                        errors.append(f"JobSpy '{term}' @ '{loc}': {e}")
-                        logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
-                    # Delay AFTER releasing semaphore so next bot can go
-                await asyncio.sleep(3)
+    for term in jobspy_terms:
+        effective_term = f"{term} remote" if remote_only else term
+        for loc in effective_locations:
+            async with _get_jobspy_semaphore():
+                try:
+                    result = await scrape_jobspy(
+                        search_term=effective_term, location=loc,
+                        results_wanted=50, hours_old=72, profile_id=profile_id,
+                        sites=MAIN_SITES,
+                    )
+                    total_new += len(result) if isinstance(result, list) else 0
+                except Exception as e:
+                    errors.append(f"JobSpy '{term}' @ '{loc}': {e}")
+                    logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
+            await asyncio.sleep(3)
 
     logger.info(f"[Bot:{title}] DONE — {total_new} new jobs, {len(errors)} errors")
     return {"profile": title, "new_jobs": total_new, "errors": errors}
@@ -1380,18 +1398,13 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
 async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:
     """
     Launch independent bots for ALL profiles simultaneously.
+    ALL sources fire EVERY cycle — no tier gating.
 
     Each bot:
-      1. Fires light sources (Remotive, RemoteOK, WWR, etc.) in parallel — instant
-      2. Queues JobSpy calls through a global semaphore (1 at a time) — prevents IP bans
-
-    Result: every profile gets light-source results within seconds.
-    JobSpy calls are serialized across all bots but each bot progresses independently.
+      1. Fires ALL light sources in parallel — instant
+      2. Queues JobSpy calls through global semaphore (1 at a time)
     """
-    run_jobspy = (cycle_number % 3 == 1)
-    run_strict = (cycle_number % 5 == 1)
-    tier_label = "ALL" if (run_jobspy and run_strict) else ("JobSpy+fast" if run_jobspy else ("strict+fast" if run_strict else "fast"))
-    logger.info(f"[Scrape] Cycle #{cycle_number} ({tier_label}): launching {len(profiles)} independent bots")
+    logger.info(f"[Scrape] Cycle #{cycle_number} (ALL SOURCES): launching {len(profiles)} independent bots")
 
     # Launch ALL profile bots concurrently
     bot_results = await asyncio.gather(
