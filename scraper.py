@@ -937,12 +937,12 @@ async def scrape_jobicy(
     jobs = []
     try:
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        # Jobicy tag filter is very strict — use broad fetch + client-side matching
-        # Their API limits to 50 results max. Don't use 'tag' — returns 0 for most queries
+        # Jobicy: broad fetch, no tag/geo filters (both too restrictive, return 0)
+        # Their API returns the latest 50 remote jobs — filter client-side
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(
                 "https://jobicy.com/api/v2/remote-jobs",
-                params={"count": 50, "geo": "usa"},
+                params={"count": 50},
             )
             if resp.status_code != 200:
                 logger.error(f"[Jobicy] HTTP {resp.status_code}: {resp.text[:200]}")

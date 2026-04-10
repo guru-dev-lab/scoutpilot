@@ -518,7 +518,7 @@ async def test_sources():
 
         # 3. Jobicy
         try:
-            r = await client.get("https://jobicy.com/api/v2/remote-jobs", params={"count": 5, "tag": "data-analyst", "geo": "usa"})
+            r = await client.get("https://jobicy.com/api/v2/remote-jobs", params={"count": 50})
             results["jobicy"] = {"status": r.status_code, "body_preview": r.text[:300]}
             if r.status_code == 200:
                 data = r.json()
@@ -531,7 +531,7 @@ async def test_sources():
 
         # 4. Himalayas
         try:
-            r = await client.get("https://himalayas.app/jobs/api", params={"limit": 5, "q": "data analyst"})
+            r = await client.get("https://himalayas.app/jobs/api", params={"limit": 20})
             results["himalayas"] = {"status": r.status_code, "body_preview": r.text[:300]}
             if r.status_code == 200:
                 data = r.json()
@@ -597,7 +597,7 @@ async def test_sources():
             SELECT source, COUNT(*) as cnt,
                    MAX(first_seen_at) as newest_seen,
                    SUM(CASE WHEN first_seen_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) as last_hour
-            FROM jobs WHERE archived = 0
+            FROM jobs
             GROUP BY source ORDER BY cnt DESC
         """)
         db_sources = [dict(r) for r in await rows.fetchall()]
