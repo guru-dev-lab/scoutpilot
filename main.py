@@ -79,6 +79,23 @@ scheduler = AsyncIOScheduler()
 last_scrape_result = {"status": "idle", "timestamp": None}
 _scrape_running = False  # Lock to prevent overlapping cycles
 
+# Ring buffer for scraper logs — last 50 log entries visible at /api/debug/scrape-log
+from collections import deque
+_scrape_log = deque(maxlen=50)
+
+class ScrapeLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            _scrape_log.append({"ts": record.created, "level": record.levelname, "msg": msg})
+        except Exception:
+            pass
+
+_slh = ScrapeLogHandler()
+_slh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+logging.getLogger("scoutpilot").addHandler(_slh)
+logging.getLogger("scraper").addHandler(_slh)
+
 
 async def scheduled_scrape(cycle_number: int = 1):
     """Background scrape cycle — with overlap prevention and per-source rate limiting."""
@@ -893,9 +910,22 @@ async def api_debug_sources():
         )
         rows2 = await cursor2.fetchall()
         recent = [{"source": r[0], "count": r[1]} for r in rows2]
-        return {"all_time": sources, "last_24h": recent}
+        # Work type distribution
+        cursor3 = await db.execute(
+            "SELECT work_type, COUNT(*) as cnt FROM jobs GROUP BY work_type ORDER BY cnt DESC"
+        )
+        rows3 = await cursor3.fetchall()
+        work_types = [{"work_type": r[0], "count": r[1]} for r in rows3]
+
+        return {"all_time": sources, "last_24h": recent, "work_type_dist": work_types}
     finally:
         await db.close()
+
+
+@app.get("/api/debug/scrape-log")
+async def api_debug_scrape_log():
+    """Show recent scraper log entries — helps diagnose what each source is doing."""
+    return {"log": list(_scrape_log), "count": len(_scrape_log)}
 
 
 # ──────────────────────────────────────────────
