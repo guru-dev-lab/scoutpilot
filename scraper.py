@@ -256,14 +256,34 @@ def _detect_work_type(row: dict) -> str:
         if re.search(pat, text):
             return "hybrid"
 
-    # ── REMOTE: title or location says remote → trust it ──
-    title_loc_remote = [
-        r'\bremote\b', r'\bwork\s*from\s*home\b', r'\bwfh\b',
-        r'\bfully[\s\-]?remote\b', r'\b100%\s*remote\b',
-        r'\btelecommute\b', r'\btelework\b', r'\banywhere\b',
+    # ── FALSE-POSITIVE filter: "remote" meaning physical locations, not WFH ──
+    # Must run BEFORE remote detection to reject these
+    remote_noise = [
+        r'\bremote\s+project', r'\bremote\s+site', r'\bremote\s+location',
+        r'\bremote\s+area', r'\bremote\s+region', r'\bremote\s+field',
+        r'\bremote\s+facilit', r'\bremote\s+camp', r'\bremote\s+communit',
+        r'\bremote\s+sensing', r'\bremote\s+monitor', r'\bremote\s+control',
+        r'\bremote\s+support', r'\bremote\s+access', r'\bremote\s+diagnos',
+        r'\bremote\s+troubleshoot', r'\bremote\s+install',
     ]
-    for pat in title_loc_remote:
+    title_has_noise = any(re.search(pat, title) for pat in remote_noise)
+
+    # ── REMOTE: title or location says remote → trust it ──
+    # But ONLY if "remote" appears as a work-arrangement term, not a physical descriptor
+    title_loc_remote_strong = [
+        r'\bfully[\s\-]?remote\b', r'\b100%\s*remote\b',
+        r'\bwork\s*from\s*home\b', r'\bwfh\b',
+        r'\btelecommute\b', r'\btelework\b', r'\banywhere\b',
+        r'\(remote\)', r'\bremote\s*[-/|]\s*\w',  # "(Remote)" or "Remote / US"
+    ]
+    for pat in title_loc_remote_strong:
         if re.search(pat, title_loc):
+            return "remote"
+
+    # Plain \bremote\b in title/location — only if no noise patterns present
+    if not title_has_noise and re.search(r'\bremote\b', title_loc):
+        # Extra check: "remote" right next to physical-place words is noise
+        if not re.search(r'\bremote\s+(project|site|location|area|field|facilit|camp|install)', title_loc):
             return "remote"
 
     # ── REMOTE: description only → require STRONG signals ──
@@ -276,13 +296,25 @@ def _detect_work_type(row: dict) -> str:
         r'\bremote[\s\-]?first\b', r'\bremote[\s\-]?friendly\b',
         r'\bremote\s+position\b', r'\bremote\s+role\b',
         r'\bremote\s+job\b', r'\bremote\s+opportunity\b',
-        r'\bwork\s+remotely\b', r'\bworking\s+remotely\b',
         r'\bthis\s+(is\s+a\s+)?remote\b',
         r'\bopen\s+to\s+remote\b', r'\bremote\s+eligible\b',
+        r'\bdesignated\s+as\s+.{0,20}remote\b',
     ]
     for pat in strong_desc_remote:
         if re.search(pat, description):
             return "remote"
+
+    # "work remotely" / "working remotely" — only if it's a positive statement
+    # Skip if negated: "no option to work remotely", "not able to work remotely"
+    if re.search(r'\b(work|working)\s+remotely\b', description):
+        # Check for negation within 30 chars before the match
+        m = re.search(r'(.{0,30})\b(work|working)\s+remotely\b', description)
+        if m:
+            prefix = m.group(1).lower()
+            negators = ['no ', 'not ', 'cannot ', "can't ", 'unable ', 'without ',
+                        'occasional', 'sometimes', 'may ', 'might ', 'option to']
+            if not any(neg in prefix for neg in negators):
+                return "remote"
 
     # ── REMOTE-ONLY sources: if the source IS a remote job board, trust it ──
     remote_sources = {"remotive", "remoteok", "weworkremotely", "jobicy", "himalayas"}
@@ -1271,7 +1303,8 @@ async def _scrape_one_profile(profile: dict, cycle_number: int = 1) -> dict:
     effective_locations = locations if locations else (["USA"] if remote_only else [""])
 
     for term in terms_this_cycle:
-        effective_term = term
+        # For remote-only profiles, append "remote" to help Indeed/LinkedIn surface remote listings
+        effective_term = f"{term} remote" if remote_only else term
 
         # TIER 2: JobSpy — Indeed + LinkedIn (every 3rd cycle)
         if run_jobspy:
