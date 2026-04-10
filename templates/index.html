@@ -419,6 +419,12 @@
       </select>
     </div>
     <div class="filter-group">
+      <label>Profile</label>
+      <select id="filterProfile" onchange="loadJobs()">
+        <option value="" selected>All Profiles</option>
+      </select>
+    </div>
+    <div class="filter-group">
       <label>Source</label>
       <select id="filterSource" onchange="loadJobs()">
         <option value="">All Sources</option>
@@ -889,11 +895,13 @@ async function loadJobs() {
 
   // When viewing saved/applied jobs, show all regardless of time window
   const effectiveHours = (status === 'saved' || status === 'applied') ? 720 : hours;
+  const profileId = document.getElementById('filterProfile').value;
   const params = new URLSearchParams({
     hours: effectiveHours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
     source, work_type: workType, status, direct_only: directOnly,
     sort_by, sort_dir, search, skill, limit: 500, offset: 0,
+    profile: profileId,
   });
 
   // Show searching indicator
@@ -1138,6 +1146,14 @@ async function loadProfiles() {
         + ' <span style="color:var(--text3);font-size:0.72rem;">(' + (p.expanded_titles || []).length + ' variants)</span>'
         + ' <span class="remove" onclick="removeProfile(' + p.id + ')">&times;</span></div>';
     }).join('');
+    // Populate profile filter dropdown
+    var sel = document.getElementById('filterProfile');
+    if (sel) {
+      var current = sel.value;
+      sel.innerHTML = '<option value="" selected>All Profiles</option>' +
+        profiles.map(function(p) { return '<option value="' + p.id + '">' + esc(p.title) + '</option>'; }).join('');
+      if (current) sel.value = current;
+    }
   } catch (e) {
     console.error('Failed to load profiles:', e);
   }

@@ -708,6 +708,7 @@ async def api_get_jobs(
     direct_only: str = "",
     location: str = "",
     skill: str = "",
+    profile: int = Query(0, ge=0),
 ):
     try:
         # When searching, expand time window to search ALL jobs (not just last 24h)
@@ -720,7 +721,7 @@ async def api_get_jobs(
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
             direct_only=is_direct, location=location,
-            skill=skill,
+            skill=skill, profile_id=profile,
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}

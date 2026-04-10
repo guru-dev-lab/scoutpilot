@@ -301,11 +301,16 @@ async def get_jobs(
     direct_only: bool = False,
     location: str = "",
     skill: str = "",
+    profile_id: int = 0,
 ) -> list[dict]:
     db = await get_db()
     try:
         conditions = []
         params = []
+
+        if profile_id > 0:
+            conditions.append("search_profile_id = ?")
+            params.append(profile_id)
 
         if hours > 0:
             conditions.append(
