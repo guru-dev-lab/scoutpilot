@@ -1063,8 +1063,9 @@ function renderJobs(jobs, searchInfo) {
   var GROUP_RANK = {'Just Now':0, 'Last Few Hours':1, 'Today':2, 'Yesterday':3};
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
-    const postedAgo = job.posted_at ? getTimeAgo(job.posted_at) : '';
-    const foundAgo = getTimeAgo(job.first_seen_at);
+    // Use the SAME effective time for card labels as for sort/grouping
+    const effectiveDate = getEffectiveTime(job);
+    const effectiveAgo = effectiveDate ? getTimeAgoFromDate(effectiveDate) : '';
     const applyUrl = escAttr(job.direct_apply_url || job.source_url || '');
     const isApplied = job.status === 'applied';
     const isSaved = job.status === 'saved';
@@ -1151,8 +1152,8 @@ function renderJobs(jobs, searchInfo) {
     }
     const skillHtml = renderSkillTags(skills);
 
-    // Time — show posted date if real, otherwise show found time (no prefix to keep it clean)
-    var timeStr = postedAgo ? (postedAgo) : (foundAgo ? foundAgo : '');
+    // Time — unified with sort/grouping via getEffectiveTime()
+    var timeStr = effectiveAgo;
 
     // Row 1: title
     // Row 2: company · location · source · time
@@ -1564,6 +1565,21 @@ function getTimeAgo(str) {
   var h = Math.floor(m / 60);
   if (h < 24) return h + 'h ago';
   return Math.floor(h / 24) + 'd ago';
+}
+
+function getTimeAgoFromDate(d) {
+  // Same logic as getTimeAgo but takes a Date object directly (from getEffectiveTime)
+  if (!d) return '';
+  var ms = Date.now() - d.getTime();
+  var m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  var days = Math.floor(h / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return days + 'd ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function getEffectiveTime(job) {
