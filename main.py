@@ -708,9 +708,14 @@ async def api_get_jobs(
     direct_only: str = "",
     location: str = "",
     skill: str = "",
-    profile: int = Query(0, ge=0),
+    profile: str = "",
 ):
     try:
+        # Parse profile — empty string or non-numeric means "all profiles"
+        profile_id = 0
+        if profile.strip().isdigit():
+            profile_id = int(profile.strip())
+
         # When searching, expand time window to search ALL jobs (not just last 24h)
         effective_hours = 720 if search.strip() else hours
         is_direct = direct_only in ("1", "true", "yes")
@@ -721,7 +726,7 @@ async def api_get_jobs(
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
             direct_only=is_direct, location=location,
-            skill=skill, profile_id=profile,
+            skill=skill, profile_id=profile_id,
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}
