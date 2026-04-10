@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.4"
+BUILD_VERSION = "1.4.5"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
     {"version": "1.4.3", "date": "2026-04-10", "status": "active", "change": "Source fixes verified — Jobicy: removed tag filter (was returning 0), Himalayas: removed q param (irrelevant results), both use broad client-side matching now. Glassdoor removed (403 confirmed). TheMuse 5 pages. Diagnostic endpoint added."},
@@ -360,16 +360,23 @@ async def lifespan(app: FastAPI):
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility
 
-    scheduler.add_job(
-        scheduled_scrape,
-        "interval",
-        minutes=settings.scrape_interval_minutes,
-        id="scrape_cycle",
-        replace_existing=True,
-        next_run_time=datetime.now(timezone.utc),  # Run immediately on startup
-        max_instances=1,  # Never overlap
-        misfire_grace_time=60,  # Skip if missed by > 60s
-    )
+    # Continuous scrape loop — next cycle starts immediately after the previous one finishes
+    # 60s cooldown between cycles to avoid hammering APIs, but no wasted idle time
+    async def _continuous_scrape_loop():
+        cycle_count = 0
+        while True:
+            cycle_count += 1
+            logger.info(f"[Continuous] Starting scrape cycle #{cycle_count}")
+            try:
+                await scheduled_scrape()
+            except Exception as e:
+                logger.error(f"[Continuous] Cycle #{cycle_count} crashed: {e}")
+            logger.info(f"[Continuous] Cycle #{cycle_count} done — cooling down 60s then starting next")
+            await asyncio.sleep(60)  # Brief cooldown to avoid API rate limits
+
+    asyncio.create_task(_continuous_scrape_loop())
+
+    # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(
         scheduled_deep_sweep,
         "interval",
@@ -385,7 +392,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info(f"Scheduler started (scrape every {settings.scrape_interval_minutes}min, deep sweep every 12h, cleanup daily at 3AM)")
+    logger.info("[Scheduler] Continuous scrape loop started (cycle → 60s cooldown → next cycle). Deep sweep every 12h, cleanup daily at 3AM.")
 
     # Re-expand ALL profile titles with latest AI prompt (25+ titles per profile)
     asyncio.create_task(_re_expand_profiles())
@@ -1030,7 +1037,8 @@ async def api_trigger_cleanup():
 async def api_status():
     return {
         "scraper": last_scrape_result,
-        "interval_minutes": settings.scrape_interval_minutes,
+        "mode": "continuous",
+        "cooldown_seconds": 60,
         "has_anthropic_key": bool(settings.anthropic_api_key),
         "has_serpapi_key": bool(settings.serpapi_key),
         "has_rapidapi_key": bool(settings.rapidapi_key),
