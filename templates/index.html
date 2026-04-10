@@ -111,7 +111,7 @@
   .profile-multi-btn .pm-label { overflow: hidden; text-overflow: ellipsis; }
   .profile-multi-btn .pm-count { background: var(--primary); color: #fff; font-size: 0.65rem; font-weight: 700; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
   .profile-multi-dropdown {
-    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 200;
+    display: none; position: fixed; z-index: 9999;
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden; min-width: 180px;
   }
@@ -1242,14 +1242,22 @@ function toggleProfileDropdown() {
   var dd = document.getElementById('profileMultiDropdown');
   var btn = document.getElementById('profileMultiBtn');
   var isOpen = dd.classList.contains('open');
-  dd.classList.toggle('open');
-  btn.classList.toggle('open');
-  if (!isOpen) {
-    // Close on outside click
-    setTimeout(function() {
-      document.addEventListener('click', _closeProfileDDOutside, { once: false });
-    }, 0);
+  if (isOpen) {
+    dd.classList.remove('open');
+    btn.classList.remove('open');
+    document.removeEventListener('click', _closeProfileDDOutside);
+    return;
   }
+  // Position fixed dropdown below the button
+  var r = btn.getBoundingClientRect();
+  dd.style.top = (r.bottom + 4) + 'px';
+  dd.style.left = r.left + 'px';
+  dd.style.width = Math.max(r.width, 200) + 'px';
+  dd.classList.add('open');
+  btn.classList.add('open');
+  setTimeout(function() {
+    document.addEventListener('click', _closeProfileDDOutside);
+  }, 0);
 }
 
 function _closeProfileDDOutside(e) {
