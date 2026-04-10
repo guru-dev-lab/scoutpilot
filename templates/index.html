@@ -454,10 +454,13 @@
       </select>
     </div>
     <div class="filter-group">
-      <label>Apply</label>
-      <select id="filterDirect" onchange="loadJobs()">
-        <option value="">All Links</option>
-        <option value="1">Direct Apply Only</option>
+      <label>Min Relevance</label>
+      <select id="filterRelevance" onchange="loadJobs()">
+        <option value="0" selected>Any</option>
+        <option value="50">50+</option>
+        <option value="70">70+</option>
+        <option value="80">80+</option>
+        <option value="90">90+</option>
       </select>
     </div>
     <div class="filter-group skill-picker-group">
@@ -877,11 +880,10 @@ loadBuildInfo();
 async function loadJobs() {
   const hours = document.getElementById('filterHours').value;
   const postedHours = document.getElementById('filterPostedHours').value;
-  const relevance = 50;
+  const relevance = document.getElementById('filterRelevance').value;
   const source = document.getElementById('filterSource').value;
   const workType = document.getElementById('filterWorkType').value;
   const status = document.getElementById('filterStatus').value;
-  const directOnly = document.getElementById('filterDirect').value;
   const sortEl = document.getElementById('filterSort');
   const sortVal = sortEl.value;
   const search = document.getElementById('filterSearch').value.trim();
@@ -899,7 +901,7 @@ async function loadJobs() {
   const params = new URLSearchParams({
     hours: effectiveHours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
-    source, work_type: workType, status, direct_only: directOnly,
+    source, work_type: workType, status, direct_only: '',
     sort_by, sort_dir, search, skill, limit: 500, offset: 0,
     profile: profileId,
   });
@@ -1002,15 +1004,25 @@ function renderJobs(jobs, searchInfo) {
     const isViewed = job.status === 'viewed';
     const cls = isApplied ? 'applied' : isSaved ? 'saved' : isViewed ? 'viewed' : '';
 
-    // ── Time group headers ──
+    // ── Time group headers (calendar-based) ──
     const pMs = getPostedMs(job);
     var groupLabel = '';
     if (pMs !== null) {
       if (pMs < 3600000) groupLabel = 'Just Now';
       else if (pMs < 14400000) groupLabel = 'Last Few Hours';
-      else if (pMs < 86400000) groupLabel = 'Today';
-      else if (pMs < 172800000) groupLabel = 'Yesterday';
-      else groupLabel = 'Older';
+      else {
+        // Use actual calendar date, not hour offsets
+        var jobDate = new Date(Date.now() - pMs);
+        var today = new Date(); today.setHours(0,0,0,0);
+        var yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+        var jobDay = new Date(jobDate); jobDay.setHours(0,0,0,0);
+        if (jobDay.getTime() >= today.getTime()) groupLabel = 'Today';
+        else if (jobDay.getTime() >= yesterday.getTime()) groupLabel = 'Yesterday';
+        else {
+          var daysAgo = Math.floor((today.getTime() - jobDay.getTime()) / 86400000);
+          groupLabel = daysAgo + ' Days Ago';
+        }
+      }
     } else {
       groupLabel = 'Older';
     }
@@ -1438,8 +1450,8 @@ function exportCSV() {
   const workType = document.getElementById('filterWorkType').value;
   const source = document.getElementById('filterSource').value;
   const skill = _selectedSkills.join(',');
-  const directOnly = document.getElementById('filterDirect').value;
-  const params = new URLSearchParams({ hours, search, status, work_type: workType, source, skill, direct_only: directOnly });
+  const relevance = document.getElementById('filterRelevance').value;
+  const params = new URLSearchParams({ hours, search, status, work_type: workType, source, skill, min_relevance: relevance });
   window.open(API + '/api/export/csv?' + params.toString(), '_blank');
 }
 
