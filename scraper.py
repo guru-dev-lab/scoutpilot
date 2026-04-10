@@ -855,19 +855,31 @@ async def scrape_arbeitnow(
     jobs = []
     try:
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        all_items = []
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            resp = await client.get(
-                "https://www.arbeitnow.com/api/job-board-api",
-            )
-            if resp.status_code != 200:
-                logger.error(f"[Arbeitnow] HTTP {resp.status_code}: {resp.text[:200]}")
-                return []
-            data = resp.json()
+            # Paginate up to 3 pages
+            for page_num in range(1, 4):
+                try:
+                    resp = await client.get(
+                        "https://www.arbeitnow.com/api/job-board-api",
+                        params={"page": page_num},
+                    )
+                    if resp.status_code != 200:
+                        logger.error(f"[Arbeitnow] HTTP {resp.status_code} on page {page_num}")
+                        break
+                    data = resp.json()
+                    page_items = data.get("data", [])
+                    if not page_items:
+                        break
+                    all_items.extend(page_items)
+                except Exception as e:
+                    logger.warning(f"[Arbeitnow] Page {page_num} error: {e}")
+                    break
 
         search_lower = search_term.lower().replace(" remote", "").strip()
         search_words = search_lower.split()
 
-        for item in data.get("data", []):
+        for item in all_items:
             title = item.get("title", "")
             company = item.get("company_name", "")
 
@@ -928,8 +940,8 @@ async def scrape_jobicy(
         tag = search_term.lower().replace(" remote", "").strip().replace(" ", "-")
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(
-                f"https://jobicy.com/api/v2/remote-jobs",
-                params={"count": 50, "tag": tag},
+                "https://jobicy.com/api/v2/remote-jobs",
+                params={"count": 50, "tag": tag, "geo": "usa"},
             )
             if resp.status_code != 200:
                 logger.error(f"[Jobicy] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -998,26 +1010,41 @@ async def scrape_himalayas(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape remote jobs from Himalayas (free API, no key needed)."""
+    """Scrape remote jobs from Himalayas (free API, no key needed).
+    API max is 20 per request — paginate with offset to get more."""
     logger.info(f"[Himalayas] Searching: '{search_term}'")
 
     jobs = []
     try:
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            resp = await client.get(
-                "https://himalayas.app/jobs/api",
-                params={"limit": 50},
-            )
-            if resp.status_code != 200:
-                logger.error(f"[Himalayas] HTTP {resp.status_code}: {resp.text[:200]}")
-                return []
-            data = resp.json()
-
         search_lower = search_term.lower().replace(" remote", "").strip()
         search_words = search_lower.split()
+        all_items = []
 
-        for item in data.get("jobs", []):
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            # Use search endpoint for targeted results, paginate 20/page up to 5 pages
+            for page_offset in range(0, 100, 20):
+                try:
+                    resp = await client.get(
+                        "https://himalayas.app/jobs/api",
+                        params={"limit": 20, "offset": page_offset, "q": search_lower},
+                    )
+                    if resp.status_code == 429:
+                        logger.warning(f"[Himalayas] Rate limited at offset {page_offset}")
+                        break
+                    if resp.status_code != 200:
+                        logger.error(f"[Himalayas] HTTP {resp.status_code} at offset {page_offset}")
+                        break
+                    data = resp.json()
+                    page_jobs = data.get("jobs", [])
+                    if not page_jobs:
+                        break
+                    all_items.extend(page_jobs)
+                except Exception as e:
+                    logger.warning(f"[Himalayas] Page error at offset {page_offset}: {e}")
+                    break
+
+        for item in all_items:
             title = item.get("title", "")
             company = item.get("companyName", item.get("company_name", ""))
 
@@ -1057,7 +1084,7 @@ async def scrape_himalayas(
             if was_inserted:
                 jobs.append(job)
 
-        logger.info(f"[Himalayas] Matched {len(jobs)} new jobs for '{search_term}'")
+        logger.info(f"[Himalayas] Fetched {len(all_items)} total, matched {len(jobs)} new jobs for '{search_term}'")
     except Exception as e:
         logger.error(f"[Himalayas] Error: {e}")
 
@@ -1206,12 +1233,17 @@ async def _scrape_one_profile(profile: dict) -> dict:
                 sites=EXTRA_SITES,
             )))
 
-        # ALL free APIs run for ALL profiles — scrape everything
+        # Remotive + RemoteOK: per-term (they handle high frequency fine)
         tasks.append(("Remotive", scrape_remotive(term, profile_id)))
         tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
-        tasks.append(("Jobicy", scrape_jobicy(term, profile_id)))
-        tasks.append(("Himalayas", scrape_himalayas(term, profile_id)))
-        tasks.append(("Arbeitnow", scrape_arbeitnow(term, profile_id)))
+
+    # ── APIs that rate-limit: 1 call per profile, not per term ──
+    # Jobicy: 6h posting delay, blocks if checked >1x/hour — 1 call per profile
+    tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
+    # Himalayas: max 20/request, rate limits at 429 — 1 call per profile (paginates internally)
+    tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
+    # Arbeitnow: returns full feed, client-side filter — 1 call per profile
+    tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
 
     # TheMuse — 1 call per profile (fetches multiple pages)
     tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
