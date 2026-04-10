@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.9"
+BUILD_VERSION = "1.5.0"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
     {"version": "1.4.9", "date": "2026-04-10", "status": "active", "change": "Scraper reliability overhaul — JobSpy runs SEQUENTIAL with 3s delays (was hundreds of parallel calls causing IP bans), profiles run sequentially (not parallel), Remotive broad fetch + client filter (server search too strict), Jobicy list crash fixed, limited to 5 JobSpy terms/profile"},

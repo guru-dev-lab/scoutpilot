@@ -846,7 +846,7 @@ async def scrape_themuse(
                 jobs.append(job)
 
         direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
-        logger.info(f"[TheMuse] Found {len(data.get('results', []))} results, inserted {len(jobs)} new ({direct_count} direct apply)")
+        logger.info(f"[TheMuse] Found {len(all_results)} results, inserted {len(jobs)} new ({direct_count} direct apply)")
     except Exception as e:
         logger.error(f"[TheMuse] Error: {e}")
 
