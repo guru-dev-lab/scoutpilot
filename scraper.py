@@ -219,42 +219,75 @@ def _detect_work_type(row: dict) -> str:
     """
     Detect work arrangement from job data.
     Returns: 'remote', 'hybrid', or 'onsite'
+
+    IMPORTANT: LinkedIn/JobSpy is_remote flag is UNRELIABLE — it marks many
+    onsite jobs as remote.  We ignore the flag entirely and rely on text
+    analysis with a tiered approach:
+      - Title/location: trusted (one mention of 'remote' is enough)
+      - Description: requires STRONG signals (not just a passing mention)
     """
     title = str(row.get("title", "")).lower()
     location = str(row.get("location", "")).lower()
     description = str(row.get("description", ""))[:3000].lower()
+    source = str(row.get("source", row.get("site", ""))).lower()
 
-    # Check explicit remote flag first
-    if row.get("is_remote"):
-        return "remote"
-
-    # Build combined text for pattern matching
+    title_loc = f"{title} {location}"
     text = f"{title} {location} {description}"
 
-    # Hybrid patterns (check first — hybrid is more specific than remote)
+    # ── ONSITE OVERRIDE: strong onsite signals beat everything ──
+    onsite_override = [
+        r'\bon[\s\-]?site\s+only\b', r'\bno\s+remote\b',
+        r'\bmust\s+(be\s+)?on[\s\-]?site\b', r'\bnot\s+remote\b',
+        r'\bin[\s\-]?office\s+only\b', r'\bon[\s\-]?site\s+required\b',
+        r'\bmust\s+work\s+(in|from)\s+(the\s+)?office\b',
+        r'\bno\s+work\s*from\s*home\b', r'\bnot\s+a\s+remote\b',
+    ]
+    for pat in onsite_override:
+        if re.search(pat, text):
+            return "onsite"
+
+    # ── HYBRID patterns (check before remote — hybrid is more specific) ──
     hybrid_patterns = [
         r'\bhybrid\b', r'\bhybrid[\s\-]?remote\b', r'\bremote[\s\-]?hybrid\b',
         r'\b\d+\s*days?\s*(in[\s\-]?office|on[\s\-]?site|onsite)\b',
-        r'\bflex(ible)?\s*(work|schedule|hybrid)\b',
         r'\bin[\s\-]?office\s*\d+\s*days?\b',
     ]
     for pat in hybrid_patterns:
         if re.search(pat, text):
             return "hybrid"
 
-    # Remote patterns
-    remote_patterns = [
+    # ── REMOTE: title or location says remote → trust it ──
+    title_loc_remote = [
         r'\bremote\b', r'\bwork\s*from\s*home\b', r'\bwfh\b',
         r'\bfully[\s\-]?remote\b', r'\b100%\s*remote\b',
-        r'\btelecommute\b', r'\btelework\b', r'\bdistributed\b',
-        r'\banywhere\b',
+        r'\btelecommute\b', r'\btelework\b', r'\banywhere\b',
     ]
-    for pat in remote_patterns:
-        if re.search(pat, text):
-            # Double-check it's not actually hybrid disguised as remote
-            if re.search(r'\bnot\s+fully\s+remote\b|\bnot\s+100%\s+remote\b', text):
-                return "hybrid"
+    for pat in title_loc_remote:
+        if re.search(pat, title_loc):
             return "remote"
+
+    # ── REMOTE: description only → require STRONG signals ──
+    # A single "\bremote\b" in a long description is often noise
+    # ("remote support", "remote teams", onsite job that "offers no remote")
+    strong_desc_remote = [
+        r'\bfully[\s\-]?remote\b', r'\b100%\s*remote\b',
+        r'\bwork\s*from\s*home\b', r'\bwfh\b',
+        r'\btelecommute\b', r'\btelework\b',
+        r'\bremote[\s\-]?first\b', r'\bremote[\s\-]?friendly\b',
+        r'\bremote\s+position\b', r'\bremote\s+role\b',
+        r'\bremote\s+job\b', r'\bremote\s+opportunity\b',
+        r'\bwork\s+remotely\b', r'\bworking\s+remotely\b',
+        r'\bthis\s+(is\s+a\s+)?remote\b',
+        r'\bopen\s+to\s+remote\b', r'\bremote\s+eligible\b',
+    ]
+    for pat in strong_desc_remote:
+        if re.search(pat, description):
+            return "remote"
+
+    # ── REMOTE-ONLY sources: if the source IS a remote job board, trust it ──
+    remote_sources = {"remotive", "remoteok", "weworkremotely", "jobicy", "himalayas"}
+    if source in remote_sources:
+        return "remote"
 
     # Default to onsite
     return "onsite"

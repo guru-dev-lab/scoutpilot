@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.5"
+BUILD_VERSION = "1.4.6"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
     {"version": "1.4.3", "date": "2026-04-10", "status": "active", "change": "Source fixes verified — Jobicy: removed tag filter (was returning 0), Himalayas: removed q param (irrelevant results), both use broad client-side matching now. Glassdoor removed (403 confirmed). TheMuse 5 pages. Diagnostic endpoint added."},
@@ -427,6 +427,41 @@ async def lifespan(app: FastAPI):
         finally:
             await db.close()
     asyncio.create_task(_fix_fake_posted_at())
+
+    # One-time fix: re-detect work_type for LinkedIn/Indeed jobs
+    # LinkedIn's is_remote flag is unreliable — many onsite jobs got tagged as remote
+    async def _fix_linkedin_work_type():
+        from database import get_db
+        from scraper import _detect_work_type
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id, title, location, description, source, work_type "
+                "FROM jobs WHERE source IN ('linkedin', 'indeed', 'google_jobs', 'ziprecruiter') "
+                "AND work_type = 'remote'"
+            )
+            rows = await cursor.fetchall()
+            fixed = 0
+            for row in rows:
+                new_type = _detect_work_type({
+                    "title": row[1] or "",
+                    "location": row[2] or "",
+                    "description": row[3] or "",
+                    "source": row[4] or "",
+                })
+                if new_type != "remote":
+                    await db.execute(
+                        "UPDATE jobs SET work_type = ?, is_remote = ? WHERE id = ?",
+                        (new_type, 1 if new_type == "remote" else 0, row[0]),
+                    )
+                    fixed += 1
+            await db.commit()
+            logger.info(f"[Startup] Re-detected work_type: {fixed}/{len(rows)} LinkedIn/Indeed jobs changed from remote → onsite/hybrid")
+        except Exception as e:
+            logger.error(f"[Startup] Fix LinkedIn work_type failed: {e}")
+        finally:
+            await db.close()
+    asyncio.create_task(_fix_linkedin_work_type())
 
     yield
     scheduler.shutdown()
