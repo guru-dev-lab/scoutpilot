@@ -96,6 +96,47 @@
   .filters select:focus { outline: none; border-color: var(--primary); }
   .filters select:hover { border-color: var(--text3); }
 
+  /* Profile multi-select picker */
+  .profile-multi { position: relative; }
+  .profile-multi-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 4px;
+    padding: 7px 10px; background: rgba(10,10,15,0.7); border: 1px solid rgba(45,55,72,0.8);
+    border-radius: 6px; color: var(--text); font-size: 0.8rem; cursor: pointer; width: 100%;
+    transition: border-color 0.15s; white-space: nowrap; min-height: 34px;
+  }
+  .profile-multi-btn:hover { border-color: var(--text3); }
+  .profile-multi-btn.open { border-color: var(--primary); }
+  .profile-multi-btn .pm-arrow { font-size: 0.6rem; color: var(--text3); transition: transform 0.15s; }
+  .profile-multi-btn.open .pm-arrow { transform: rotate(180deg); }
+  .profile-multi-btn .pm-label { overflow: hidden; text-overflow: ellipsis; }
+  .profile-multi-btn .pm-count { background: var(--primary); color: #fff; font-size: 0.65rem; font-weight: 700; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+  .profile-multi-dropdown {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 200;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden; min-width: 180px;
+  }
+  .profile-multi-dropdown.open { display: block; }
+  .profile-multi-dropdown .pm-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer;
+    font-size: 0.8rem; transition: background 0.1s; border-bottom: 1px solid rgba(45,55,72,0.3);
+  }
+  .profile-multi-dropdown .pm-item:last-child { border-bottom: none; }
+  .profile-multi-dropdown .pm-item:hover { background: rgba(99,102,241,0.1); }
+  .profile-multi-dropdown .pm-item.selected { background: rgba(99,102,241,0.08); }
+  .profile-multi-dropdown .pm-check {
+    width: 16px; height: 16px; border: 2px solid var(--text3); border-radius: 3px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    transition: all 0.15s; font-size: 0.65rem; color: transparent;
+  }
+  .profile-multi-dropdown .pm-item.selected .pm-check {
+    border-color: var(--primary); background: var(--primary); color: #fff;
+  }
+  .profile-multi-dropdown .pm-all {
+    padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 0.72rem;
+    color: var(--text3); display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .profile-multi-dropdown .pm-all:hover { background: rgba(99,102,241,0.06); }
+
   /* Skill multi-tag picker */
   .skill-picker-group { min-width: 160px; max-width: 320px; flex: 1.5 !important; }
   .skill-picker { position: relative; background: rgba(10,10,15,0.7); border: 1px solid rgba(45,55,72,0.8); border-radius: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 6px; min-height: 34px; cursor: text; transition: border-color 0.15s; }
@@ -418,11 +459,13 @@
         <option value="onsite">Onsite</option>
       </select>
     </div>
-    <div class="filter-group">
+    <div class="filter-group profile-multi">
       <label>Profile</label>
-      <select id="filterProfile" onchange="loadJobs()">
-        <option value="" selected>All Profiles</option>
-      </select>
+      <div class="profile-multi-btn" id="profileMultiBtn" onclick="toggleProfileDropdown()">
+        <span class="pm-label">All Profiles</span>
+        <span class="pm-arrow">&#9660;</span>
+      </div>
+      <div class="profile-multi-dropdown" id="profileMultiDropdown"></div>
     </div>
     <div class="filter-group">
       <label>Source</label>
@@ -897,7 +940,7 @@ async function loadJobs() {
 
   // When viewing saved/applied jobs, show all regardless of time window
   const effectiveHours = (status === 'saved' || status === 'applied') ? 720 : hours;
-  const profileId = document.getElementById('filterProfile').value;
+  const profileId = _selectedProfiles.join(',');
   const params = new URLSearchParams({
     hours: effectiveHours, posted_hours: postedHours,
     min_relevance: relevance, min_trust: 0,
@@ -1149,6 +1192,91 @@ function renderStats(s, searchCount, searchTerm) {
   document.getElementById('statApplied').textContent = s.applied_count || 0;
 }
 
+// ── Profile Multi-Select ──
+var _selectedProfiles = [];  // array of selected profile IDs (numbers)
+var _allProfiles = [];       // full list from API
+
+function _buildProfileDropdown() {
+  var dd = document.getElementById('profileMultiDropdown');
+  if (!dd) return;
+  var html = '<div class="pm-all" onclick="_toggleAllProfiles()">'
+    + '<span class="pm-check" id="pmCheckAll">' + (_selectedProfiles.length === 0 ? '&#10003;' : '') + '</span>'
+    + '<span>All Profiles</span></div>';
+  _allProfiles.forEach(function(p) {
+    var sel = _selectedProfiles.indexOf(p.id) !== -1;
+    html += '<div class="pm-item' + (sel ? ' selected' : '') + '" onclick="_toggleProfile(' + p.id + ')">'
+      + '<span class="pm-check">' + (sel ? '&#10003;' : '') + '</span>'
+      + '<span>' + esc(p.title) + '</span></div>';
+  });
+  dd.innerHTML = html;
+  _updateProfileBtnLabel();
+}
+
+function _updateProfileBtnLabel() {
+  var btn = document.getElementById('profileMultiBtn');
+  if (!btn) return;
+  var label = btn.querySelector('.pm-label');
+  if (_selectedProfiles.length === 0) {
+    label.textContent = 'All Profiles';
+    var existing = btn.querySelector('.pm-count');
+    if (existing) existing.remove();
+  } else {
+    var names = _selectedProfiles.map(function(id) {
+      var p = _allProfiles.find(function(x) { return x.id === id; });
+      return p ? p.title : '';
+    }).filter(Boolean);
+    if (names.length === 1) {
+      label.textContent = names[0];
+    } else {
+      label.textContent = names.length + ' selected';
+    }
+    var badge = btn.querySelector('.pm-count');
+    if (_selectedProfiles.length > 1) {
+      if (!badge) { badge = document.createElement('span'); badge.className = 'pm-count'; btn.insertBefore(badge, btn.querySelector('.pm-arrow')); }
+      badge.textContent = _selectedProfiles.length;
+    } else if (badge) { badge.remove(); }
+  }
+}
+
+function toggleProfileDropdown() {
+  var dd = document.getElementById('profileMultiDropdown');
+  var btn = document.getElementById('profileMultiBtn');
+  var isOpen = dd.classList.contains('open');
+  dd.classList.toggle('open');
+  btn.classList.toggle('open');
+  if (!isOpen) {
+    // Close on outside click
+    setTimeout(function() {
+      document.addEventListener('click', _closeProfileDDOutside, { once: false });
+    }, 0);
+  }
+}
+
+function _closeProfileDDOutside(e) {
+  var dd = document.getElementById('profileMultiDropdown');
+  var btn = document.getElementById('profileMultiBtn');
+  if (!dd || !btn) return;
+  if (!dd.contains(e.target) && !btn.contains(e.target)) {
+    dd.classList.remove('open');
+    btn.classList.remove('open');
+    document.removeEventListener('click', _closeProfileDDOutside);
+  }
+}
+
+function _toggleProfile(id) {
+  var idx = _selectedProfiles.indexOf(id);
+  if (idx === -1) { _selectedProfiles.push(id); }
+  else { _selectedProfiles.splice(idx, 1); }
+  _buildProfileDropdown();
+  loadJobs();
+}
+
+function _toggleAllProfiles() {
+  _selectedProfiles = [];
+  _buildProfileDropdown();
+  loadJobs();
+}
+
 // ── Profiles ──
 async function loadProfiles() {
   try {
@@ -1164,14 +1292,9 @@ async function loadProfiles() {
         + ' <span style="color:var(--text3);font-size:0.72rem;">(' + (p.expanded_titles || []).length + ' variants)</span>'
         + ' <span class="remove" onclick="removeProfile(' + p.id + ')">&times;</span></div>';
     }).join('');
-    // Populate profile filter dropdown
-    var sel = document.getElementById('filterProfile');
-    if (sel) {
-      var current = sel.value;
-      sel.innerHTML = '<option value="" selected>All Profiles</option>' +
-        profiles.map(function(p) { return '<option value="' + p.id + '">' + esc(p.title) + '</option>'; }).join('');
-      if (current) sel.value = current;
-    }
+    // Populate profile multi-select dropdown
+    _allProfiles = profiles;
+    _buildProfileDropdown();
   } catch (e) {
     console.error('Failed to load profiles:', e);
   }

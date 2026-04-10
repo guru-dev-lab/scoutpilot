@@ -764,10 +764,12 @@ async def api_get_jobs(
     profile: str = "",
 ):
     try:
-        # Parse profile — empty string or non-numeric means "all profiles"
-        profile_id = 0
-        if profile.strip().isdigit():
-            profile_id = int(profile.strip())
+        # Parse profile — supports comma-separated IDs for multi-select
+        profile_ids = []
+        for chunk in profile.split(","):
+            chunk = chunk.strip()
+            if chunk.isdigit() and int(chunk) > 0:
+                profile_ids.append(int(chunk))
 
         # When searching, expand time window to search ALL jobs (not just last 24h)
         effective_hours = 720 if search.strip() else hours
@@ -779,7 +781,7 @@ async def api_get_jobs(
             sort_by=sort_by, sort_dir=sort_dir,
             limit=limit, offset=offset, search=search,
             direct_only=is_direct, location=location,
-            skill=skill, profile_id=profile_id,
+            skill=skill, profile_ids=profile_ids,
         )
         stats = await get_job_count(hours)
         return {"jobs": jobs, "stats": stats}
