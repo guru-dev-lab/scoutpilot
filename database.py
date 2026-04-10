@@ -404,10 +404,17 @@ async def get_jobs(
             sort_by = "first_seen_at"
         sort_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
 
-        # For posted_at sort, use COALESCE to fall back to first_seen_at
-        # so jobs without a posted date don't float to the top
+        # For posted_at sort, use first_seen_at when posted_at is date-only
+        # (contains T00:00:00 = no real time = unreliable for ordering).
+        # This matches the UI's getPostedMs() logic so sort order and
+        # time group headers agree on what's "newest".
         if sort_by == "posted_at":
-            order_expr = f"COALESCE(NULLIF(posted_at, ''), first_seen_at) {sort_dir}"
+            order_expr = (
+                "CASE "
+                "  WHEN posted_at != '' AND posted_at NOT LIKE '%T00:00:00%' THEN posted_at "
+                "  ELSE first_seen_at "
+                f"END {sort_dir}"
+            )
         else:
             order_expr = f"{sort_by} {sort_dir}"
 

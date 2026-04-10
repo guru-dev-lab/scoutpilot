@@ -982,13 +982,12 @@ async function loadJobs() {
       });
     }
 
-    // CLIENT-SIDE SORT: guarantee freshest jobs first regardless of server sort
-    // Use posted_at if available, otherwise first_seen_at
+    // CLIENT-SIDE SORT: use getEffectiveTime so sort matches time group headers
     var sortField = document.getElementById('filterSort').value;
     if (sortField === 'posted_at:DESC' || sortField === 'first_seen_at:DESC') {
       jobs.sort(function(a, b) {
-        var ta = parseDate(a.posted_at) || parseDate(a.first_seen_at) || new Date(0);
-        var tb = parseDate(b.posted_at) || parseDate(b.first_seen_at) || new Date(0);
+        var ta = getEffectiveTime(a) || new Date(0);
+        var tb = getEffectiveTime(b) || new Date(0);
         return tb.getTime() - ta.getTime();
       });
     }
@@ -1006,8 +1005,8 @@ async function loadJobs() {
     // Re-sort after dedup (dedup may have shuffled order)
     if (sortField === 'posted_at:DESC' || sortField === 'first_seen_at:DESC') {
       jobs.sort(function(a, b) {
-        var ta = parseDate(a.posted_at) || parseDate(a.first_seen_at) || new Date(0);
-        var tb = parseDate(b.posted_at) || parseDate(b.first_seen_at) || new Date(0);
+        var ta = getEffectiveTime(a) || new Date(0);
+        var tb = getEffectiveTime(b) || new Date(0);
         return tb.getTime() - ta.getTime();
       });
     }
@@ -1567,18 +1566,25 @@ function getTimeAgo(str) {
   return Math.floor(h / 24) + 'd ago';
 }
 
-function getPostedMs(job) {
-  // Try posted_at first (real post date from job board)
+function getEffectiveTime(job) {
+  // Returns the best timestamp for this job as a Date object.
+  // Used by BOTH sort and grouping so they always agree.
+  // Rule: use posted_at only if it has a real time (not midnight/date-only).
+  //       Otherwise use first_seen_at (when WE found it).
   if (job.posted_at && !isDateOnly(job.posted_at)) {
     var d = parseDate(job.posted_at);
-    if (d) return Date.now() - d.getTime();
+    if (d) return d;
   }
-  // Fall back to first_seen_at (when we found it) for freshness badges
-  if (job.first_seen_at && !isDateOnly(job.first_seen_at)) {
+  if (job.first_seen_at) {
     var d2 = parseDate(job.first_seen_at);
-    if (d2) return Date.now() - d2.getTime();
+    if (d2) return d2;
   }
   return null;
+}
+
+function getPostedMs(job) {
+  var t = getEffectiveTime(job);
+  return t ? Date.now() - t.getTime() : null;
 }
 
 function fmtMs(ms) {
