@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.0"
-BUILD_DATE = "2026-04-09"
+BUILD_VERSION = "1.4.1"
+BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
+    {"version": "1.4.1", "date": "2026-04-10", "status": "active", "change": "Show ALL jobs — Work Type default 'All Types' (was 'Remote' hiding 80% of results), archive after 3 days (was 5), purge after 30 days"},
     {"version": "1.4.0", "date": "2026-04-09", "status": "active", "change": "FULL OVERHAUL — scrape EVERYTHING (no remote/onsite filter), all free APIs hit for ALL profiles, AI generates 25+ title variants, WeWorkRemotely RSS added, 50 results/query, 72h search window, 3-day default display, independent profile bots"},
     {"version": "1.3.2", "date": "2026-04-09", "status": "active", "change": "Max freshness — ALL search terms every cycle (not rotating 3), scrape every 5min, smarter status display showing new job counts"},
     {"version": "1.3.1", "date": "2026-04-09", "status": "active", "change": "Live feed — client-side sort, time group headers (Just Now/Today/Yesterday), slide-in animations, warm cards, auto-refresh 45s, scrape every 7min with 60% more results"},
