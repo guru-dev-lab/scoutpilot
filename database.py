@@ -122,6 +122,14 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_source_url ON jobs(source_url)")
         await db.commit()
 
+        # Migration: add applied_at timestamp for tracking when user applied
+        try:
+            await db.execute("SELECT applied_at FROM jobs LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding applied_at column to jobs table")
+            await db.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT DEFAULT ''")
+            await db.commit()
+
         # Backfill: extract skills for ALL jobs missing skills (one pass)
         cursor = await db.execute(
             "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
@@ -450,7 +458,16 @@ async def get_job_count(hours: int = 24) -> dict:
 async def update_job_status(job_id: int, status: str):
     db = await get_db()
     try:
-        await db.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+        if status == "applied":
+            await db.execute(
+                "UPDATE jobs SET status = ?, applied_at = datetime('now') WHERE id = ?",
+                (status, job_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE jobs SET status = ?, applied_at = '' WHERE id = ?",
+                (status, job_id),
+            )
         await db.commit()
     finally:
         await db.close()

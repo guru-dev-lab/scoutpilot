@@ -136,6 +136,9 @@
     color: var(--text3); display: flex; align-items: center; gap: 8px; cursor: pointer;
   }
   .profile-multi-dropdown .pm-all:hover { background: rgba(99,102,241,0.06); }
+  .profile-multi-dropdown .pm-all.selected .pm-check {
+    border-color: var(--primary); background: var(--primary); color: #fff;
+  }
 
   /* Skill multi-tag picker */
   .skill-picker-group { min-width: 160px; max-width: 320px; flex: 1.5 !important; }
@@ -408,7 +411,7 @@
       <div class="stat"><div class="num" id="statViewed">0</div><div class="label">Viewed</div></div>
       <div class="stat"><div class="num" id="statDirect">0</div><div class="label">Direct Apply</div></div>
       <div class="stat" style="cursor:pointer;" onclick="document.getElementById('filterStatus').value='saved';loadJobs()"><div class="num" id="statSaved" style="color:var(--primary);">0</div><div class="label">Saved</div></div>
-      <div class="stat"><div class="num" id="statApplied">0</div><div class="label">Applied</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="document.getElementById('filterStatus').value='applied';loadJobs()"><div class="num" id="statApplied" style="color:var(--green);">0</div><div class="label">Applied</div></div>
     </div>
     <div class="smart-search-bar">
       <div class="smart-search-inner">
@@ -499,8 +502,8 @@
     <div class="filter-group">
       <label>Min Relevance</label>
       <select id="filterRelevance" onchange="loadJobs()">
-        <option value="0" selected>Any</option>
-        <option value="50">50+</option>
+        <option value="0">Any</option>
+        <option value="50" selected>50+</option>
         <option value="70">70+</option>
         <option value="80">80+</option>
         <option value="90">90+</option>
@@ -990,6 +993,25 @@ async function loadJobs() {
       });
     }
 
+    // CROSS-PROFILE DEDUP: same job scraped by multiple profiles → keep highest relevance
+    var dedupMap = {};
+    jobs.forEach(function(j) {
+      var key = (j.title || '').toLowerCase().trim() + '||' + (j.company_name || '').toLowerCase().trim();
+      if (!dedupMap[key] || (j.relevance_score || 0) > (dedupMap[key].relevance_score || 0)) {
+        dedupMap[key] = j;
+      }
+    });
+    jobs = Object.values(dedupMap);
+
+    // Re-sort after dedup (dedup may have shuffled order)
+    if (sortField === 'posted_at:DESC' || sortField === 'first_seen_at:DESC') {
+      jobs.sort(function(a, b) {
+        var ta = parseDate(a.posted_at) || parseDate(a.first_seen_at) || new Date(0);
+        var tb = parseDate(b.posted_at) || parseDate(b.first_seen_at) || new Date(0);
+        return tb.getTime() - ta.getTime();
+      });
+    }
+
     renderJobs(jobs, searchInfo);
     renderStats(data.stats || {}, jobs.length, search);
   } catch (e) {
@@ -1164,6 +1186,7 @@ function renderJobs(jobs, searchInfo) {
       + (timeStr ? '<span class="sep">\u00b7</span><span class="time-stamp">' + timeStr + '</span>' : '')
       + '</div>'
       + '<div class="job-tags">' + badges + skillHtml + '</div>'
+      + (job.applied_at ? '<div style="font-size:0.72rem;color:var(--green);margin:2px 0 0 0;">Applied ' + _formatAppliedDate(job.applied_at) + '</div>' : '')
       + '<div class="job-actions">'
       + (job.is_direct_apply
         ? '<a href="' + applyUrl + '" target="_blank" rel="noopener" class="act-btn go-direct" onclick="markViewed(' + job.id + ')">\u2713 Apply Direct</a>'
@@ -1199,8 +1222,9 @@ var _allProfiles = [];       // full list from API
 function _buildProfileDropdown() {
   var dd = document.getElementById('profileMultiDropdown');
   if (!dd) return;
-  var html = '<div class="pm-all" onclick="_toggleAllProfiles()">'
-    + '<span class="pm-check" id="pmCheckAll">' + (_selectedProfiles.length === 0 ? '&#10003;' : '') + '</span>'
+  var allSelected = _selectedProfiles.length === 0;
+  var html = '<div class="pm-all' + (allSelected ? ' selected' : '') + '" onclick="_toggleAllProfiles()">'
+    + '<span class="pm-check">' + (allSelected ? '&#10003;' : '') + '</span>'
     + '<span>All Profiles</span></div>';
   _allProfiles.forEach(function(p) {
     var sel = _selectedProfiles.indexOf(p.id) !== -1;
@@ -1484,6 +1508,19 @@ function updateScrapeStatus(status) {
 }
 
 // ── Helpers ──
+function _formatAppliedDate(str) {
+  if (!str) return '';
+  var d = parseDate(str);
+  if (!d || isNaN(d.getTime())) return '';
+  var now = new Date();
+  var diff = now.getTime() - d.getTime();
+  var days = Math.floor(diff / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return days + ' days ago';
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[d.getMonth()] + ' ' + d.getDate();
+}
 function esc(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
