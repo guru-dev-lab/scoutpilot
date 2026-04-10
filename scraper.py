@@ -442,13 +442,18 @@ async def scrape_jobspy(
                 "country_indeed": "USA",
                 "linkedin_fetch_description": True,
                 "description_format": "markdown",
-                "verbose": 0,
+                "verbose": 2,  # Maximum verbosity to diagnose failures
             }
             if location:
                 kwargs["location"] = location
 
+            logger.info(f"[JobSpy] Starting: term='{search_term}' loc='{location}' sites={sites}")
             results = scrape_jobs(**kwargs)
-            logger.info(f"[JobSpy] Raw results for '{search_term}': {len(results) if results is not None and not results.empty else 0} rows")
+            count = len(results) if results is not None and not results.empty else 0
+            if count == 0:
+                logger.warning(f"[JobSpy] EMPTY for '{search_term}' @ '{location}' sites={sites} — possible rate limit or IP block")
+            else:
+                logger.info(f"[JobSpy] Raw results for '{search_term}': {count} rows")
             return results
         except Exception as e:
             logger.error(f"[JobSpy] Error scraping '{search_term}': {e}")
@@ -681,10 +686,15 @@ async def scrape_remotive(
     jobs = []
     try:
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        search_lower = search_term.lower().replace(" remote", "").strip()
+        search_words = search_lower.split()
+
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            # Broad fetch first — Remotive's server-side search is too strict
+            # for niche terms. Fetch latest 100 jobs and filter client-side.
             resp = await client.get(
                 "https://remotive.com/api/remote-jobs",
-                params={"search": search_term, "limit": 50},
+                params={"limit": 100},
             )
             if resp.status_code != 200:
                 logger.error(f"[Remotive] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -692,6 +702,12 @@ async def scrape_remotive(
             data = resp.json()
 
         for item in data.get("jobs", []):
+            # Client-side filter — any search word in title or category
+            item_title = (item.get("title", "") or "").lower()
+            item_category = (item.get("category", "") or "").lower()
+            combined_rem = f"{item_title} {item_category}"
+            if not any(w in combined_rem for w in search_words):
+                continue
             company = item.get("company_name", "")
             if _is_blocked_company(company):
                 continue
@@ -1027,9 +1043,11 @@ async def scrape_jobicy(
             # Relevance: any search word in title OR job industry/type
             title_lower = title.lower()
             job_type = (item.get("jobType", "") or "").lower()
-            industry = (item.get("jobIndustry", "") or "").lower()
-            if isinstance(industry, list):
-                industry = " ".join(str(i) for i in industry)
+            raw_industry = item.get("jobIndustry", "") or ""
+            if isinstance(raw_industry, list):
+                industry = " ".join(str(i) for i in raw_industry).lower()
+            else:
+                industry = str(raw_industry).lower()
             combined = f"{title_lower} {job_type} {industry}"
             if not any(w in combined for w in search_words):
                 continue
@@ -1302,72 +1320,87 @@ async def _scrape_one_profile(profile: dict, cycle_number: int = 1) -> dict:
     remote_only = profile.get("remote_only", 0)
     effective_locations = locations if locations else (["USA"] if remote_only else [""])
 
+    # ── LIGHT TASKS: Remotive, RemoteOK, WWR, Jobicy etc. — safe to run in parallel ──
+    light_tasks = []
+
     for term in terms_this_cycle:
-        # For remote-only profiles, append "remote" to help Indeed/LinkedIn surface remote listings
-        effective_term = f"{term} remote" if remote_only else term
-
-        # TIER 2: JobSpy — Indeed + LinkedIn (every 3rd cycle)
-        if run_jobspy:
-            for loc in effective_locations:
-                tasks.append(("JobSpy/main", scrape_jobspy(
-                    search_term=effective_term, location=loc,
-                    results_wanted=50, hours_old=72, profile_id=profile_id,
-                    sites=MAIN_SITES,
-                )))
-            # Extra boards — Google, ZipRecruiter
-            for loc in effective_locations:
-                tasks.append(("JobSpy/extra", scrape_jobspy(
-                    search_term=effective_term, location=loc,
-                    results_wanted=30, hours_old=72, profile_id=profile_id,
-                    sites=EXTRA_SITES,
-                )))
-
         # TIER 1: Remotive + RemoteOK — every cycle (generous limits)
-        tasks.append(("Remotive", scrape_remotive(term, profile_id)))
-        tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
+        light_tasks.append(("Remotive", scrape_remotive(term, profile_id)))
+        light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
     # TIER 3: Strict rate-limited APIs — every 5th cycle
     if run_strict:
-        # Jobicy: blocks >1x/hour
-        tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
-        # Himalayas: 429 rate limit risk
-        tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
-        # Arbeitnow: full feed, moderate limits
-        tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
-        # TheMuse: API-based, moderate limits
-        tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
+        light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
+        light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
+        light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
+        light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
-    # TIER 1: WeWorkRemotely RSS — every cycle (it's just RSS, no limit)
-    tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
+    # TIER 1: WeWorkRemotely RSS — every cycle
+    light_tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
 
-    # SerpApi (if key) — every 3rd cycle (API quota)
+    # SerpApi (if key) — every 3rd cycle
     if settings.serpapi_key and run_jobspy:
-        tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
+        light_tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
 
     # JSearch (if key)
     if settings.rapidapi_key:
-        tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
+        light_tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
 
-    # ── Fire all tasks concurrently ──
+    # Fire light tasks in parallel (they're fast APIs with no scraping)
     total_new = 0
     errors = []
-    results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
+    if light_tasks:
+        light_results = await asyncio.gather(*[t[1] for t in light_tasks], return_exceptions=True)
+        for (source_name, _), result in zip(light_tasks, light_results):
+            if isinstance(result, Exception):
+                errors.append(f"{source_name} '{title}': {result}")
+                logger.error(f"[Scrape] {source_name} '{title}': {result}")
+            elif isinstance(result, list):
+                total_new += len(result)
 
-    for (source_name, _), result in zip(tasks, results):
-        if isinstance(result, Exception):
-            err = f"{source_name} '{title}': {result}"
-            errors.append(err)
-            logger.error(f"[Scrape] {err}")
-        elif isinstance(result, list):
-            total_new += len(result)
+    # ── HEAVY TASKS: JobSpy (Indeed/LinkedIn) — SEQUENTIAL with delays ──
+    # Indeed/LinkedIn aggressively block IPs that send too many requests.
+    # Running these sequentially with delays prevents rate limiting.
+    if run_jobspy:
+        # Pick a SMALL subset of terms to avoid hammering (top 5 most relevant)
+        jobspy_terms = terms_this_cycle[:5]
+        for term in jobspy_terms:
+            effective_term = f"{term} remote" if remote_only else term
+            for loc in effective_locations:
+                try:
+                    result = await scrape_jobspy(
+                        search_term=effective_term, location=loc,
+                        results_wanted=50, hours_old=72, profile_id=profile_id,
+                        sites=MAIN_SITES,
+                    )
+                    total_new += len(result) if isinstance(result, list) else 0
+                except Exception as e:
+                    errors.append(f"JobSpy/main '{term}': {e}")
+                    logger.error(f"[Scrape] JobSpy/main '{term}': {e}")
+                # Delay between JobSpy calls to avoid rate limiting
+                await asyncio.sleep(3)
 
-    logger.info(f"[Scrape] Profile '{title}' done — {len(tasks)} parallel tasks, {total_new} new jobs, terms={terms_this_cycle}")
+            # Extra boards (Google, ZipRecruiter) — less aggressive
+            for loc in effective_locations:
+                try:
+                    result = await scrape_jobspy(
+                        search_term=effective_term, location=loc,
+                        results_wanted=30, hours_old=72, profile_id=profile_id,
+                        sites=EXTRA_SITES,
+                    )
+                    total_new += len(result) if isinstance(result, list) else 0
+                except Exception as e:
+                    errors.append(f"JobSpy/extra '{term}': {e}")
+                    logger.error(f"[Scrape] JobSpy/extra '{term}': {e}")
+                await asyncio.sleep(2)
+
+    logger.info(f"[Scrape] Profile '{title}' done — {total_new} new jobs, {len(errors)} errors")
     return {"new_jobs": total_new, "errors": errors}
 
 
 async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:
     """
-    Run a scrape cycle — ALL profiles in parallel, source frequency based on cycle number.
+    Run a scrape cycle — profiles run SEQUENTIALLY to avoid IP blocking.
 
     Cycle 1: ALL sources (full sweep)
     Cycle 2-3: Fast sources only (Remotive, RemoteOK, WWR)
@@ -1379,26 +1412,26 @@ async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:
     jobspy_on = (cycle_number % 3 == 1)
     strict_on = (cycle_number % 5 == 1)
     tier_label = "ALL sources" if (jobspy_on and strict_on) else ("JobSpy + fast" if jobspy_on else ("strict + fast" if strict_on else "fast only"))
-    logger.info(f"[Scrape] Cycle #{cycle_number} ({tier_label}): {len(profiles)} profiles")
-
-    # Fire ALL profiles at the same time
-    profile_results = await asyncio.gather(
-        *[_scrape_one_profile(p, cycle_number) for p in profiles],
-        return_exceptions=True,
-    )
+    logger.info(f"[Scrape] Cycle #{cycle_number} ({tier_label}): {len(profiles)} profiles — SEQUENTIAL")
 
     total_new = 0
     all_errors = []
-    for i, result in enumerate(profile_results):
-        if isinstance(result, Exception):
-            err = f"Profile '{profiles[i]['title']}' crashed: {result}"
+
+    for profile in profiles:
+        title = profile.get("title", "?")
+        try:
+            result = await _scrape_one_profile(profile, cycle_number)
+            if isinstance(result, dict):
+                total_new += result.get("new_jobs", 0)
+                all_errors.extend(result.get("errors", []))
+        except Exception as e:
+            err = f"Profile '{title}' crashed: {e}"
             all_errors.append(err)
             logger.error(f"[Scrape] {err}")
-        elif isinstance(result, dict):
-            total_new += result.get("new_jobs", 0)
-            all_errors.extend(result.get("errors", []))
+        # Brief pause between profiles to spread load
+        await asyncio.sleep(2)
 
-    logger.info(f"[Scrape] PARALLEL cycle done: {total_new} new jobs total, {len(all_errors)} errors")
+    logger.info(f"[Scrape] Sequential cycle done: {total_new} new jobs total, {len(all_errors)} errors")
     return {
         "new_jobs": total_new,
         "errors": all_errors,

@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.8"
+BUILD_VERSION = "1.4.9"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
+    {"version": "1.4.9", "date": "2026-04-10", "status": "active", "change": "Scraper reliability overhaul — JobSpy runs SEQUENTIAL with 3s delays (was hundreds of parallel calls causing IP bans), profiles run sequentially (not parallel), Remotive broad fetch + client filter (server search too strict), Jobicy list crash fixed, limited to 5 JobSpy terms/profile"},
     {"version": "1.4.3", "date": "2026-04-10", "status": "active", "change": "Source fixes verified — Jobicy: removed tag filter (was returning 0), Himalayas: removed q param (irrelevant results), both use broad client-side matching now. Glassdoor removed (403 confirmed). TheMuse 5 pages. Diagnostic endpoint added."},
     {"version": "1.4.2", "date": "2026-04-10", "status": "active", "change": "Source fixes — upgrade JobSpy 1.1.75→1.1.82 (Glassdoor/ZipRecruiter community fixes), Himalayas pagination+search (was requesting 50, API max=20), Jobicy/Himalayas/Arbeitnow throttled to 1 call/profile (was per-term = rate limited), Arbeitnow paginated"},
     {"version": "1.4.1", "date": "2026-04-10", "status": "active", "change": "Show ALL jobs — Work Type default 'All Types' (was 'Remote' hiding 80% of results), archive after 3 days (was 5), purge after 30 days"},
