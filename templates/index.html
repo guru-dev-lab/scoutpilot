@@ -994,6 +994,9 @@ function renderJobs(jobs, searchInfo) {
 
   let html = '';
   var lastGroup = '';
+  var lastGroupRank = -1;
+  // Rank order: groups only move forward (higher rank = older)
+  var GROUP_RANK = {'Just Now':0, 'Last Few Hours':1, 'Today':2, 'Yesterday':3};
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const postedAgo = job.posted_at ? getTimeAgo(job.posted_at) : '';
@@ -1004,7 +1007,7 @@ function renderJobs(jobs, searchInfo) {
     const isViewed = job.status === 'viewed';
     const cls = isApplied ? 'applied' : isSaved ? 'saved' : isViewed ? 'viewed' : '';
 
-    // ── Time group headers (calendar-based) ──
+    // ── Time group headers (calendar-based, monotonic) ──
     const pMs = getPostedMs(job);
     var groupLabel = '';
     if (pMs !== null) {
@@ -1026,10 +1029,13 @@ function renderJobs(jobs, searchInfo) {
     } else {
       groupLabel = 'Older';
     }
-    if (groupLabel !== lastGroup) {
+    // Only emit header if this group is LATER than the last one (monotonic forward)
+    var rank = (groupLabel in GROUP_RANK) ? GROUP_RANK[groupLabel] : 100;
+    if (groupLabel !== lastGroup && rank > lastGroupRank) {
       var dotCls = (groupLabel === 'Just Now') ? 'live' : (groupLabel === 'Last Few Hours' || groupLabel === 'Today') ? 'recent' : 'older';
       html += '<div class="time-group-header"><span class="tg-dot ' + dotCls + '"></span>' + groupLabel + '</div>';
       lastGroup = groupLabel;
+      lastGroupRank = rank;
     }
 
     let badges = '';
