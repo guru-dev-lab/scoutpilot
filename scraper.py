@@ -692,7 +692,7 @@ async def scrape_themuse(
         # Fetch multiple pages to maximize matches
         all_results = []
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            for page in range(1, 4):  # 3 pages
+            for page in range(1, 6):  # 5 pages for more coverage
                 resp = await client.get(
                     "https://www.themuse.com/api/public/jobs",
                     params={"page": page, "descending": "true"},
@@ -937,11 +937,12 @@ async def scrape_jobicy(
     jobs = []
     try:
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        tag = search_term.lower().replace(" remote", "").strip().replace(" ", "-")
+        # Jobicy tag filter is very strict — use broad fetch + client-side matching
+        # Their API limits to 50 results max. Don't use 'tag' — returns 0 for most queries
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(
                 "https://jobicy.com/api/v2/remote-jobs",
-                params={"count": 50, "tag": tag, "geo": "usa"},
+                params={"count": 50, "geo": "usa"},
             )
             if resp.status_code != 200:
                 logger.error(f"[Jobicy] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -958,9 +959,14 @@ async def scrape_jobicy(
             if _is_blocked_company(company):
                 continue
 
-            # Basic relevance: any search word in title
+            # Relevance: any search word in title OR job industry/type
             title_lower = title.lower()
-            if not any(w in title_lower for w in search_words):
+            job_type = (item.get("jobType", "") or "").lower()
+            industry = (item.get("jobIndustry", "") or "").lower()
+            if isinstance(industry, list):
+                industry = " ".join(str(i) for i in industry)
+            combined = f"{title_lower} {job_type} {industry}"
+            if not any(w in combined for w in search_words):
                 continue
 
             apply_url = item.get("url", "")
@@ -1022,12 +1028,13 @@ async def scrape_himalayas(
         all_items = []
 
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            # Use search endpoint for targeted results, paginate 20/page up to 5 pages
+            # Browse endpoint — paginate 20/page up to 5 pages, filter client-side
+            # The 'q' param returns irrelevant results (tested: "data analyst" → "Campus Ambassador")
             for page_offset in range(0, 100, 20):
                 try:
                     resp = await client.get(
                         "https://himalayas.app/jobs/api",
-                        params={"limit": 20, "offset": page_offset, "q": search_lower},
+                        params={"limit": 20, "offset": page_offset},
                     )
                     if resp.status_code == 429:
                         logger.warning(f"[Himalayas] Rate limited at offset {page_offset}")
@@ -1052,7 +1059,9 @@ async def scrape_himalayas(
                 continue
 
             title_lower = title.lower()
-            if not any(w in title_lower for w in search_words):
+            categories = " ".join(item.get("categories", [])).lower() if item.get("categories") else ""
+            combined_him = f"{title_lower} {categories}"
+            if not any(w in combined_him for w in search_words):
                 continue
 
             apply_url = item.get("applicationUrl", item.get("url", ""))
@@ -1211,7 +1220,9 @@ async def _scrape_one_profile(profile: dict) -> dict:
     # Group 1: Indeed + LinkedIn together (reliable, fast)
     # Group 2: Google + Glassdoor + ZipRecruiter together (may fail, but won't block group 1)
     MAIN_SITES = ["indeed", "linkedin"]
-    EXTRA_SITES = ["google", "glassdoor", "zip_recruiter"]
+    # Glassdoor: confirmed 403 Cloudflare block from Railway — removed
+    # ZipRecruiter: reachable from Railway, keep it
+    EXTRA_SITES = ["google", "zip_recruiter"]
 
     for term in terms_this_cycle:
         # NO "remote" appended — scrape everything, filter in UI
