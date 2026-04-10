@@ -1189,9 +1189,15 @@ async def scrape_weworkremotely(
     return jobs
 
 
-async def _scrape_one_profile(profile: dict) -> dict:
-    """Scrape ALL sources for ONE profile — all terms and sources run concurrently.
-    Each profile is an independent 'bot' that searches everything."""
+async def _scrape_one_profile(profile: dict, cycle_number: int = 1) -> dict:
+    """Scrape sources for ONE profile — frequency based on source rate limits.
+
+    Source tiers (based on rate limit behavior):
+      EVERY cycle:  Remotive, RemoteOK, WWR (public APIs, generous limits)
+      Every 3rd:    JobSpy main (Indeed+LinkedIn — aggressive anti-bot)
+      Every 3rd:    JobSpy extra (Google+ZipRecruiter — moderate limits)
+      Every 5th:    Jobicy (blocks >1x/hour), Himalayas (429 risk), TheMuse, Arbeitnow
+    """
     title = profile["title"]
     expanded = profile.get("expanded_titles", [])
     locations = profile.get("locations", [])
@@ -1217,58 +1223,59 @@ async def _scrape_one_profile(profile: dict) -> dict:
     # Let the UI filters handle work type. This catches 5x more jobs.
     tasks = []
 
-    # Group 1: Indeed + LinkedIn together (reliable, fast)
-    # Group 2: Google + Glassdoor + ZipRecruiter together (may fail, but won't block group 1)
+    # ── Source frequency tiers (based on rate limit behavior) ──
+    # TIER 1 — EVERY cycle: public APIs with generous/no rate limits
+    # TIER 2 — Every 3rd cycle: JobSpy (Indeed/LinkedIn/Google/Zip) — anti-bot, IP throttle
+    # TIER 3 — Every 5th cycle: Strict rate-limiters (Jobicy, Himalayas, TheMuse, Arbeitnow)
+    run_jobspy = (cycle_number % 3 == 1)      # Cycles 1, 4, 7, 10...
+    run_strict = (cycle_number % 5 == 1)      # Cycles 1, 6, 11, 16...
+
     MAIN_SITES = ["indeed", "linkedin"]
-    # Glassdoor: confirmed 403 Cloudflare block from Railway — removed
-    # ZipRecruiter: reachable from Railway, keep it
     EXTRA_SITES = ["google", "zip_recruiter"]
 
     # For remote-only profiles with no locations, use broad US search
-    # Empty string location makes JobSpy less effective — "USA" catches nationwide remote jobs
     remote_only = profile.get("remote_only", 0)
     effective_locations = locations if locations else (["USA"] if remote_only else [""])
 
     for term in terms_this_cycle:
-        # NO "remote" appended — scrape everything, filter in UI
         effective_term = term
 
-        # Main boards — Indeed + LinkedIn (reliable, get more results)
-        for loc in effective_locations:
-            tasks.append(("JobSpy/main", scrape_jobspy(
-                search_term=effective_term, location=loc,
-                results_wanted=50, hours_old=72, profile_id=profile_id,
-                sites=MAIN_SITES,
-            )))
+        # TIER 2: JobSpy — Indeed + LinkedIn (every 3rd cycle)
+        if run_jobspy:
+            for loc in effective_locations:
+                tasks.append(("JobSpy/main", scrape_jobspy(
+                    search_term=effective_term, location=loc,
+                    results_wanted=50, hours_old=72, profile_id=profile_id,
+                    sites=MAIN_SITES,
+                )))
+            # Extra boards — Google, ZipRecruiter
+            for loc in effective_locations:
+                tasks.append(("JobSpy/extra", scrape_jobspy(
+                    search_term=effective_term, location=loc,
+                    results_wanted=30, hours_old=72, profile_id=profile_id,
+                    sites=EXTRA_SITES,
+                )))
 
-        # Extra boards — Google, ZipRecruiter (separate so failures are isolated)
-        for loc in effective_locations:
-            tasks.append(("JobSpy/extra", scrape_jobspy(
-                search_term=effective_term, location=loc,
-                results_wanted=30, hours_old=72, profile_id=profile_id,
-                sites=EXTRA_SITES,
-            )))
-
-        # Remotive + RemoteOK: per-term (they handle high frequency fine)
+        # TIER 1: Remotive + RemoteOK — every cycle (generous limits)
         tasks.append(("Remotive", scrape_remotive(term, profile_id)))
         tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
-    # ── APIs that rate-limit: 1 call per profile, not per term ──
-    # Jobicy: 6h posting delay, blocks if checked >1x/hour — 1 call per profile
-    tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
-    # Himalayas: max 20/request, rate limits at 429 — 1 call per profile (paginates internally)
-    tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
-    # Arbeitnow: returns full feed, client-side filter — 1 call per profile
-    tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
+    # TIER 3: Strict rate-limited APIs — every 5th cycle
+    if run_strict:
+        # Jobicy: blocks >1x/hour
+        tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
+        # Himalayas: 429 rate limit risk
+        tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
+        # Arbeitnow: full feed, moderate limits
+        tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
+        # TheMuse: API-based, moderate limits
+        tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
-    # TheMuse — 1 call per profile (fetches multiple pages)
-    tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
-
-    # WeWorkRemotely RSS — 1 call per profile
+    # TIER 1: WeWorkRemotely RSS — every cycle (it's just RSS, no limit)
     tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
 
-    # SerpApi (if key)
-    if settings.serpapi_key:
+    # SerpApi (if key) — every 3rd cycle (API quota)
+    if settings.serpapi_key and run_jobspy:
         tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
 
     # JSearch (if key)
@@ -1292,17 +1299,25 @@ async def _scrape_one_profile(profile: dict) -> dict:
     return {"new_jobs": total_new, "errors": errors}
 
 
-async def run_scrape_cycle(profiles: list[dict]) -> dict:
+async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:
     """
-    Run a FULL scrape cycle — ALL profiles × ALL sources × ALL terms CONCURRENTLY.
-    Every profile runs in parallel. Within each profile, every source runs in parallel.
-    A cycle that used to take 10+ minutes now finishes in ~2 minutes.
+    Run a scrape cycle — ALL profiles in parallel, source frequency based on cycle number.
+
+    Cycle 1: ALL sources (full sweep)
+    Cycle 2-3: Fast sources only (Remotive, RemoteOK, WWR)
+    Cycle 4: JobSpy + fast sources
+    Cycle 5: Fast sources only
+    Cycle 6: ALL sources again (JobSpy + strict APIs + fast)
+    ...and so on.
     """
-    logger.info(f"[Scrape] PARALLEL cycle: {len(profiles)} profiles × all sources")
+    jobspy_on = (cycle_number % 3 == 1)
+    strict_on = (cycle_number % 5 == 1)
+    tier_label = "ALL sources" if (jobspy_on and strict_on) else ("JobSpy + fast" if jobspy_on else ("strict + fast" if strict_on else "fast only"))
+    logger.info(f"[Scrape] Cycle #{cycle_number} ({tier_label}): {len(profiles)} profiles")
 
     # Fire ALL profiles at the same time
     profile_results = await asyncio.gather(
-        *[_scrape_one_profile(p) for p in profiles],
+        *[_scrape_one_profile(p, cycle_number) for p in profiles],
         return_exceptions=True,
     )
 

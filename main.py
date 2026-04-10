@@ -80,8 +80,8 @@ last_scrape_result = {"status": "idle", "timestamp": None}
 _scrape_running = False  # Lock to prevent overlapping cycles
 
 
-async def scheduled_scrape():
-    """Background scrape cycle — with overlap prevention."""
+async def scheduled_scrape(cycle_number: int = 1):
+    """Background scrape cycle — with overlap prevention and per-source rate limiting."""
     global last_scrape_result, _scrape_running
 
     # Skip if a cycle is already running
@@ -104,7 +104,7 @@ async def scheduled_scrape():
             "status": "running",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        result = await run_scrape_cycle(profiles)
+        result = await run_scrape_cycle(profiles, cycle_number=cycle_number)
 
         # Score new jobs — AI-powered relevance scoring
         # Uses Haiku for smart matching: understands "Data Analyst" ≈ "BI Analyst" ≈ "BI Developer"
@@ -360,19 +360,30 @@ async def lifespan(app: FastAPI):
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility
 
-    # Continuous scrape loop — next cycle starts immediately after the previous one finishes
-    # 60s cooldown between cycles to avoid hammering APIs, but no wasted idle time
+    # Continuous scrape loop — smart cooldowns based on what sources ran
+    # Fast cycles (Remotive/RemoteOK/WWR only): 30s cooldown
+    # JobSpy cycles: 90s cooldown (anti-bot needs breathing room)
+    # Full cycles (all sources): 120s cooldown
     async def _continuous_scrape_loop():
         cycle_count = 0
         while True:
             cycle_count += 1
-            logger.info(f"[Continuous] Starting scrape cycle #{cycle_count}")
+            ran_jobspy = (cycle_count % 3 == 1)
+            ran_strict = (cycle_count % 5 == 1)
+            logger.info(f"[Continuous] Starting cycle #{cycle_count}")
             try:
-                await scheduled_scrape()
+                await scheduled_scrape(cycle_number=cycle_count)
             except Exception as e:
                 logger.error(f"[Continuous] Cycle #{cycle_count} crashed: {e}")
-            logger.info(f"[Continuous] Cycle #{cycle_count} done — cooling down 60s then starting next")
-            await asyncio.sleep(60)  # Brief cooldown to avoid API rate limits
+            # Smart cooldown: heavier cycles get more breathing room
+            if ran_jobspy and ran_strict:
+                cooldown = 120  # Full sweep — give all APIs time to recover
+            elif ran_jobspy:
+                cooldown = 90   # JobSpy hit — Indeed/LinkedIn need space
+            else:
+                cooldown = 30   # Fast APIs only — quick turnaround
+            logger.info(f"[Continuous] Cycle #{cycle_count} done — {cooldown}s cooldown")
+            await asyncio.sleep(cooldown)
 
     asyncio.create_task(_continuous_scrape_loop())
 
@@ -392,7 +403,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("[Scheduler] Continuous scrape loop started (cycle → 60s cooldown → next cycle). Deep sweep every 12h, cleanup daily at 3AM.")
+    logger.info("[Scheduler] Continuous scrape loop started. Fast cycles every ~30s, JobSpy every 3rd (~90s cooldown), full sweep every 15th (~120s). Deep sweep 12h, cleanup 3AM.")
 
     # Re-expand ALL profile titles with latest AI prompt (25+ titles per profile)
     asyncio.create_task(_re_expand_profiles())
@@ -911,7 +922,7 @@ async def api_trigger_scrape():
     """Manually trigger a scrape cycle."""
     if _scrape_running:
         return {"status": "already_running", "message": "A scrape cycle is already in progress"}
-    task = asyncio.create_task(scheduled_scrape())
+    task = asyncio.create_task(scheduled_scrape(cycle_number=1))  # Manual = full sweep (cycle 1 hits all sources)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"status": "started", "message": "Scrape cycle triggered"}
