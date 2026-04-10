@@ -490,6 +490,123 @@ async def healthz():
     return info
 
 
+@app.get("/api/test-sources")
+async def test_sources():
+    """Test each scraper source from the server — returns HTTP status and sample data."""
+    import httpx
+    results = {}
+    headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+
+    async with httpx.AsyncClient(timeout=20, headers=headers) as client:
+        # 1. Remotive
+        try:
+            r = await client.get("https://remotive.com/api/remote-jobs", params={"limit": 3})
+            jobs = r.json().get("jobs", [])
+            results["remotive"] = {"status": r.status_code, "jobs": len(jobs), "sample": jobs[0]["title"] if jobs else None}
+        except Exception as e:
+            results["remotive"] = {"error": str(e)}
+
+        # 2. RemoteOK
+        try:
+            r = await client.get("https://remoteok.com/api")
+            data = r.json()
+            jobs = [j for j in data if isinstance(j, dict) and j.get("position")]
+            results["remoteok"] = {"status": r.status_code, "jobs": len(jobs), "sample": jobs[0]["position"] if jobs else None}
+        except Exception as e:
+            results["remoteok"] = {"error": str(e)}
+
+        # 3. Jobicy
+        try:
+            r = await client.get("https://jobicy.com/api/v2/remote-jobs", params={"count": 5, "tag": "data-analyst", "geo": "usa"})
+            results["jobicy"] = {"status": r.status_code, "body_preview": r.text[:300]}
+            if r.status_code == 200:
+                data = r.json()
+                jobs = data.get("jobs", [])
+                results["jobicy"]["jobs"] = len(jobs)
+                if jobs:
+                    results["jobicy"]["sample"] = jobs[0].get("jobTitle")
+        except Exception as e:
+            results["jobicy"] = {"error": str(e)}
+
+        # 4. Himalayas
+        try:
+            r = await client.get("https://himalayas.app/jobs/api", params={"limit": 5, "q": "data analyst"})
+            results["himalayas"] = {"status": r.status_code, "body_preview": r.text[:300]}
+            if r.status_code == 200:
+                data = r.json()
+                jobs = data.get("jobs", [])
+                results["himalayas"]["jobs"] = len(jobs)
+                if jobs:
+                    results["himalayas"]["sample"] = jobs[0].get("title")
+        except Exception as e:
+            results["himalayas"] = {"error": str(e)}
+
+        # 5. Arbeitnow
+        try:
+            r = await client.get("https://www.arbeitnow.com/api/job-board-api", params={"page": 1})
+            results["arbeitnow"] = {"status": r.status_code, "body_preview": r.text[:300]}
+            if r.status_code == 200:
+                data = r.json()
+                items = data.get("data", [])
+                results["arbeitnow"]["jobs"] = len(items)
+                if items:
+                    results["arbeitnow"]["sample"] = items[0].get("title")
+        except Exception as e:
+            results["arbeitnow"] = {"error": str(e)}
+
+        # 6. TheMuse
+        try:
+            r = await client.get("https://www.themuse.com/api/public/jobs", params={"page": 1, "category": "Data Science"})
+            results["themuse"] = {"status": r.status_code}
+            if r.status_code == 200:
+                data = r.json()
+                jobs = data.get("results", [])
+                results["themuse"]["jobs"] = len(jobs)
+                if jobs:
+                    results["themuse"]["sample"] = jobs[0].get("name")
+        except Exception as e:
+            results["themuse"] = {"error": str(e)}
+
+        # 7. WeWorkRemotely RSS
+        try:
+            r = await client.get("https://weworkremotely.com/categories/remote-programming-jobs.rss")
+            results["weworkremotely"] = {"status": r.status_code, "content_length": len(r.text)}
+        except Exception as e:
+            results["weworkremotely"] = {"error": str(e)}
+
+        # 8. Glassdoor (via JobSpy — just test if site is reachable)
+        try:
+            r = await client.get("https://www.glassdoor.com/", follow_redirects=True)
+            results["glassdoor"] = {"status": r.status_code, "reachable": r.status_code < 400}
+        except Exception as e:
+            results["glassdoor"] = {"error": str(e)}
+
+        # 9. ZipRecruiter
+        try:
+            r = await client.get("https://www.ziprecruiter.com/", follow_redirects=True)
+            results["ziprecruiter"] = {"status": r.status_code, "reachable": r.status_code < 400}
+        except Exception as e:
+            results["ziprecruiter"] = {"error": str(e)}
+
+    # Also get DB source counts
+    try:
+        from database import get_db
+        db = await get_db()
+        rows = await db.execute("""
+            SELECT source, COUNT(*) as cnt,
+                   MAX(first_seen_at) as newest_seen,
+                   SUM(CASE WHEN first_seen_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) as last_hour
+            FROM jobs WHERE archived = 0
+            GROUP BY source ORDER BY cnt DESC
+        """)
+        db_sources = [dict(r) for r in await rows.fetchall()]
+        results["_db_source_counts"] = db_sources
+    except Exception as e:
+        results["_db_error"] = str(e)
+
+    return results
+
+
 LOGIN_PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
