@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.4.3"
+BUILD_VERSION = "1.4.4"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
     {"version": "1.4.3", "date": "2026-04-10", "status": "active", "change": "Source fixes verified — Jobicy: removed tag filter (was returning 0), Himalayas: removed q param (irrelevant results), both use broad client-side matching now. Glassdoor removed (403 confirmed). TheMuse 5 pages. Diagnostic endpoint added."},

@@ -1209,7 +1209,7 @@ async def _scrape_one_profile(profile: dict) -> dict:
 
     # Search ALL terms every cycle — they run concurrently so it's fast
     # More terms = more chances to find freshly posted jobs
-    all_terms = search_terms[:20]  # Allow up to 20 expanded titles
+    all_terms = search_terms[:35]  # Allow up to 35 expanded titles (was 20 — too low for analyst roles)
     terms_this_cycle = all_terms if all_terms else [title]
 
     # ── Build ALL scrape tasks for this profile (run concurrently) ──
@@ -1224,20 +1224,25 @@ async def _scrape_one_profile(profile: dict) -> dict:
     # ZipRecruiter: reachable from Railway, keep it
     EXTRA_SITES = ["google", "zip_recruiter"]
 
+    # For remote-only profiles with no locations, use broad US search
+    # Empty string location makes JobSpy less effective — "USA" catches nationwide remote jobs
+    remote_only = profile.get("remote_only", 0)
+    effective_locations = locations if locations else (["USA"] if remote_only else [""])
+
     for term in terms_this_cycle:
         # NO "remote" appended — scrape everything, filter in UI
         effective_term = term
 
         # Main boards — Indeed + LinkedIn (reliable, get more results)
-        for loc in (locations if locations else [""]):
+        for loc in effective_locations:
             tasks.append(("JobSpy/main", scrape_jobspy(
                 search_term=effective_term, location=loc,
                 results_wanted=50, hours_old=72, profile_id=profile_id,
                 sites=MAIN_SITES,
             )))
 
-        # Extra boards — Google, Glassdoor, ZipRecruiter (separate so failures are isolated)
-        for loc in (locations if locations else [""]):
+        # Extra boards — Google, ZipRecruiter (separate so failures are isolated)
+        for loc in effective_locations:
             tasks.append(("JobSpy/extra", scrape_jobspy(
                 search_term=effective_term, location=loc,
                 results_wanted=30, hours_old=72, profile_id=profile_id,
