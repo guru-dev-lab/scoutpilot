@@ -1752,7 +1752,7 @@ async def scrape_jobicy_rss(
         import feedparser
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
-                "https://jobicy.com/feed/newjob",
+                "https://jobicy.com/feed/job_feed",
                 headers={"User-Agent": "ScoutPilot/1.0"},
             )
             if resp.status_code != 200:
@@ -1823,30 +1823,31 @@ async def scrape_jobicy_rss(
     return jobs
 
 
-async def scrape_remotefirstjobs(
+async def scrape_himalayas_rss(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape remote jobs from RemoteFirstJobs RSS feed (no auth needed).
-    Free public RSS at https://remotefirstjobs.com/rss
+    """Scrape remote jobs from Himalayas RSS feed (no auth needed).
+    Free public RSS at https://himalayas.app/jobs/rss — 100 most recent jobs.
+    Supplements the Himalayas JSON API with broader coverage.
     """
-    logger.info(f"[RemoteFirstJobs] Searching: '{search_term}'")
+    logger.info(f"[HimalayasRSS] Searching: '{search_term}'")
     jobs = []
     try:
         import feedparser
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
-                "https://remotefirstjobs.com/rss",
+                "https://himalayas.app/jobs/rss",
                 headers={"User-Agent": "ScoutPilot/1.0"},
                 follow_redirects=True,
             )
             if resp.status_code != 200:
-                logger.warning(f"[RemoteFirstJobs] HTTP {resp.status_code}")
+                logger.warning(f"[HimalayasRSS] HTTP {resp.status_code}")
                 return []
 
         feed = feedparser.parse(resp.text)
         if not feed.entries:
-            logger.warning(f"[RemoteFirstJobs] Feed returned 0 entries (bozo={feed.bozo})")
+            logger.warning(f"[HimalayasRSS] Feed returned 0 entries (bozo={feed.bozo})")
             return []
 
         search_lower = search_term.lower()
@@ -1878,7 +1879,7 @@ async def scrape_remotefirstjobs(
 
             apply_url = entry.get("link", "")
             is_direct = _is_direct_url(apply_url)
-            posted_at = _normalize_posted_at(entry.get("published", ""))
+            posted_at = _normalize_posted_at(entry.get("published", "") or entry.get("updated", ""))
 
             job = {
                 "title": title,
@@ -1890,7 +1891,7 @@ async def scrape_remotefirstjobs(
                 "description": clean_desc[:10000],
                 "salary_min": 0,
                 "salary_max": 0,
-                "source": "remotefirstjobs",
+                "source": "himalayas_rss",
                 "source_url": apply_url,
                 "direct_apply_url": apply_url if is_direct else "",
                 "posted_at": posted_at,
@@ -1901,11 +1902,11 @@ async def scrape_remotefirstjobs(
             if was_inserted:
                 jobs.append(job)
 
-        logger.info(f"[RemoteFirstJobs] Parsed {len(feed.entries)} entries, matched {len(jobs)} new for '{search_term}'")
+        logger.info(f"[HimalayasRSS] Parsed {len(feed.entries)} entries, matched {len(jobs)} new for '{search_term}'")
     except ImportError:
-        logger.warning("[RemoteFirstJobs] feedparser not installed — skipping")
+        logger.warning("[HimalayasRSS] feedparser not installed — skipping")
     except Exception as e:
-        logger.error(f"[RemoteFirstJobs] Error: {e}")
+        logger.error(f"[HimalayasRSS] Error: {e}")
     return jobs
 
 
@@ -1989,8 +1990,8 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     # JobicyRSS — free RSS feed, broader coverage than API alone
     light_tasks.append(("JobicyRSS", scrape_jobicy_rss(title, profile_id)))
 
-    # RemoteFirstJobs — free RSS feed for remote jobs
-    light_tasks.append(("RemoteFirstJobs", scrape_remotefirstjobs(title, profile_id)))
+    # HimalayasRSS — free RSS feed, supplements JSON API with broader coverage
+    light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(title, profile_id)))
 
     # SerpApi / JSearch if keys available
     if settings.serpapi_key:

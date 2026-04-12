@@ -6,8 +6,8 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.7.0"
-BUILD_DATE = "2026-04-10"
+BUILD_VERSION = "1.7.1"
+BUILD_DATE = "2026-04-12"
 RECENT_CHANGES = [
     {"version": "1.6.0", "date": "2026-04-10", "status": "active", "change": "6 NEW SOURCES: USAJobs (gov engineering/analyst), Jooble (8M+ aggregator), Adzuna (massive aggregator), CareerJet (global), FindWork.dev (tech), JustRemote (RSS). Now 13 sources total. All fire every cycle for every profile."},
     {"version": "1.4.9", "date": "2026-04-10", "status": "active", "change": "Scraper reliability overhaul — JobSpy runs SEQUENTIAL with 3s delays (was hundreds of parallel calls causing IP bans), profiles run sequentially (not parallel), Remotive broad fetch + client filter (server search too strict), Jobicy list crash fixed, limited to 5 JobSpy terms/profile"},
@@ -955,6 +955,21 @@ async def api_debug_scrape_log(filter: str = "", level: str = ""):
         levels = [l.strip().upper() for l in level.split(",") if l.strip()]
         entries = [e for e in entries if e["level"] in levels]
     return {"log": entries, "count": len(entries), "total_in_buffer": len(_scrape_log)}
+
+
+@app.get("/api/debug/outbound-ip")
+async def api_debug_outbound_ip():
+    """Show the outbound IP address of this Railway instance.
+    Use this to whitelist in services like CareerJet that require IP declaration.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://api.ipify.org?format=json")
+            ip_data = resp.json()
+            return {"outbound_ip": ip_data.get("ip", "unknown"), "note": "Railway Hobby plan IPs can change on redeploy. Check after each deploy."}
+    except Exception as e:
+        return {"error": str(e), "note": "Could not determine outbound IP"}
 
 
 # ──────────────────────────────────────────────
