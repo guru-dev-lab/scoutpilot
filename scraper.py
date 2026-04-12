@@ -1602,6 +1602,10 @@ async def scrape_careerjet(
                 "https://search.api.careerjet.net/v4/query",
                 params=params,
                 auth=(affid, ""),  # Basic Auth: affid as username, empty password
+                headers={
+                    "Referer": "https://web-production-e1ffee.up.railway.app",
+                    "User-Agent": "ScoutPilot/1.0",
+                },
             )
             if resp.status_code != 200:
                 logger.warning(f"[CareerJet] HTTP {resp.status_code}: {resp.text[:200]}")

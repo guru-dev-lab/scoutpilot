@@ -29,6 +29,7 @@ async def get_db():
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA busy_timeout=10000")  # Wait up to 10s for locks instead of failing
     await db.execute("PRAGMA foreign_keys=ON")
     return db
 
