@@ -1588,18 +1588,20 @@ async def scrape_careerjet(
     jobs = []
     try:
         params = {
-            "keywords": search_term,
-            "location": location,
             "locale_code": "en_US",
-            "affid": affid,
+            "search": search_term,
+            "location": location,
             "pagesize": 50,
             "page": 1,
             "sort": "date",
+            "user_ip": "1.2.3.4",          # Required by API — server-side caller
+            "user_agent": "ScoutPilot/1.0",  # Required by API
         }
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 "https://search.api.careerjet.net/v4/query",
                 params=params,
+                auth=(affid, ""),  # Basic Auth: affid as username, empty password
             )
             if resp.status_code != 200:
                 logger.warning(f"[CareerJet] HTTP {resp.status_code}: {resp.text[:200]}")
