@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.6.0"
+BUILD_VERSION = "1.7.0"
 BUILD_DATE = "2026-04-10"
 RECENT_CHANGES = [
     {"version": "1.6.0", "date": "2026-04-10", "status": "active", "change": "6 NEW SOURCES: USAJobs (gov engineering/analyst), Jooble (8M+ aggregator), Adzuna (massive aggregator), CareerJet (global), FindWork.dev (tech), JustRemote (RSS). Now 13 sources total. All fire every cycle for every profile."},
@@ -81,9 +81,9 @@ scheduler = AsyncIOScheduler()
 last_scrape_result = {"status": "idle", "timestamp": None}
 _scrape_running = False  # Lock to prevent overlapping cycles
 
-# Ring buffer for scraper logs — last 50 log entries visible at /api/debug/scrape-log
+# Ring buffer for scraper logs — last 500 log entries visible at /api/debug/scrape-log
 from collections import deque
-_scrape_log = deque(maxlen=50)
+_scrape_log = deque(maxlen=500)
 
 class ScrapeLogHandler(logging.Handler):
     def emit(self, record):
@@ -378,6 +378,23 @@ async def lifespan(app: FastAPI):
 
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility
+
+    # Report which optional API keys are configured
+    from config import settings as _cfg
+    _keys = {
+        "USAJOBS_API_KEY": bool(_cfg.usajobs_api_key),
+        "JOOBLE_API_KEY": bool(_cfg.jooble_api_key),
+        "ADZUNA_APP_ID/KEY": bool(_cfg.adzuna_app_id and _cfg.adzuna_app_key),
+        "CAREERJET_AFFID": bool(_cfg.careerjet_affid),
+        "FINDWORK_TOKEN": bool(_cfg.findwork_token),
+        "SERPAPI_KEY": bool(_cfg.serpapi_key),
+        "RAPIDAPI_KEY": bool(_cfg.rapidapi_key),
+    }
+    configured = [k for k, v in _keys.items() if v]
+    missing = [k for k, v in _keys.items() if not v]
+    logger.info(f"[Startup] API keys configured: {configured or 'NONE'}")
+    if missing:
+        logger.warning(f"[Startup] API keys MISSING (sources will be skipped): {missing}")
 
     # Continuous scrape loop — smart cooldowns based on what sources ran
     # Fast cycles (Remotive/RemoteOK/WWR only): 30s cooldown
@@ -925,9 +942,19 @@ async def api_debug_sources():
 
 
 @app.get("/api/debug/scrape-log")
-async def api_debug_scrape_log():
-    """Show recent scraper log entries — helps diagnose what each source is doing."""
-    return {"log": list(_scrape_log), "count": len(_scrape_log)}
+async def api_debug_scrape_log(filter: str = "", level: str = ""):
+    """Show recent scraper log entries — helps diagnose what each source is doing.
+    ?filter=USAJobs,Jooble — show only entries containing these strings
+    ?level=WARNING,ERROR — show only these log levels
+    """
+    entries = list(_scrape_log)
+    if filter:
+        keywords = [k.strip().lower() for k in filter.split(",") if k.strip()]
+        entries = [e for e in entries if any(kw in e["msg"].lower() for kw in keywords)]
+    if level:
+        levels = [l.strip().upper() for l in level.split(",") if l.strip()]
+        entries = [e for e in entries if e["level"] in levels]
+    return {"log": entries, "count": len(entries), "total_in_buffer": len(_scrape_log)}
 
 
 # ──────────────────────────────────────────────

@@ -1299,13 +1299,22 @@ async def scrape_usajobs(
     location: str = "",
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape US government jobs from USAJobs.gov (free API, needs email as auth key)."""
+    """Scrape US government jobs from USAJobs.gov.
+    Requires USAJOBS_API_KEY and USAJOBS_EMAIL env vars.
+    Register free at https://developer.usajobs.gov/APIRequest/Index
+    """
+    api_key = settings.usajobs_api_key
+    api_email = settings.usajobs_email or "ai@ridworth.com"
+    if not api_key:
+        logger.warning("[USAJobs] SKIPPED — no USAJOBS_API_KEY set. Register free at https://developer.usajobs.gov/APIRequest/Index")
+        return []
+
     logger.info(f"[USAJobs] Searching: '{search_term}' location='{location}'")
     jobs = []
     try:
         headers = {
-            "User-Agent": "ScoutPilot/1.0 ai@ridworth.com",
-            "Authorization-Key": "ai@ridworth.com",  # USAJobs uses email as key
+            "User-Agent": api_email,
+            "Authorization-Key": api_key,
             "Host": "data.usajobs.gov",
         }
         params = {
@@ -1390,12 +1399,20 @@ async def scrape_jooble(
     location: str = "USA",
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape jobs from Jooble (free POST API, no paid key needed)."""
+    """Scrape jobs from Jooble (free POST API).
+    Requires JOOBLE_API_KEY env var — the partner key goes in the URL path.
+    Register free at https://jooble.org/api/about
+    """
+    api_key = settings.jooble_api_key
+    if not api_key:
+        logger.warning("[Jooble] SKIPPED — no JOOBLE_API_KEY set. Register free at https://jooble.org/api/about")
+        return []
+
     logger.info(f"[Jooble] Searching: '{search_term}' location='{location}'")
     jobs = []
     try:
-        # Jooble API uses a partner key in the URL — use empty for basic access
-        api_url = "https://jooble.org/api/"
+        # Jooble API requires partner key in URL path
+        api_url = f"https://jooble.org/api/{api_key}"
         payload = {
             "keywords": search_term,
             "location": location,
@@ -1467,16 +1484,15 @@ async def scrape_adzuna(
     location: str = "",
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape jobs from Adzuna (free tier — app_id/app_key from env, or skip if not set)."""
-    app_id = settings.adzuna_app_id if hasattr(settings, "adzuna_app_id") else ""
-    app_key = settings.adzuna_app_key if hasattr(settings, "adzuna_app_key") else ""
+    """Scrape jobs from Adzuna (free tier).
+    Requires ADZUNA_APP_ID and ADZUNA_APP_KEY env vars.
+    Register free at https://developer.adzuna.com/
+    """
+    app_id = settings.adzuna_app_id
+    app_key = settings.adzuna_app_key
     if not app_id or not app_key:
-        # Try env vars directly
-        import os
-        app_id = os.getenv("ADZUNA_APP_ID", "")
-        app_key = os.getenv("ADZUNA_APP_KEY", "")
-    if not app_id or not app_key:
-        return []  # Skip silently if no Adzuna keys
+        logger.warning("[Adzuna] SKIPPED — no ADZUNA_APP_ID / ADZUNA_APP_KEY set. Register free at https://developer.adzuna.com/")
+        return []
 
     logger.info(f"[Adzuna] Searching: '{search_term}' location='{location}'")
     jobs = []
@@ -1559,7 +1575,15 @@ async def scrape_careerjet(
     location: str = "USA",
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape jobs from CareerJet (free public API, no auth needed)."""
+    """Scrape jobs from CareerJet (v4 JSON API).
+    Requires CAREERJET_AFFID env var (affiliate ID from partner registration).
+    Register free at https://www.careerjet.com/partners/api
+    """
+    affid = settings.careerjet_affid
+    if not affid:
+        logger.warning("[CareerJet] SKIPPED — no CAREERJET_AFFID set. Register free at https://www.careerjet.com/partners/api")
+        return []
+
     logger.info(f"[CareerJet] Searching: '{search_term}' location='{location}'")
     jobs = []
     try:
@@ -1567,14 +1591,14 @@ async def scrape_careerjet(
             "keywords": search_term,
             "location": location,
             "locale_code": "en_US",
-            "affid": "scoutpilot",
+            "affid": affid,
             "pagesize": 50,
             "page": 1,
             "sort": "date",
         }
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
-                "https://public.api.careerjet.net/search",
+                "https://search.api.careerjet.net/v4/query",
                 params=params,
             )
             if resp.status_code != 200:
@@ -1637,7 +1661,15 @@ async def scrape_findwork(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape tech/remote jobs from FindWork.dev (free API)."""
+    """Scrape tech/remote jobs from FindWork.dev.
+    Requires FINDWORK_TOKEN env var (Bearer token).
+    Register free at https://findwork.dev/developers/
+    """
+    token = settings.findwork_token
+    if not token:
+        logger.warning("[FindWork] SKIPPED — no FINDWORK_TOKEN set. Register free at https://findwork.dev/developers/")
+        return []
+
     logger.info(f"[FindWork] Searching: '{search_term}'")
     jobs = []
     try:
@@ -1645,10 +1677,13 @@ async def scrape_findwork(
             resp = await client.get(
                 "https://findwork.dev/api/jobs/",
                 params={"search": search_term, "sort_by": "relevance"},
-                headers={"User-Agent": "ScoutPilot/1.0"},
+                headers={
+                    "Authorization": f"Token {token}",
+                    "User-Agent": "ScoutPilot/1.0",
+                },
             )
             if resp.status_code == 403:
-                logger.warning("[FindWork] 403 — needs API token, skipping")
+                logger.warning("[FindWork] 403 — token may be invalid or expired")
                 return []
             if resp.status_code != 200:
                 logger.warning(f"[FindWork] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -1704,45 +1739,55 @@ async def scrape_findwork(
     return jobs
 
 
-async def scrape_justremote(
+async def scrape_jobicy_rss(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape remote jobs from JustRemote RSS feed."""
-    logger.info(f"[JustRemote] Searching: '{search_term}'")
+    """Scrape remote jobs from Jobicy RSS feed (no auth needed, always available).
+    This is a secondary Jobicy source using their public RSS feed for broader coverage.
+    """
+    logger.info(f"[JobicyRSS] Searching: '{search_term}'")
     jobs = []
     try:
         import feedparser
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
-                "https://justremote.co/remote-jobs/rss",
+                "https://jobicy.com/feed/newjob",
                 headers={"User-Agent": "ScoutPilot/1.0"},
             )
             if resp.status_code != 200:
-                logger.warning(f"[JustRemote] HTTP {resp.status_code}")
+                logger.warning(f"[JobicyRSS] HTTP {resp.status_code}")
                 return []
 
         feed = feedparser.parse(resp.text)
         search_lower = search_term.lower()
-        search_words = search_lower.replace(" remote", "").strip().split()
+        search_words = [w for w in search_lower.replace(" remote", "").strip().split() if len(w) > 2]
 
         for entry in feed.entries:
             title = entry.get("title", "")
             title_lower = title.lower()
-            if not any(w in title_lower for w in search_words):
+            desc_text = entry.get("summary", "") or entry.get("description", "")
+            desc_lower = desc_text.lower()
+            # Match if any search word appears in title or description
+            if not any(w in title_lower or w in desc_lower for w in search_words):
                 continue
 
             company = ""
+            # Jobicy RSS format: "Job Title at Company Name"
             if " at " in title:
                 parts = title.split(" at ", 1)
+                title = parts[0].strip()
+                company = parts[1].strip()
+            # Also try " – " separator
+            elif " – " in title:
+                parts = title.split(" – ", 1)
                 title = parts[0].strip()
                 company = parts[1].strip()
 
             if _is_blocked_company(company):
                 continue
 
-            description = entry.get("summary", "") or entry.get("description", "")
-            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"<[^>]+>", " ", desc_text)
             clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
             apply_url = entry.get("link", "")
@@ -1759,7 +1804,7 @@ async def scrape_justremote(
                 "description": clean_desc[:10000],
                 "salary_min": 0,
                 "salary_max": 0,
-                "source": "justremote",
+                "source": "jobicy_rss",
                 "source_url": apply_url,
                 "direct_apply_url": apply_url if is_direct else "",
                 "posted_at": posted_at,
@@ -1770,11 +1815,97 @@ async def scrape_justremote(
             if was_inserted:
                 jobs.append(job)
 
-        logger.info(f"[JustRemote] Parsed {len(feed.entries)} entries, inserted {len(jobs)} new")
+        logger.info(f"[JobicyRSS] Parsed {len(feed.entries)} entries, matched {len(jobs)} new for '{search_term}'")
     except ImportError:
-        logger.warning("[JustRemote] feedparser not installed — skipping")
+        logger.warning("[JobicyRSS] feedparser not installed — skipping")
     except Exception as e:
-        logger.error(f"[JustRemote] Error: {e}")
+        logger.error(f"[JobicyRSS] Error: {e}")
+    return jobs
+
+
+async def scrape_remotefirstjobs(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from RemoteFirstJobs RSS feed (no auth needed).
+    Free public RSS at https://remotefirstjobs.com/rss
+    """
+    logger.info(f"[RemoteFirstJobs] Searching: '{search_term}'")
+    jobs = []
+    try:
+        import feedparser
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://remotefirstjobs.com/rss",
+                headers={"User-Agent": "ScoutPilot/1.0"},
+                follow_redirects=True,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[RemoteFirstJobs] HTTP {resp.status_code}")
+                return []
+
+        feed = feedparser.parse(resp.text)
+        if not feed.entries:
+            logger.warning(f"[RemoteFirstJobs] Feed returned 0 entries (bozo={feed.bozo})")
+            return []
+
+        search_lower = search_term.lower()
+        search_words = [w for w in search_lower.replace(" remote", "").strip().split() if len(w) > 2]
+
+        for entry in feed.entries:
+            title = entry.get("title", "")
+            title_lower = title.lower()
+            desc_text = entry.get("summary", "") or entry.get("description", "")
+            desc_lower = desc_text.lower()
+            if not any(w in title_lower or w in desc_lower for w in search_words):
+                continue
+
+            company = ""
+            if " at " in title:
+                parts = title.split(" at ", 1)
+                title = parts[0].strip()
+                company = parts[1].strip()
+            elif " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title = parts[0].strip()
+                company = parts[1].strip()
+
+            if _is_blocked_company(company):
+                continue
+
+            clean_desc = re.sub(r"<[^>]+>", " ", desc_text)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = entry.get("link", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(entry.get("published", ""))
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": "Remote",
+                "is_remote": True,
+                "work_type": "remote",
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "remotefirstjobs",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[RemoteFirstJobs] Parsed {len(feed.entries)} entries, matched {len(jobs)} new for '{search_term}'")
+    except ImportError:
+        logger.warning("[RemoteFirstJobs] feedparser not installed — skipping")
+    except Exception as e:
+        logger.error(f"[RemoteFirstJobs] Error: {e}")
     return jobs
 
 
@@ -1855,8 +1986,11 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     # FindWork.dev — free tech jobs API
     light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 
-    # JustRemote — RSS feed for remote jobs
-    light_tasks.append(("JustRemote", scrape_justremote(title, profile_id)))
+    # JobicyRSS — free RSS feed, broader coverage than API alone
+    light_tasks.append(("JobicyRSS", scrape_jobicy_rss(title, profile_id)))
+
+    # RemoteFirstJobs — free RSS feed for remote jobs
+    light_tasks.append(("RemoteFirstJobs", scrape_remotefirstjobs(title, profile_id)))
 
     # SerpApi / JSearch if keys available
     if settings.serpapi_key:
