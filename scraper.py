@@ -1594,7 +1594,7 @@ async def scrape_careerjet(
             "pagesize": 50,
             "page": 1,
             "sort": "date",
-            "user_ip": "1.2.3.4",          # Required by API — server-side caller
+            "user_ip": "162.220.232.183",   # Railway outbound IP — required by API
             "user_agent": "ScoutPilot/1.0",  # Required by API
         }
         async with httpx.AsyncClient(timeout=30) as client:
