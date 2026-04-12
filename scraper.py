@@ -1294,6 +1294,490 @@ async def scrape_weworkremotely(
     return jobs
 
 
+async def scrape_usajobs(
+    search_term: str,
+    location: str = "",
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape US government jobs from USAJobs.gov (free API, needs email as auth key)."""
+    logger.info(f"[USAJobs] Searching: '{search_term}' location='{location}'")
+    jobs = []
+    try:
+        headers = {
+            "User-Agent": "ScoutPilot/1.0 ai@ridworth.com",
+            "Authorization-Key": "ai@ridworth.com",  # USAJobs uses email as key
+            "Host": "data.usajobs.gov",
+        }
+        params = {
+            "Keyword": search_term,
+            "ResultsPerPage": 50,
+        }
+        if location:
+            params["LocationName"] = location
+
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            resp = await client.get("https://data.usajobs.gov/api/search", params=params)
+            if resp.status_code != 200:
+                logger.error(f"[USAJobs] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        items = data.get("SearchResult", {}).get("SearchResultItems", [])
+        total = data.get("SearchResult", {}).get("SearchResultCountAll", 0)
+
+        for item in items:
+            pos = item.get("MatchedObjectDescriptor", {})
+            title = pos.get("PositionTitle", "")
+            org = pos.get("OrganizationName", "")
+            if _is_blocked_company(org):
+                continue
+
+            loc_data = pos.get("PositionLocation", [])
+            loc_str = ", ".join(l.get("LocationName", "") for l in loc_data[:3]) if loc_data else ""
+
+            desc = pos.get("UserArea", {}).get("Details", {}).get("MajorDuties", [""])
+            if isinstance(desc, list):
+                desc = " ".join(desc)
+            desc = re.sub(r"<[^>]+>", " ", str(desc))
+            desc = re.sub(r"\s+", " ", desc).strip()
+
+            apply_url = pos.get("PositionURI", "")
+            posted_at = _normalize_posted_at(pos.get("PublicationStartDate", ""))
+
+            salary_min = 0
+            salary_max = 0
+            remun = pos.get("PositionRemuneration", [])
+            if remun:
+                salary_min = int(float(remun[0].get("MinimumRange", 0) or 0))
+                salary_max = int(float(remun[0].get("MaximumRange", 0) or 0))
+
+            work_type = _detect_work_type({
+                "title": title,
+                "location": loc_str,
+                "description": desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": org,
+                "company_domain": "usajobs.gov",
+                "location": loc_str,
+                "is_remote": work_type == "remote",
+                "work_type": work_type,
+                "description": desc[:10000],
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "source": "usajobs",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": posted_at,
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
+        logger.info(f"[USAJobs] Found {total} total, inserted {len(jobs)} new ({direct_count} direct apply)")
+    except Exception as e:
+        logger.error(f"[USAJobs] Error: {e}")
+    return jobs
+
+
+async def scrape_jooble(
+    search_term: str,
+    location: str = "USA",
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape jobs from Jooble (free POST API, no paid key needed)."""
+    logger.info(f"[Jooble] Searching: '{search_term}' location='{location}'")
+    jobs = []
+    try:
+        # Jooble API uses a partner key in the URL — use empty for basic access
+        api_url = "https://jooble.org/api/"
+        payload = {
+            "keywords": search_term,
+            "location": location,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                api_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[Jooble] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        for item in data.get("jobs", []):
+            title = item.get("title", "")
+            company = item.get("company", "")
+            if _is_blocked_company(company):
+                continue
+
+            location_str = item.get("location", "")
+            snippet = item.get("snippet", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", snippet)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = item.get("link", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(item.get("updated", ""))
+
+            salary_str = item.get("salary", "")
+            salary_min, salary_max = 0, 0
+
+            work_type = _detect_work_type({
+                "title": title,
+                "location": location_str,
+                "description": clean_desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": location_str,
+                "is_remote": work_type == "remote",
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "source": "jooble",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[Jooble] Found {len(data.get('jobs', []))} results, inserted {len(jobs)} new")
+    except Exception as e:
+        logger.error(f"[Jooble] Error: {e}")
+    return jobs
+
+
+async def scrape_adzuna(
+    search_term: str,
+    location: str = "",
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape jobs from Adzuna (free tier — app_id/app_key from env, or skip if not set)."""
+    app_id = settings.adzuna_app_id if hasattr(settings, "adzuna_app_id") else ""
+    app_key = settings.adzuna_app_key if hasattr(settings, "adzuna_app_key") else ""
+    if not app_id or not app_key:
+        # Try env vars directly
+        import os
+        app_id = os.getenv("ADZUNA_APP_ID", "")
+        app_key = os.getenv("ADZUNA_APP_KEY", "")
+    if not app_id or not app_key:
+        return []  # Skip silently if no Adzuna keys
+
+    logger.info(f"[Adzuna] Searching: '{search_term}' location='{location}'")
+    jobs = []
+    try:
+        params = {
+            "app_id": app_id,
+            "app_key": app_key,
+            "what": search_term,
+            "results_per_page": 50,
+            "max_days_old": 3,
+            "sort_by": "date",
+        }
+        if location:
+            params["where"] = location
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://api.adzuna.com/v1/api/jobs/us/search/1",
+                params=params,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[Adzuna] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        for item in data.get("results", []):
+            title = item.get("title", "")
+            company = item.get("company", {}).get("display_name", "")
+            if _is_blocked_company(company):
+                continue
+
+            location_str = item.get("location", {}).get("display_name", "")
+            description = item.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = item.get("redirect_url", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(item.get("created", ""))
+
+            salary_min = int(item.get("salary_min", 0) or 0)
+            salary_max = int(item.get("salary_max", 0) or 0)
+
+            work_type = _detect_work_type({
+                "title": title,
+                "location": location_str,
+                "description": clean_desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": location_str,
+                "is_remote": work_type == "remote",
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "source": "adzuna",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        total = data.get("count", 0)
+        logger.info(f"[Adzuna] Found {total} total, inserted {len(jobs)} new")
+    except Exception as e:
+        logger.error(f"[Adzuna] Error: {e}")
+    return jobs
+
+
+async def scrape_careerjet(
+    search_term: str,
+    location: str = "USA",
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape jobs from CareerJet (free public API, no auth needed)."""
+    logger.info(f"[CareerJet] Searching: '{search_term}' location='{location}'")
+    jobs = []
+    try:
+        params = {
+            "keywords": search_term,
+            "location": location,
+            "locale_code": "en_US",
+            "affid": "scoutpilot",
+            "pagesize": 50,
+            "page": 1,
+            "sort": "date",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://public.api.careerjet.net/search",
+                params=params,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[CareerJet] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        for item in data.get("jobs", []):
+            title = item.get("title", "")
+            company = item.get("company", "")
+            if _is_blocked_company(company):
+                continue
+
+            location_str = item.get("locations", "")
+            description = item.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = item.get("url", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(item.get("date", ""))
+
+            salary = item.get("salary", "")
+
+            work_type = _detect_work_type({
+                "title": title,
+                "location": location_str,
+                "description": clean_desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": location_str,
+                "is_remote": work_type == "remote",
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "careerjet",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        total = data.get("hits", 0)
+        logger.info(f"[CareerJet] Found {total} total, inserted {len(jobs)} new")
+    except Exception as e:
+        logger.error(f"[CareerJet] Error: {e}")
+    return jobs
+
+
+async def scrape_findwork(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape tech/remote jobs from FindWork.dev (free API)."""
+    logger.info(f"[FindWork] Searching: '{search_term}'")
+    jobs = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://findwork.dev/api/jobs/",
+                params={"search": search_term, "sort_by": "relevance"},
+                headers={"User-Agent": "ScoutPilot/1.0"},
+            )
+            if resp.status_code == 403:
+                logger.warning("[FindWork] 403 — needs API token, skipping")
+                return []
+            if resp.status_code != 200:
+                logger.warning(f"[FindWork] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            data = resp.json()
+
+        for item in data.get("results", []):
+            title = item.get("role", "")
+            company = item.get("company_name", "")
+            if _is_blocked_company(company):
+                continue
+
+            location_str = item.get("location", "")
+            description = item.get("text", "") or item.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", str(description))
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = item.get("url", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(item.get("date_posted", ""))
+
+            is_remote = item.get("remote", False)
+            work_type = "remote" if is_remote else _detect_work_type({
+                "title": title,
+                "location": location_str,
+                "description": clean_desc[:3000],
+            })
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": location_str if location_str else ("Remote" if is_remote else ""),
+                "is_remote": is_remote,
+                "work_type": work_type,
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "findwork",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[FindWork] Found {len(data.get('results', []))} results, inserted {len(jobs)} new")
+    except Exception as e:
+        logger.error(f"[FindWork] Error: {e}")
+    return jobs
+
+
+async def scrape_justremote(
+    search_term: str,
+    profile_id: Optional[int] = None,
+) -> list[dict]:
+    """Scrape remote jobs from JustRemote RSS feed."""
+    logger.info(f"[JustRemote] Searching: '{search_term}'")
+    jobs = []
+    try:
+        import feedparser
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://justremote.co/remote-jobs/rss",
+                headers={"User-Agent": "ScoutPilot/1.0"},
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[JustRemote] HTTP {resp.status_code}")
+                return []
+
+        feed = feedparser.parse(resp.text)
+        search_lower = search_term.lower()
+        search_words = search_lower.replace(" remote", "").strip().split()
+
+        for entry in feed.entries:
+            title = entry.get("title", "")
+            title_lower = title.lower()
+            if not any(w in title_lower for w in search_words):
+                continue
+
+            company = ""
+            if " at " in title:
+                parts = title.split(" at ", 1)
+                title = parts[0].strip()
+                company = parts[1].strip()
+
+            if _is_blocked_company(company):
+                continue
+
+            description = entry.get("summary", "") or entry.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", " ", description)
+            clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+            apply_url = entry.get("link", "")
+            is_direct = _is_direct_url(apply_url)
+            posted_at = _normalize_posted_at(entry.get("published", ""))
+
+            job = {
+                "title": title,
+                "company_name": company,
+                "company_domain": "",
+                "location": "Remote",
+                "is_remote": True,
+                "work_type": "remote",
+                "description": clean_desc[:10000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "justremote",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url if is_direct else "",
+                "posted_at": posted_at,
+                "is_direct_apply": is_direct,
+                "search_profile_id": profile_id,
+            }
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                jobs.append(job)
+
+        logger.info(f"[JustRemote] Parsed {len(feed.entries)} entries, inserted {len(jobs)} new")
+    except ImportError:
+        logger.warning("[JustRemote] feedparser not installed — skipping")
+    except Exception as e:
+        logger.error(f"[JustRemote] Error: {e}")
+    return jobs
+
+
 def _build_profile_terms(profile: dict) -> list[str]:
     """Build search terms for a profile from title + expanded + keywords."""
     title = profile["title"]
@@ -1353,6 +1837,26 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
     light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
     light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
+
+    # ── NEW SOURCES ──
+    # USAJobs — free gov API, great for engineering + analyst roles
+    for loc in effective_locations:
+        light_tasks.append(("USAJobs", scrape_usajobs(title, loc, profile_id)))
+
+    # Jooble — huge aggregator (8M+ jobs), free POST API
+    light_tasks.append(("Jooble", scrape_jooble(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+
+    # Adzuna — massive aggregator (uses env vars ADZUNA_APP_ID / ADZUNA_APP_KEY if set)
+    light_tasks.append(("Adzuna", scrape_adzuna(title, effective_locations[0] if effective_locations else "", profile_id)))
+
+    # CareerJet — free public API, broad coverage
+    light_tasks.append(("CareerJet", scrape_careerjet(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+
+    # FindWork.dev — free tech jobs API
+    light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
+
+    # JustRemote — RSS feed for remote jobs
+    light_tasks.append(("JustRemote", scrape_justremote(title, profile_id)))
 
     # SerpApi / JSearch if keys available
     if settings.serpapi_key:
