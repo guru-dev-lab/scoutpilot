@@ -398,6 +398,7 @@
     <div class="header-actions">
       <button class="info-btn" onclick="openInfoModal()" title="How ScoutPilot Works">?</button>
       <button class="export-btn" onclick="exportCSV()" title="Download results as CSV">Export CSV</button>
+      <button class="btn" onclick="openSourcesModal()" title="Enable/disable job sources">Sources</button>
       <button class="btn" onclick="triggerScrape()" id="scrapeBtn">Scrape Now</button>
       <button class="btn primary" onclick="openProfileModal()">+ Add Search</button>
     </div>
@@ -649,6 +650,24 @@
     <div class="form-actions">
       <button class="btn" onclick="closeProfileModal()">Cancel</button>
       <button class="btn primary" onclick="saveProfile()" id="saveProfileBtn">Save &amp; Start Hunting</button>
+    </div>
+  </div>
+</div>
+
+<!-- Source Management Modal -->
+<div class="modal-overlay" id="sourcesModal">
+  <div class="modal" style="max-width:560px;">
+    <h2 style="display:flex;align-items:center;justify-content:space-between;">
+      <span>Manage Sources</span>
+      <button onclick="closeSourcesModal()" style="background:none;border:none;color:var(--text3);font-size:1.4rem;cursor:pointer;line-height:1;">&times;</button>
+    </h2>
+    <p style="color:var(--text3);font-size:0.82rem;margin-bottom:16px;">Toggle sources on/off. Disabled sources won't be scraped. Changes take effect on the next scrape cycle.</p>
+    <div id="sourcesListContainer" style="max-height:55vh;overflow-y:auto;">
+      <div style="text-align:center;color:var(--text3);padding:20px;">Loading sources...</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+      <button class="btn" onclick="closeSourcesModal()">Close</button>
+      <button class="btn primary" onclick="saveSourceSettings()" id="saveSourcesBtn">Save Changes</button>
     </div>
   </div>
 </div>
@@ -1335,6 +1354,90 @@ async function loadProfiles() {
 function openInfoModal() { document.getElementById('infoModal').classList.add('show'); }
 function closeInfoModal() { document.getElementById('infoModal').classList.remove('show'); }
 
+// ── Source Management ──
+let _sourceSettings = [];
+
+async function openSourcesModal() {
+  document.getElementById('sourcesModal').classList.add('show');
+  const container = document.getElementById('sourcesListContainer');
+  container.innerHTML = '<div style="text-align:center;color:var(--text3);padding:20px;">Loading...</div>';
+  try {
+    const resp = await fetch(API + '/api/sources');
+    _sourceSettings = await resp.json();
+    renderSourcesList();
+  } catch (e) {
+    container.innerHTML = '<div style="color:#e74c3c;padding:12px;">Failed to load sources</div>';
+  }
+}
+
+function closeSourcesModal() {
+  document.getElementById('sourcesModal').classList.remove('show');
+}
+
+function renderSourcesList() {
+  const container = document.getElementById('sourcesListContainer');
+  // Group by category
+  const categories = {
+    'jobspy': { label: 'Job Board Scrapers (Indeed, LinkedIn)', sources: [] },
+    'api': { label: 'API Sources (requires key)', sources: [] },
+    'free': { label: 'Free Sources (no key needed)', sources: [] },
+    'rss': { label: 'RSS Feeds', sources: [] },
+  };
+  _sourceSettings.forEach(s => {
+    const cat = categories[s.category] || categories['free'];
+    cat.sources.push(s);
+  });
+
+  let html = '';
+  for (const [catKey, cat] of Object.entries(categories)) {
+    if (cat.sources.length === 0) continue;
+    html += `<div style="margin-bottom:16px;">
+      <div style="font-size:0.78rem;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">${cat.label}</div>`;
+    cat.sources.forEach(s => {
+      const checked = s.enabled ? 'checked' : '';
+      const keyNote = s.requires_key ? `<span style="color:var(--text3);font-size:0.75rem;margin-left:6px;">(${s.requires_key})</span>` : '';
+      html += `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background 0.15s;"
+        onmouseover="this.style.background='var(--surface-hover, rgba(255,255,255,0.04))'"
+        onmouseout="this.style.background='transparent'">
+        <input type="checkbox" data-source-key="${s.source_key}" ${checked}
+          style="width:18px;height:18px;accent-color:var(--primary);cursor:pointer;">
+        <span style="flex:1;">
+          <span style="color:var(--text);font-size:0.88rem;">${s.display_name}</span>${keyNote}
+        </span>
+      </label>`;
+    });
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
+
+async function saveSourceSettings() {
+  const btn = document.getElementById('saveSourcesBtn');
+  btn.textContent = 'Saving...';
+  btn.disabled = true;
+  const checkboxes = document.querySelectorAll('#sourcesListContainer input[type="checkbox"]');
+  const settings = {};
+  checkboxes.forEach(cb => {
+    settings[cb.dataset.sourceKey] = cb.checked;
+  });
+  try {
+    await fetch(API + '/api/sources', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sources: settings }),
+    });
+    btn.textContent = 'Saved!';
+    setTimeout(() => {
+      btn.textContent = 'Save Changes';
+      btn.disabled = false;
+      closeSourcesModal();
+    }, 800);
+  } catch (e) {
+    btn.textContent = 'Error — try again';
+    btn.disabled = false;
+  }
+}
+
 async function openProfileModal() {
   document.getElementById('profileModal').classList.add('show');
   document.getElementById('editProfileId').value = '';
@@ -1753,6 +1856,9 @@ setInterval(loadSkills, 120000);
 
 document.getElementById('profileModal').addEventListener('click', function(e) {
   if (e.target.classList.contains('modal-overlay')) closeProfileModal();
+});
+document.getElementById('sourcesModal').addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-overlay')) closeSourcesModal();
 });
 </script>
 </body>

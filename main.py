@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.7.1"
+BUILD_VERSION = "1.8.0"
 BUILD_DATE = "2026-04-12"
 RECENT_CHANGES = [
+    {"version": "1.8.0", "date": "2026-04-12", "status": "active", "change": "SOURCE MANAGEMENT: Enable/disable any of the 14+ job sources from the dashboard. New 'Sources' button in header opens toggle UI. Disabled sources skip scraping entirely. Settings persist in database."},
     {"version": "1.6.0", "date": "2026-04-10", "status": "active", "change": "6 NEW SOURCES: USAJobs (gov engineering/analyst), Jooble (8M+ aggregator), Adzuna (massive aggregator), CareerJet (global), FindWork.dev (tech), JustRemote (RSS). Now 13 sources total. All fire every cycle for every profile."},
     {"version": "1.4.9", "date": "2026-04-10", "status": "active", "change": "Scraper reliability overhaul — JobSpy runs SEQUENTIAL with 3s delays (was hundreds of parallel calls causing IP bans), profiles run sequentially (not parallel), Remotive broad fetch + client filter (server search too strict), Jobicy list crash fixed, limited to 5 JobSpy terms/profile"},
     {"version": "1.4.3", "date": "2026-04-10", "status": "active", "change": "Source fixes verified — Jobicy: removed tag filter (was returning 0), Himalayas: removed q param (irrelevant results), both use broad client-side matching now. Glassdoor removed (403 confirmed). TheMuse 5 pages. Diagnostic endpoint added."},
@@ -65,6 +66,8 @@ from database import (
     update_job_scores, create_profile, get_profiles,
     update_profile, delete_profile, insert_job,
     init_archive_table, cleanup_old_jobs, get_retention_stats,
+    init_source_settings, get_source_settings, update_source_setting,
+    bulk_update_source_settings,
 )
 from scraper import run_scrape_cycle, scrape_jobspy
 from ai_engine import expand_title_ai, score_relevance_ai, score_trust_ai
@@ -364,7 +367,8 @@ async def scheduled_cleanup():
 async def lifespan(app: FastAPI):
     await init_db()
     await init_archive_table()
-    logger.info("Database initialized (with archive table)")
+    await init_source_settings()
+    logger.info("Database initialized (with archive table + source settings)")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:
@@ -899,6 +903,36 @@ async def api_top_skills():
         return [{"skill": s, "count": c} for s, c in top[:50]]
     finally:
         await db.close()
+
+
+# ──────────────────────────────────────────────
+# Source Settings (Enable/Disable sources)
+# ──────────────────────────────────────────────
+
+@app.get("/api/sources")
+async def api_get_sources():
+    """Return all source settings with their enabled/disabled status."""
+    sources = await get_source_settings()
+    return sources
+
+
+@app.put("/api/sources/{source_key}")
+async def api_update_source(source_key: str, request: Request):
+    """Enable or disable a single source."""
+    data = await request.json()
+    enabled = data.get("enabled", True)
+    await update_source_setting(source_key, enabled)
+    return {"ok": True, "source_key": source_key, "enabled": enabled}
+
+
+@app.put("/api/sources")
+async def api_bulk_update_sources(request: Request):
+    """Bulk update source settings. Body: {sources: {source_key: bool, ...}}"""
+    data = await request.json()
+    settings_map = data.get("sources", {})
+    if settings_map:
+        await bulk_update_source_settings(settings_map)
+    return {"ok": True, "updated": len(settings_map)}
 
 
 # ──────────────────────────────────────────────

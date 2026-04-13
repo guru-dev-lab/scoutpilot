@@ -13,6 +13,7 @@ import httpx
 from jobspy import scrape_jobs
 
 from config import settings
+from database import get_enabled_sources
 from database import insert_job
 
 logger = logging.getLogger("scoutpilot.scraper")
@@ -1959,50 +1960,64 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     total_new = 0
     errors = []
 
-    logger.info(f"[Bot:{title}] Starting — {len(terms)} terms, ALL sources ON")
+    # Fetch enabled sources once per bot run (shared across all tasks)
+    enabled = await get_enabled_sources()
+    disabled_count = len([s for s in ["indeed", "linkedin", "remotive", "remoteok",
+        "weworkremotely", "jobicy", "himalayas", "arbeitnow", "themuse",
+        "usajobs", "jooble", "adzuna", "careerjet", "findwork",
+        "jobicy_rss", "himalayas_rss", "google", "jsearch"] if s not in enabled])
+
+    logger.info(f"[Bot:{title}] Starting — {len(terms)} terms, {len(enabled)} sources ON ({disabled_count} disabled)")
 
     # ── ALL light sources: fire in parallel (fast APIs, no anti-bot) ──
     light_tasks = []
 
     # Remotive + RemoteOK — every term
     for term in terms:
-        light_tasks.append(("Remotive", scrape_remotive(term, profile_id)))
-        light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
+        if "remotive" in enabled:
+            light_tasks.append(("Remotive", scrape_remotive(term, profile_id)))
+        if "remoteok" in enabled:
+            light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
     # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — one call per profile
-    light_tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
-    light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
-    light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
-    light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
-    light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
+    if "weworkremotely" in enabled:
+        light_tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
+    if "jobicy" in enabled:
+        light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
+    if "himalayas" in enabled:
+        light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
+    if "arbeitnow" in enabled:
+        light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
+    if "themuse" in enabled:
+        light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
 
-    # ── NEW SOURCES ──
-    # USAJobs — free gov API, great for engineering + analyst roles
-    for loc in effective_locations:
-        light_tasks.append(("USAJobs", scrape_usajobs(title, loc, profile_id)))
+    # ── API SOURCES ──
+    if "usajobs" in enabled:
+        for loc in effective_locations:
+            light_tasks.append(("USAJobs", scrape_usajobs(title, loc, profile_id)))
 
-    # Jooble — huge aggregator (8M+ jobs), free POST API
-    light_tasks.append(("Jooble", scrape_jooble(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+    if "jooble" in enabled:
+        light_tasks.append(("Jooble", scrape_jooble(title, effective_locations[0] if effective_locations else "USA", profile_id)))
 
-    # Adzuna — massive aggregator (uses env vars ADZUNA_APP_ID / ADZUNA_APP_KEY if set)
-    light_tasks.append(("Adzuna", scrape_adzuna(title, effective_locations[0] if effective_locations else "", profile_id)))
+    if "adzuna" in enabled:
+        light_tasks.append(("Adzuna", scrape_adzuna(title, effective_locations[0] if effective_locations else "", profile_id)))
 
-    # CareerJet — free public API, broad coverage
-    light_tasks.append(("CareerJet", scrape_careerjet(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+    if "careerjet" in enabled:
+        light_tasks.append(("CareerJet", scrape_careerjet(title, effective_locations[0] if effective_locations else "USA", profile_id)))
 
-    # FindWork.dev — free tech jobs API
-    light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
+    if "findwork" in enabled:
+        light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 
-    # JobicyRSS — free RSS feed, broader coverage than API alone
-    light_tasks.append(("JobicyRSS", scrape_jobicy_rss(title, profile_id)))
+    if "jobicy_rss" in enabled:
+        light_tasks.append(("JobicyRSS", scrape_jobicy_rss(title, profile_id)))
 
-    # HimalayasRSS — free RSS feed, supplements JSON API with broader coverage
-    light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(title, profile_id)))
+    if "himalayas_rss" in enabled:
+        light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(title, profile_id)))
 
-    # SerpApi / JSearch if keys available
-    if settings.serpapi_key:
+    # SerpApi / JSearch if keys available AND enabled
+    if settings.serpapi_key and "google" in enabled:
         light_tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
-    if settings.rapidapi_key:
+    if settings.rapidapi_key and "jsearch" in enabled:
         light_tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
 
     if light_tasks:
@@ -2017,10 +2032,12 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     logger.info(f"[Bot:{title}] Light sources done — {total_new} new jobs")
 
     # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
-    MAIN_SITES = ["indeed", "linkedin"]
+    MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
     jobspy_terms = terms[:3]
 
     for term in jobspy_terms:
+        if not MAIN_SITES:
+            break  # Both indeed and linkedin are disabled
         effective_term = f"{term} remote" if remote_only else term
         for loc in effective_locations:
             async with _get_jobspy_semaphore():

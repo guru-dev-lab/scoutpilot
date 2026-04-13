@@ -86,6 +86,15 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_jobs_hash ON jobs(hash);
             CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
+
+            CREATE TABLE IF NOT EXISTS source_settings (
+                source_key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                category TEXT DEFAULT 'api',
+                requires_key TEXT DEFAULT '',
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         await db.commit()
 
@@ -685,6 +694,112 @@ async def cleanup_old_jobs() -> dict:
             "active_jobs": active,
             "archived_jobs": archived,
         }
+    finally:
+        await db.close()
+
+
+# --- Source Settings ---
+
+# Master list of all sources with their metadata
+ALL_SOURCES = [
+    {"source_key": "indeed",        "display_name": "Indeed",          "category": "jobspy",  "requires_key": ""},
+    {"source_key": "linkedin",      "display_name": "LinkedIn",        "category": "jobspy",  "requires_key": ""},
+    {"source_key": "google",        "display_name": "Google Jobs",     "category": "api",     "requires_key": "SERPAPI_KEY"},
+    {"source_key": "jsearch",       "display_name": "JSearch",         "category": "api",     "requires_key": "RAPIDAPI_KEY"},
+    {"source_key": "jooble",        "display_name": "Jooble",          "category": "api",     "requires_key": "JOOBLE_API_KEY"},
+    {"source_key": "adzuna",        "display_name": "Adzuna",          "category": "api",     "requires_key": "ADZUNA_APP_ID"},
+    {"source_key": "careerjet",     "display_name": "CareerJet",       "category": "api",     "requires_key": "CAREERJET_AFFID"},
+    {"source_key": "findwork",      "display_name": "FindWork",        "category": "api",     "requires_key": "FINDWORK_TOKEN"},
+    {"source_key": "usajobs",       "display_name": "USAJobs",         "category": "api",     "requires_key": "USAJOBS_API_KEY"},
+    {"source_key": "remotive",      "display_name": "Remotive",        "category": "free",    "requires_key": ""},
+    {"source_key": "remoteok",      "display_name": "RemoteOK",        "category": "free",    "requires_key": ""},
+    {"source_key": "weworkremotely","display_name": "WeWorkRemotely",  "category": "free",    "requires_key": ""},
+    {"source_key": "themuse",       "display_name": "TheMuse",         "category": "free",    "requires_key": ""},
+    {"source_key": "jobicy",        "display_name": "Jobicy",          "category": "free",    "requires_key": ""},
+    {"source_key": "himalayas",     "display_name": "Himalayas",       "category": "free",    "requires_key": ""},
+    {"source_key": "arbeitnow",     "display_name": "Arbeitnow",       "category": "free",    "requires_key": ""},
+    {"source_key": "jobicy_rss",    "display_name": "Jobicy RSS",      "category": "rss",     "requires_key": ""},
+    {"source_key": "himalayas_rss", "display_name": "Himalayas RSS",   "category": "rss",     "requires_key": ""},
+]
+
+
+async def init_source_settings():
+    """Seed the source_settings table with all known sources (skip existing rows)."""
+    db = await get_db()
+    try:
+        for src in ALL_SOURCES:
+            await db.execute(
+                """INSERT OR IGNORE INTO source_settings (source_key, display_name, enabled, category, requires_key)
+                   VALUES (?, ?, 1, ?, ?)""",
+                (src["source_key"], src["display_name"], src["category"], src["requires_key"]),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_source_settings() -> list[dict]:
+    """Return all source settings sorted by category then name."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM source_settings ORDER BY category, display_name"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def is_source_enabled(source_key: str) -> bool:
+    """Check if a source is enabled. Returns True if not found (default on)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT enabled FROM source_settings WHERE source_key = ?", (source_key,)
+        )
+        row = await cursor.fetchone()
+        return bool(row["enabled"]) if row else True
+    finally:
+        await db.close()
+
+
+async def get_enabled_sources() -> set[str]:
+    """Return a set of all enabled source keys for fast lookup."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT source_key FROM source_settings WHERE enabled = 1"
+        )
+        rows = await cursor.fetchall()
+        return {row["source_key"] for row in rows}
+    finally:
+        await db.close()
+
+
+async def update_source_setting(source_key: str, enabled: bool):
+    """Enable or disable a source."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE source_settings SET enabled = ?, updated_at = datetime('now') WHERE source_key = ?",
+            (1 if enabled else 0, source_key),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def bulk_update_source_settings(settings_map: dict[str, bool]):
+    """Update multiple source settings at once. settings_map = {source_key: enabled}."""
+    db = await get_db()
+    try:
+        for source_key, enabled in settings_map.items():
+            await db.execute(
+                "UPDATE source_settings SET enabled = ?, updated_at = datetime('now') WHERE source_key = ?",
+                (1 if enabled else 0, source_key),
+            )
+        await db.commit()
     finally:
         await db.close()
 
