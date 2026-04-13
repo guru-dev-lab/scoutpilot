@@ -1212,6 +1212,40 @@ async def api_trigger_cleanup():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/admin/re-expand-titles")
+async def api_re_expand_titles():
+    """Admin: re-expand all profile titles using the current (tighter) AI prompt."""
+    profiles = await get_profiles()
+    results = []
+    for p in profiles:
+        try:
+            expanded = await expand_title_ai(p["title"])
+            await update_profile(p["id"], {"expanded_titles": expanded})
+            results.append({"id": p["id"], "title": p["title"], "count": len(expanded)})
+            logger.info(f"[Admin] Re-expanded '{p['title']}' -> {len(expanded)} titles")
+        except Exception as e:
+            results.append({"id": p["id"], "title": p["title"], "error": str(e)})
+    return {"ok": True, "profiles": results}
+
+
+@app.post("/api/admin/clear-all-jobs")
+async def api_clear_all_jobs():
+    """Admin: delete ALL jobs so we can start fresh (e.g. after country change)."""
+    from database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM jobs")
+        count = (await cursor.fetchone())[0]
+        await db.execute("DELETE FROM jobs")
+        await db.commit()
+        logger.info(f"[Admin] Cleared all {count} jobs")
+        return {"ok": True, "deleted": count}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await db.close()
+
+
 @app.get("/api/status")
 async def api_status():
     return {
