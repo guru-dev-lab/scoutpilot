@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.8.0"
+BUILD_VERSION = "1.8.1"
 BUILD_DATE = "2026-04-12"
 RECENT_CHANGES = [
     {"version": "1.8.0", "date": "2026-04-12", "status": "active", "change": "SOURCE MANAGEMENT: Enable/disable any of the 14+ job sources from the dashboard. New 'Sources' button in header opens toggle UI. Disabled sources skip scraping entirely. Settings persist in database."},
@@ -379,6 +379,30 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.error(f"[Startup Cleanup] Failed: {e}")
+
+    # One-time cleanup: remove jobs from old/deleted profiles (v1.8.1)
+    try:
+        from database import get_db
+        db = await get_db()
+        active_profiles = await get_profiles()
+        active_ids = {p["id"] for p in active_profiles}
+        if active_ids:
+            placeholders = ",".join("?" for _ in active_ids)
+            cursor = await db.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE search_profile_id IS NOT NULL AND search_profile_id NOT IN ({placeholders})",
+                list(active_ids),
+            )
+            orphan_count = (await cursor.fetchone())[0]
+            if orphan_count > 0:
+                await db.execute(
+                    f"DELETE FROM jobs WHERE search_profile_id IS NOT NULL AND search_profile_id NOT IN ({placeholders})",
+                    list(active_ids),
+                )
+                await db.commit()
+                logger.info(f"[Startup Cleanup] Removed {orphan_count} jobs from old/deleted profiles")
+        await db.close()
+    except Exception as e:
+        logger.error(f"[Startup Cleanup] Old profile cleanup failed: {e}")
 
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility

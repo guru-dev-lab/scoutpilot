@@ -28,17 +28,22 @@ async def expand_title_ai(title: str) -> list[str]:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=800,
+            max_tokens=500,
             messages=[{
                 "role": "user",
-                "content": f"""List ALL distinct job title variants for "{title}". Include:
-- Abbreviations (BI, DA, SWE etc)
-- Industry variants (fintech, healthcare, govt etc)
-- Tool-specific titles (Tableau Analyst, Power BI Developer etc)
-- Related roles with 60%+ skill overlap
-- Broader parent roles (e.g. "Analyst" for "Data Analyst")
-- Hybrid titles (Data & Analytics, Business Data etc)
-No seniority prefixes. JSON array only. 25+ names minimum.""",
+                "content": f"""List job title variants that are ESSENTIALLY THE SAME ROLE as "{title}".
+
+Rules:
+- Only include titles where someone with "{title}" experience would be a DIRECT fit
+- Include common abbreviations and alternate phrasings of the SAME role
+- Do NOT include broader parent roles (e.g. don't add "Analyst" for "Data Analyst")
+- Do NOT include tangentially related roles (e.g. don't add "Business Analyst" for "DevOps Engineer")
+- Do NOT include industry-prefixed variants (no "Fintech DevOps", "Healthcare DevOps" etc)
+- Do NOT include tool-specific titles (no "Terraform Engineer" for "DevOps Engineer")
+- Maximum 20 titles. Quality over quantity.
+- No seniority prefixes (Sr, Jr, Lead, etc)
+
+Return a JSON array only, no explanation.""",
             }],
         )
         text = response.content[0].text.strip()

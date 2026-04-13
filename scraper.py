@@ -1928,7 +1928,7 @@ def _build_profile_terms(profile: dict) -> list[str]:
     for kw in keywords:
         if kw.lower() not in [s.lower() for s in search_terms]:
             search_terms.append(kw)
-    return search_terms[:35] if search_terms else [title]
+    return search_terms[:20] if search_terms else [title]
 
 
 # ── Global semaphore: only 1 JobSpy call at a time across ALL bots ──
