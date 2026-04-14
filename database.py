@@ -722,6 +722,13 @@ ALL_SOURCES = [
     {"source_key": "himalayas_rss", "display_name": "Himalayas RSS",   "category": "rss",     "requires_key": ""},
 ]
 
+# ATS sources — ship DISABLED by default (user flips on from dashboard when ready)
+ATS_SOURCES = [
+    {"source_key": "greenhouse", "display_name": "Greenhouse (ATS)", "category": "ats", "requires_key": ""},
+    {"source_key": "lever",      "display_name": "Lever (ATS)",      "category": "ats", "requires_key": ""},
+    {"source_key": "ashby",      "display_name": "Ashby (ATS)",      "category": "ats", "requires_key": ""},
+]
+
 
 async def init_source_settings():
     """Seed the source_settings table with all known sources (skip existing rows)."""
@@ -731,6 +738,13 @@ async def init_source_settings():
             await db.execute(
                 """INSERT OR IGNORE INTO source_settings (source_key, display_name, enabled, category, requires_key)
                    VALUES (?, ?, 1, ?, ?)""",
+                (src["source_key"], src["display_name"], src["category"], src["requires_key"]),
+            )
+        # ATS sources: inserted DISABLED so enabling is an explicit opt-in
+        for src in ATS_SOURCES:
+            await db.execute(
+                """INSERT OR IGNORE INTO source_settings (source_key, display_name, enabled, category, requires_key)
+                   VALUES (?, ?, 0, ?, ?)""",
                 (src["source_key"], src["display_name"], src["category"], src["requires_key"]),
             )
         await db.commit()

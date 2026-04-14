@@ -2053,6 +2053,23 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
                     logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
             await asyncio.sleep(3)
 
+    # ── ATS SOURCES (Greenhouse / Lever / Ashby) ──
+    # Fully isolated: any failure here cannot affect existing sources above.
+    try:
+        from ats_scraper import scrape_all_ats
+        ats_results = await scrape_all_ats(
+            profile_id=profile_id,
+            search_terms=terms,
+            cycle_number=cycle_number,
+        )
+        ats_total = sum(ats_results.values())
+        if ats_total > 0:
+            logger.info(f"[Bot:{title}] ATS: +{ats_total} new jobs {ats_results}")
+        total_new += ats_total
+    except Exception as e:
+        errors.append(f"ATS: {e}")
+        logger.error(f"[Bot:{title}] ATS block crashed: {e}")
+
     logger.info(f"[Bot:{title}] DONE — {total_new} new jobs, {len(errors)} errors")
     return {"profile": title, "new_jobs": total_new, "errors": errors}
 

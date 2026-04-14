@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.8.1"
+BUILD_VERSION = "1.9.0"
 BUILD_DATE = "2026-04-12"
 RECENT_CHANGES = [
     {"version": "1.8.0", "date": "2026-04-12", "status": "active", "change": "SOURCE MANAGEMENT: Enable/disable any of the 14+ job sources from the dashboard. New 'Sources' button in header opens toggle UI. Disabled sources skip scraping entirely. Settings persist in database."},
@@ -1244,6 +1244,65 @@ async def api_clear_all_jobs():
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await db.close()
+
+
+@app.get("/api/admin/ats-companies")
+async def api_ats_companies_list():
+    """List all configured ATS companies (for dashboard UI)."""
+    try:
+        from ats_scraper import load_companies
+        companies = load_companies()
+        from collections import Counter
+        by_ats = dict(Counter(c.get("ats", "unknown") for c in companies))
+        return {"ok": True, "count": len(companies), "by_ats": by_ats, "companies": companies}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/admin/ats-companies")
+async def api_ats_companies_add(request: Request):
+    """Add a company to the ATS list. Body: {name, slug, ats}."""
+    try:
+        from ats_scraper import load_companies, save_companies
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        slug = (body.get("slug") or "").strip()
+        ats = (body.get("ats") or "").strip().lower()
+        if not name or not slug or ats not in ("greenhouse", "lever", "ashby"):
+            return JSONResponse(
+                {"error": "name, slug, and ats (greenhouse|lever|ashby) are required"},
+                status_code=400,
+            )
+        companies = load_companies()
+        # Dedupe by (ats, slug)
+        if any(c.get("ats") == ats and c.get("slug") == slug for c in companies):
+            return JSONResponse({"error": f"{ats}/{slug} already exists"}, status_code=409)
+        companies.append({"name": name, "slug": slug, "ats": ats})
+        companies.sort(key=lambda c: (c.get("ats", ""), c.get("name", "")))
+        if not save_companies(companies):
+            return JSONResponse({"error": "failed to save"}, status_code=500)
+        logger.info(f"[Admin] Added ATS company: {ats}/{slug} ({name})")
+        return {"ok": True, "count": len(companies)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/admin/ats-companies/{ats}/{slug}")
+async def api_ats_companies_delete(ats: str, slug: str):
+    """Remove a company from the ATS list."""
+    try:
+        from ats_scraper import load_companies, save_companies
+        companies = load_companies()
+        before = len(companies)
+        companies = [c for c in companies if not (c.get("ats") == ats and c.get("slug") == slug)]
+        if len(companies) == before:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if not save_companies(companies):
+            return JSONResponse({"error": "failed to save"}, status_code=500)
+        logger.info(f"[Admin] Removed ATS company: {ats}/{slug}")
+        return {"ok": True, "count": len(companies)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/status")
