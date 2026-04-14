@@ -346,6 +346,15 @@ def _normalize_job(row: dict, source: str, profile_id: Optional[int] = None) -> 
     # (description URLs lead to company homepages, benefit pages, etc. — not job postings)
     candidate_urls = [u for u in [job_url, company_url] if u]
 
+    # JobSpy (recent versions) exposes the real employer apply URL as
+    # ``job_url_direct`` on Indeed rows — this is the actual ATS link
+    # (greenhouse, lever, workday, etc). Capture it as the first candidate
+    # so the direct-URL detection picks it up, and so the ATS auto-discovery
+    # downstream can harvest slugs from it.
+    jud = str(row.get("job_url_direct", "")).strip()
+    if jud and jud not in candidate_urls:
+        candidate_urls.insert(0, jud)
+
     # Also check for apply_link / apply_url fields some sources provide
     for key in ("apply_link", "apply_url", "application_url", "job_apply_link"):
         val = str(row.get(key, "")).strip()
