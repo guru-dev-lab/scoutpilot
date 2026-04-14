@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.4"
+BUILD_VERSION = "1.9.5"
 BUILD_DATE = "2026-04-13"
 RECENT_CHANGES = [
+    {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
     {"version": "1.9.4", "date": "2026-04-13", "status": "active", "change": "THREE-PATH AUTO-DISCOVERY: Discovery now runs three paths in order. (1) URL extraction from direct_apply_url/source_url — now also captures JobSpy's job_url_direct field, which is the real employer ATS link for Indeed rows (JobSpy already resolved it during its scrape, we just weren't reading it). (2) HTML second-link fetch — for aggregator URLs (Indeed/LinkedIn/Glassdoor/SimplyHired/Wellfound/BuiltIn/etc), ScoutPilot GETs the listing page and regex-extracts any embedded ATS apply URL. (3) Name-based slug fuzzing — generates slug variants from unknown company names, probes each ATS, and fuzzy-matches the returned board name against the expected company (rapidfuzz threshold 70) to prevent false positives. Negative results cached in discovery_checked.json so repeat probes are free. The list now grows from Indeed/LinkedIn jobs too, not just direct-ATS jobs."},
     {"version": "1.9.3", "date": "2026-04-13", "status": "active", "change": "ATS AUTO-DISCOVERY: ScoutPilot now self-grows its company list. Every 6th scrape cycle (~30min) it scans recent job URLs from ALL sources (Indeed, LinkedIn, JobSpy, etc), extracts Greenhouse/Lever/Ashby/Workday/SmartRecruiters slugs via regex, verifies them against live ATS APIs, and auto-adds any new companies. Also exposes POST /api/admin/ats-discover for on-demand runs. The list compounds over time — every new company hiring through a supported ATS gets picked up automatically."},
     {"version": "1.9.2", "date": "2026-04-13", "status": "active", "change": "ATS EXPANSION: Added Workday (41 tenants — NVIDIA, Salesforce, Adobe, PayPal, Capital One, Walmart, Target, Boeing, Disney, Intel + more) and SmartRecruiters (Bosch, Visa, Experian, ServiceNow) adapters. Total 206 company boards across 5 ATS platforms. All ATS sources ship disabled by default — enable from Sources panel."},
@@ -276,15 +277,12 @@ async def scheduled_deep_sweep():
             locations = profile.get("locations", [])
             profile_id = profile["id"]
 
-            search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
-
-            # Include keywords as standalone search terms for deep sweep too
-            keywords = profile.get("keywords", [])
-            if isinstance(keywords, str):
-                keywords = [k.strip() for k in keywords.split(",") if k.strip()]
-            for kw in keywords:
-                if kw.lower() not in [s.lower() for s in search_terms]:
-                    search_terms.append(kw)
+            # v1.9.5: sanitize expansions and do NOT use keywords as standalone
+            # search terms (they bring back noisy SWE/QA/Marketing results that
+            # happen to mention "Python" or "SQL").
+            from ai_engine import _sanitize_expansions
+            clean_expanded = _sanitize_expansions(title, expanded)
+            search_terms = [title] + [t for t in clean_expanded if t.lower() != title.lower()]
 
             for term in search_terms[:5]:  # cap terms for deep sweep
                 for loc in (locations if locations else [""]):
@@ -1230,6 +1228,57 @@ async def api_re_expand_titles():
         except Exception as e:
             results.append({"id": p["id"], "title": p["title"], "error": str(e)})
     return {"ok": True, "profiles": results}
+
+
+@app.post("/api/admin/rescore-all-jobs")
+async def api_rescore_all_jobs(threshold: int = 40):
+    """Admin: re-score every job in the DB against all profiles using the
+    current (v1.9.5+) fuzzy scorer with role-family fence. Jobs that score
+    below `threshold` against every profile are archived. This flushes the
+    noise that was scored under the looser v1.9.4 and earlier rules."""
+    from database import get_db
+    from ai_engine import score_relevance_fuzzy, _sanitize_expansions
+    profiles = await get_profiles()
+    if not profiles:
+        return {"error": "no profiles"}
+
+    # Prebuild clean profile data
+    pds = []
+    for p in profiles:
+        kws = p.get("keywords", [])
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        pds.append({
+            "title": p["title"],
+            "expanded": _sanitize_expansions(p["title"], p.get("expanded_titles", []) or []),
+            "keywords": kws,
+        })
+
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT id, title, description FROM jobs WHERE status != 'archived'")
+        rows = await cur.fetchall()
+        rescored = 0
+        archived = 0
+        for row in rows:
+            jid, jtitle, jdesc = row[0], row[1] or "", row[2] or ""
+            best = 0
+            for pd in pds:
+                s = score_relevance_fuzzy(jtitle, jdesc, pd["title"], pd["expanded"], pd["keywords"])
+                if s > best:
+                    best = s
+            await db.execute("UPDATE jobs SET relevance_score = ? WHERE id = ?", (best, jid))
+            rescored += 1
+            if best < threshold:
+                await db.execute("UPDATE jobs SET status = 'archived' WHERE id = ?", (jid,))
+                archived += 1
+        await db.commit()
+        return {"ok": True, "rescored": rescored, "archived": archived, "threshold": threshold}
+    except Exception as e:
+        logger.exception("[Admin] rescore failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await db.close()
 
 
 @app.post("/api/admin/clear-all-jobs")

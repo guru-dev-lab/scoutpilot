@@ -1927,17 +1927,31 @@ async def scrape_himalayas_rss(
 
 
 def _build_profile_terms(profile: dict) -> list[str]:
-    """Build search terms for a profile from title + expanded + keywords."""
+    """Build search terms for a profile from title + expanded titles ONLY.
+
+    Keywords (Python, SQL, Tableau, AWS, etc.) are NOT used as standalone
+    search terms — sending "Python" to Indeed/LinkedIn returns thousands
+    of Software Engineer jobs that have nothing to do with a Data Analyst
+    role. Keywords are still used for relevance scoring and as a quality
+    boost, but not as search queries. Fixed in v1.9.5.
+    """
     title = profile["title"]
-    expanded = profile.get("expanded_titles", [])
-    search_terms = [title] + [t for t in expanded if t.lower() != title.lower()]
-    keywords = profile.get("keywords", [])
-    if isinstance(keywords, str):
-        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
-    for kw in keywords:
-        if kw.lower() not in [s.lower() for s in search_terms]:
-            search_terms.append(kw)
-    return search_terms[:20] if search_terms else [title]
+    raw_expanded = profile.get("expanded_titles", []) or []
+    # Drop generic single-word variants (Developer/Engineer/Manager) that
+    # would return unrelated jobs if we sent them as search queries.
+    from ai_engine import _sanitize_expansions
+    clean = _sanitize_expansions(title, raw_expanded)
+    search_terms = [title] + [t for t in clean if t.lower() != title.lower()]
+    # Dedup preserving order
+    seen = set()
+    out = []
+    for t in search_terms:
+        tl = t.lower()
+        if tl in seen:
+            continue
+        seen.add(tl)
+        out.append(t)
+    return out[:15] if out else [title]
 
 
 # ── Global semaphore: only 1 JobSpy call at a time across ALL bots ──

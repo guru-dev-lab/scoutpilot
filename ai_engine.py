@@ -17,10 +17,62 @@ logger = logging.getLogger("scoutpilot.ai")
 # Title Expansion (with or without AI)
 # ──────────────────────────────────────────────
 
+# Generic role words that are NEVER acceptable as standalone variants —
+# they match far too broadly under partial/substring scoring.
+_GENERIC_ROLE_BLOCKLIST = {
+    "developer", "engineer", "programmer", "designer", "manager", "analyst",
+    "specialist", "coordinator", "consultant", "associate", "assistant",
+    "director", "lead", "head", "officer", "representative", "executive",
+    "administrator", "technician", "architect", "operator", "advisor",
+    "generalist", "intern", "trainee", "writer", "editor", "producer",
+    "strategist", "planner", "scientist", "researcher", "agent",
+}
+
+# Known safe short abbreviations that we DO allow through the filter.
+_ALLOWED_ABBREVS = {
+    "pm", "tpm", "bi", "ba", "qa", "swe", "sde", "sre", "de", "ds", "ml",
+    "ae", "bdr", "sdr", "cx", "ux", "ui", "ceo", "cto", "cfo", "coo", "cio",
+    "csm", "pmm", "gm",
+}
+
+
+def _sanitize_expansions(title: str, expansions: list[str]) -> list[str]:
+    """Drop variants that would explode fuzzy scoring — single generic words,
+    ultra-short tokens, or anything in the generic-role blocklist.
+    This prevents "Developer" or "Engineer" from matching every SWE job
+    when the target is "Data Analyst"."""
+    title_lower = title.lower().strip()
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in expansions:
+        if not isinstance(v, str):
+            continue
+        vs = v.strip()
+        if not vs or vs.lower() == title_lower:
+            continue
+        vl = vs.lower()
+        if vl in seen:
+            continue
+        # Block single-word generic role names (Developer, Engineer, Manager…)
+        word_count = len(vl.split())
+        if word_count == 1:
+            if vl in _GENERIC_ROLE_BLOCKLIST:
+                continue
+            # Allow known abbrevs (BI, PM, SWE…) otherwise require length ≥ 8
+            if vl not in _ALLOWED_ABBREVS and len(vl) < 8:
+                continue
+        # Block ultra-short multi-word variants
+        if len(vl) < 4:
+            continue
+        seen.add(vl)
+        out.append(vs)
+    return out
+
+
 async def expand_title_ai(title: str) -> list[str]:
     """Use Claude to generate all possible title variants for a role."""
     if not settings.anthropic_api_key:
-        return expand_title_heuristic(title)
+        return _sanitize_expansions(title, expand_title_heuristic(title))
 
     try:
         import anthropic
@@ -31,30 +83,41 @@ async def expand_title_ai(title: str) -> list[str]:
             max_tokens=500,
             messages=[{
                 "role": "user",
-                "content": f"""List job title variants that are ESSENTIALLY THE SAME ROLE as "{title}".
+                "content": f"""List job title variants that are ESSENTIALLY THE SAME ROLE as "{title}". Be STRICT — someone searching for "{title}" should see every variant as an obviously-equivalent role, not just "related."
 
-Rules:
-- Only include titles where someone with "{title}" experience would be a DIRECT fit
-- Include common abbreviations and alternate phrasings of the SAME role
-- Do NOT include broader parent roles (e.g. don't add "Analyst" for "Data Analyst")
-- Do NOT include tangentially related roles (e.g. don't add "Business Analyst" for "DevOps Engineer")
-- Do NOT include industry-prefixed variants (no "Fintech DevOps", "Healthcare DevOps" etc)
-- Do NOT include tool-specific titles (no "Terraform Engineer" for "DevOps Engineer")
-- Maximum 20 titles. Quality over quantity.
-- No seniority prefixes (Sr, Jr, Lead, etc)
+HARD RULES (breaking any of these = failure):
+- NEVER include generic single-word roles: "Developer", "Engineer", "Programmer", "Designer", "Manager", "Analyst", "Specialist", "Coordinator", "Consultant", "Director". These match everything and poison the search.
+- NEVER include a different role family. Examples of DIFFERENT families that must NOT be mixed:
+    * Data/Analytics (Data Analyst, BI Analyst, Reporting Analyst) ≠ Engineering (Software Engineer, Web Developer, Full Stack)
+    * Data/Analytics ≠ Marketing/Sales/Customer Success
+    * Data Analyst ≠ Data Engineer (engineer builds pipelines; analyst queries them)
+    * DevOps/SRE ≠ Software Engineer ≠ Security Engineer
+    * UX Designer ≠ Frontend Developer
+- NEVER include broader parent roles ("Analyst" for "Data Analyst", "Engineer" for "Backend Engineer")
+- NEVER include tangential roles ("Business Analyst" for "Data Analyst" — BA does requirements, DA does SQL/dashboards)
+- NEVER include industry prefixes ("Fintech DevOps", "Healthcare Data Analyst")
+- NEVER include tool/stack titles ("Tableau Analyst", "Terraform Engineer", "React Developer")
+- NEVER include seniority prefixes (Sr, Jr, Staff, Principal, Lead, Head of)
+- Every variant must be at least 2 words, OR a well-known industry abbreviation (BI, PM, TPM, SWE, SRE, QA, UX, DS, ML, AE, BDR, SDR).
 
-Return a JSON array only, no explanation.""",
+For reference, good expansions look like:
+  "Data Analyst" → ["BI Analyst", "Business Intelligence Analyst", "Reporting Analyst", "Analytics Analyst", "Data Reporting Analyst"]
+  "DevOps Engineer" → ["Site Reliability Engineer", "SRE", "Platform Engineer", "Infrastructure Engineer", "Cloud Operations Engineer"]
+  "Product Manager" → ["PM", "Product Owner", "Technical Product Manager", "Group Product Manager", "Associate Product Manager"]
+
+Return 5-15 titles. Quality over quantity — better 5 tight variants than 20 loose ones. JSON array only, no explanation.""",
             }],
         )
         text = response.content[0].text.strip()
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
             titles = json.loads(match.group())
-            return [t.strip() for t in titles if t.strip()]
+            clean = [t.strip() for t in titles if isinstance(t, str) and t.strip()]
+            return _sanitize_expansions(title, clean)
     except Exception as e:
         logger.error(f"[AI] Title expansion failed: {e}")
 
-    return expand_title_heuristic(title)
+    return _sanitize_expansions(title, expand_title_heuristic(title))
 
 
 def expand_title_heuristic(title: str) -> list[str]:
@@ -167,6 +230,123 @@ Return ONLY the number.""",
     return score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
 
 
+# ──────────────────────────────────────────────
+# Role families — used as a hard fence so "Data Analyst" never matches
+# "Software Engineer" jobs regardless of what fuzzy thinks.
+# ──────────────────────────────────────────────
+_ROLE_FAMILIES: dict[str, set[str]] = {
+    "data_analytics": {
+        "analyst", "analytics", "analysis", "bi", "business intelligence",
+        "reporting", "insight", "insights", "tableau", "power bi", "powerbi",
+        "looker", "data visualization", "dashboard",
+    },
+    "data_engineering": {
+        "data engineer", "analytics engineer", "etl", "data pipeline",
+        "data platform", "data infrastructure",
+    },
+    "data_science": {
+        "data scientist", "machine learning", "ml engineer", "ai engineer",
+        "deep learning", "nlp", "computer vision", "mlops",
+    },
+    "software_engineering": {
+        "software engineer", "software developer", "swe", "programmer",
+        "backend", "back-end", "frontend", "front-end", "full stack",
+        "fullstack", "full-stack", "web developer", "mobile developer",
+        "ios developer", "android developer", "application developer",
+        "application engineer", "engineering manager",
+    },
+    "devops_platform": {
+        "devops", "sre", "site reliability", "platform engineer",
+        "infrastructure engineer", "cloud engineer", "systems engineer",
+        "release engineer",
+    },
+    "security": {
+        "security engineer", "security analyst", "security operations",
+        "infosec", "cybersecurity", "cyber security", "soc analyst",
+        "penetration tester", "red team", "blue team",
+    },
+    "design": {
+        "ux designer", "ui designer", "product designer", "visual designer",
+        "graphic designer", "interaction designer", "ux/ui",
+    },
+    "product": {
+        "product manager", "product owner", "tpm", "program manager",
+        "product lead",
+    },
+    "marketing": {
+        "marketing", "growth", "seo", "content marketing", "brand",
+        "demand generation", "social media", "copywriter",
+    },
+    "sales_cs": {
+        "sales", "account executive", "account manager", "business development",
+        "bdr", "sdr", "customer success", "customer experience",
+        "solutions engineer", "sales engineer", "engagement manager",
+    },
+    "qa": {
+        "qa engineer", "quality assurance", "test engineer", "sdet",
+        "automation engineer",
+    },
+    "ops_pm": {
+        "project manager", "operations manager", "scrum master",
+        "chief of staff",
+    },
+    "finance": {
+        "accountant", "financial analyst", "controller", "auditor",
+        "bookkeeper", "tax ",
+    },
+    "hr": {
+        "recruiter", "talent acquisition", "hr ", "human resources",
+        "people operations", "people ops",
+    },
+    "support": {
+        "support specialist", "technical support", "help desk", "helpdesk",
+        "customer support",
+    },
+    "implementation": {
+        "implementation specialist", "implementation consultant",
+        "onboarding specialist", "deployment engineer",
+    },
+}
+
+# Families that are compatible enough to not penalize each other.
+_FAMILY_ADJACENCY: dict[str, set[str]] = {
+    "data_analytics": {"data_analytics", "data_science"},
+    "data_engineering": {"data_engineering", "data_analytics", "data_science"},
+    "data_science": {"data_science", "data_analytics", "data_engineering"},
+    "software_engineering": {"software_engineering", "devops_platform"},
+    "devops_platform": {"devops_platform", "software_engineering", "security"},
+    "security": {"security", "devops_platform"},
+    "design": {"design", "product"},
+    "product": {"product", "design"},
+    "marketing": {"marketing", "sales_cs"},
+    "sales_cs": {"sales_cs", "marketing"},
+    "qa": {"qa", "software_engineering"},
+    "ops_pm": {"ops_pm", "product"},
+    "finance": {"finance"},
+    "hr": {"hr"},
+    "support": {"support"},
+    "implementation": {"implementation", "support", "sales_cs"},
+}
+
+
+def _detect_family(text: str) -> Optional[str]:
+    """Return the first role family that appears in `text` (already lowercased)."""
+    # Order matters — check most-specific signals first.
+    priority = [
+        "data_engineering", "data_science", "data_analytics",
+        "security", "devops_platform", "software_engineering",
+        "qa", "design", "product", "ops_pm",
+        "implementation", "support",
+        "marketing", "sales_cs",
+        "finance", "hr",
+    ]
+    for fam in priority:
+        for marker in _ROLE_FAMILIES.get(fam, set()):
+            if marker in text:
+                return fam
+    return None
+
+
 def score_relevance_fuzzy(
     job_title: str,
     job_description: str,
@@ -175,62 +355,98 @@ def score_relevance_fuzzy(
     keywords: list[str] = [],
 ) -> int:
     """
-    Fast fuzzy matching score — checks title similarity then keyword boosts.
+    Fuzzy matching score with role-family fence.
 
-    Scoring tiers:
-      - token_sort_ratio:  full weight (good for reordered words)
-      - partial_ratio:     0.75× weight (penalize partial-only matches)
-      - keyword boost:     only if base title score >= 40 (prevents generic
-        keywords like "SQL" from inflating completely unrelated jobs)
+    Key behaviors:
+      - Substring match requires multi-token targets (blocks single-word
+        generic variants like "Developer" matching every SWE job)
+      - token_set_ratio as the primary comparator (resilient to word order
+        and junk like city names, salary, parentheticals)
+      - partial_ratio is only consulted for multi-token targets ≥ 12 chars,
+        preventing explosive false positives
+      - Role-family fence: if job title is clearly in a different family
+        than the target (e.g. Data Analyst target vs. Software Engineer job),
+        the score is hard-capped at 22 regardless of what fuzzy thinks.
+      - Keyword boost only fires when base title score ≥ 50.
     """
-    best_score = 0
     job_lower = job_title.lower()
+    target_lower = target_title.lower()
 
-    # --- Title matching ---
-    all_targets = [target_title] + expanded_titles
+    # Pre-sanitize expansions so bad data from old DB rows can't poison scoring
+    clean_expanded = _sanitize_expansions(target_title, expanded_titles or [])
+    all_targets = [target_title] + clean_expanded
+
+    best_score = 0
     for target in all_targets:
-        target_lower = target.lower()
+        tl = target.lower().strip()
+        if not tl:
+            continue
+        tok_count = len(tl.split())
 
-        # Exact substring — if "Data Analyst" appears verbatim in the job title,
-        # that's a strong signal even if the title has extra words like salary/location
-        if target_lower in job_lower:
-            # Score based on how much of the job title the target covers
-            coverage = len(target_lower) / max(len(job_lower), 1)
-            # "Data Analyst" in "Data Analyst" = 100, in "Senior Data Analyst" = 93
-            # "Data Analyst" in "Data Analyst (Annotation) | $30/hr Remote" = 90
-            # "Manager" in "Millwork Installation Project Manager" = only ~80
+        # ── Substring match — only for multi-token targets ────────────────
+        if tok_count >= 2 and tl in job_lower:
+            coverage = len(tl) / max(len(job_lower), 1)
             substr_score = int(85 + coverage * 15)
             best_score = max(best_score, min(100, substr_score))
 
-        # Full token sort — best for rearranged words ("Sr Data Analyst" ≈ "Data Analyst Sr")
-        s = fuzz.token_sort_ratio(job_lower, target_lower)
-        best_score = max(best_score, s)
+        # ── token_set_ratio — resilient to word order and extra noise ─────
+        # (unlike partial_ratio, it won't 100-score "Developer" vs "SWE")
+        s_set = fuzz.token_set_ratio(job_lower, tl)
+        # Penalize when the target is a single token (more false positives)
+        if tok_count == 1:
+            s_set = int(s_set * 0.55)
+        best_score = max(best_score, s_set)
 
-        # Partial ratio — catches near-matches but weighted down
-        s2 = fuzz.partial_ratio(job_lower, target_lower)
-        best_score = max(best_score, int(s2 * 0.75))
+        # token_sort_ratio — catches reordered variants
+        s_sort = fuzz.token_sort_ratio(job_lower, tl)
+        if tok_count == 1:
+            s_sort = int(s_sort * 0.55)
+        best_score = max(best_score, s_sort)
+
+        # partial_ratio — ONLY for safe, multi-token, long-enough targets
+        if tok_count >= 2 and len(tl) >= 12:
+            s_part = fuzz.partial_ratio(job_lower, tl)
+            best_score = max(best_score, int(s_part * 0.70))
 
     base_title_score = best_score
 
-    # --- Keyword boost (only if title already has a reasonable match) ---
-    # This prevents generic keywords ("SQL", "Excel", "CRM") from inflating
-    # scores for completely unrelated jobs like "Customer Success Manager"
-    if base_title_score >= 40:
-        title_lower = job_lower
+    # ── Role-family fence ────────────────────────────────────────────────
+    # If the job title is clearly a different role family than the target
+    # (e.g. target=Data Analyst, job=Software Engineer), cap the score
+    # regardless of what fuzzy/keywords say. This is the hard fix for the
+    # "Data Analyst filter showing QA Engineer / Web Developer / Marketing"
+    # class of leak.
+    target_family = _detect_family(target_lower)
+    for exp in clean_expanded:
+        if target_family:
+            break
+        target_family = _detect_family(exp.lower())
+    job_family = _detect_family(job_lower)
+
+    if target_family and job_family and job_family != target_family:
+        allowed = _FAMILY_ADJACENCY.get(target_family, {target_family})
+        if job_family not in allowed:
+            # Hard cap — different family, not adjacent. No amount of
+            # keyword overlap should rescue this job.
+            base_title_score = min(base_title_score, 22)
+            best_score = base_title_score
+
+    # ── Keyword boost — only when title is ALREADY a reasonable match ────
+    # Raised threshold from 40 → 50 so we don't rescue borderline noise.
+    if base_title_score >= 50:
         desc_lower = job_description.lower() if job_description else ""
         keyword_boost = 0
         for kw in keywords:
             kw_lower = kw.lower().strip()
-            if not kw_lower:
+            if not kw_lower or len(kw_lower) < 3:
                 continue
-            if kw_lower in title_lower:
-                keyword_boost += 12
+            if kw_lower in job_lower:
+                keyword_boost += 10
             elif kw_lower in desc_lower:
-                keyword_boost += 5
-        # Cap total keyword boost at 20 points
-        best_score = min(100, best_score + min(keyword_boost, 20))
+                keyword_boost += 4
+        best_score = min(100, best_score + min(keyword_boost, 15))
 
-    return min(100, best_score)
+    return int(min(100, best_score))
 
 
 # ──────────────────────────────────────────────
