@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.2"
+BUILD_VERSION = "1.9.3"
 BUILD_DATE = "2026-04-13"
 RECENT_CHANGES = [
+    {"version": "1.9.3", "date": "2026-04-13", "status": "active", "change": "ATS AUTO-DISCOVERY: ScoutPilot now self-grows its company list. Every 6th scrape cycle (~30min) it scans recent job URLs from ALL sources (Indeed, LinkedIn, JobSpy, etc), extracts Greenhouse/Lever/Ashby/Workday/SmartRecruiters slugs via regex, verifies them against live ATS APIs, and auto-adds any new companies. Also exposes POST /api/admin/ats-discover for on-demand runs. The list compounds over time — every new company hiring through a supported ATS gets picked up automatically."},
     {"version": "1.9.2", "date": "2026-04-13", "status": "active", "change": "ATS EXPANSION: Added Workday (41 tenants — NVIDIA, Salesforce, Adobe, PayPal, Capital One, Walmart, Target, Boeing, Disney, Intel + more) and SmartRecruiters (Bosch, Visa, Experian, ServiceNow) adapters. Total 206 company boards across 5 ATS platforms. All ATS sources ship disabled by default — enable from Sources panel."},
     {"version": "1.9.1", "date": "2026-04-12", "status": "active", "change": "ATS COMPANY LIST EXPANDED: Mega-probed 300+ candidates → 159 verified (116 Greenhouse, 40 Ashby, 3 Lever). Admin CRUD endpoints for ats-companies."},
     {"version": "1.8.0", "date": "2026-04-12", "status": "active", "change": "SOURCE MANAGEMENT: Enable/disable any of the 14+ job sources from the dashboard. New 'Sources' button in header opens toggle UI. Disabled sources skip scraping entirely. Settings persist in database."},
@@ -1304,6 +1305,23 @@ async def api_ats_companies_delete(ats: str, slug: str):
         logger.info(f"[Admin] Removed ATS company: {ats}/{slug}")
         return {"ok": True, "count": len(companies)}
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/admin/ats-discover")
+async def api_ats_discover():
+    """Trigger an on-demand ATS auto-discovery pass.
+
+    Scans recent job URLs in the DB, extracts ATS slugs, verifies them
+    against live APIs, and appends any newly-verified companies to the list.
+    Returns stats about the run (scanned, candidates, new, failed).
+    """
+    try:
+        from ats_discovery import discover_new_ats_companies
+        stats = await discover_new_ats_companies()
+        return {"ok": True, **stats}
+    except Exception as e:
+        logger.exception("[Admin] ats-discover failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
