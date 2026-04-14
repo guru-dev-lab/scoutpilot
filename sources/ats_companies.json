@@ -5,8 +5,23 @@
     "ats": "ashby"
   },
   {
+    "name": "Baseten",
+    "slug": "baseten",
+    "ats": "ashby"
+  },
+  {
     "name": "Braintrust",
     "slug": "braintrust",
+    "ats": "ashby"
+  },
+  {
+    "name": "Browserbase",
+    "slug": "browserbase",
+    "ats": "ashby"
+  },
+  {
+    "name": "Clerk",
+    "slug": "clerk",
     "ats": "ashby"
   },
   {
@@ -20,8 +35,23 @@
     "ats": "ashby"
   },
   {
+    "name": "Decagon",
+    "slug": "decagon",
+    "ats": "ashby"
+  },
+  {
+    "name": "Deepgram",
+    "slug": "deepgram",
+    "ats": "ashby"
+  },
+  {
     "name": "Elevenlabs",
     "slug": "elevenlabs",
+    "ats": "ashby"
+  },
+  {
+    "name": "Gamma",
+    "slug": "gamma",
     "ats": "ashby"
   },
   {
@@ -32,6 +62,16 @@
   {
     "name": "Harvey",
     "slug": "harvey",
+    "ats": "ashby"
+  },
+  {
+    "name": "Inngest",
+    "slug": "inngest",
+    "ats": "ashby"
+  },
+  {
+    "name": "LanceDB",
+    "slug": "lancedb",
     "ats": "ashby"
   },
   {
@@ -55,8 +95,18 @@
     "ats": "ashby"
   },
   {
+    "name": "Mem",
+    "slug": "mem",
+    "ats": "ashby"
+  },
+  {
     "name": "Modal",
     "slug": "modal",
+    "ats": "ashby"
+  },
+  {
+    "name": "Notion",
+    "slug": "notion",
     "ats": "ashby"
   },
   {
@@ -72,6 +122,11 @@
   {
     "name": "Pika",
     "slug": "pika",
+    "ats": "ashby"
+  },
+  {
+    "name": "Pinecone",
+    "slug": "pinecone",
     "ats": "ashby"
   },
   {
@@ -95,8 +150,28 @@
     "ats": "ashby"
   },
   {
+    "name": "Resend",
+    "slug": "resend",
+    "ats": "ashby"
+  },
+  {
+    "name": "Runway",
+    "slug": "runway",
+    "ats": "ashby"
+  },
+  {
+    "name": "Sierra",
+    "slug": "sierra",
+    "ats": "ashby"
+  },
+  {
     "name": "Speak",
     "slug": "speak",
+    "ats": "ashby"
+  },
+  {
+    "name": "Substack",
+    "slug": "substack",
     "ats": "ashby"
   },
   {
@@ -105,9 +180,34 @@
     "ats": "ashby"
   },
   {
+    "name": "Supabase",
+    "slug": "supabase",
+    "ats": "ashby"
+  },
+  {
+    "name": "Warp",
+    "slug": "warp",
+    "ats": "ashby"
+  },
+  {
+    "name": "Weaviate",
+    "slug": "weaviate",
+    "ats": "ashby"
+  },
+  {
     "name": "Writer",
     "slug": "writer",
     "ats": "ashby"
+  },
+  {
+    "name": "6sense",
+    "slug": "6sense",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Abnormal Security",
+    "slug": "abnormalsecurity",
+    "ats": "greenhouse"
   },
   {
     "name": "Affirm",
@@ -125,6 +225,11 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Alloy",
+    "slug": "alloy",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Amplitude",
     "slug": "amplitude",
     "ats": "greenhouse"
@@ -135,12 +240,22 @@
     "ats": "greenhouse"
   },
   {
+    "name": "ArgoCD",
+    "slug": "akuity",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Asana",
     "slug": "asana",
     "ats": "greenhouse"
   },
   {
-    "name": "Block (Square)",
+    "name": "Betterment",
+    "slug": "betterment",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Block",
     "slug": "block",
     "ats": "greenhouse"
   },
@@ -150,8 +265,28 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Buildkite",
+    "slug": "buildkite",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Calm",
+    "slug": "calm",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Carbon Direct",
+    "slug": "carbondirect",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Carta",
     "slug": "carta",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Chainguard",
+    "slug": "chainguard",
     "ats": "greenhouse"
   },
   {
@@ -165,8 +300,28 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Clever",
+    "slug": "clever",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Clickhouse",
+    "slug": "clickhouse",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Climate Ai",
+    "slug": "climateai",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Cloudflare",
     "slug": "cloudflare",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Cockroach Labs",
+    "slug": "cockroachlabs",
     "ats": "greenhouse"
   },
   {
@@ -175,8 +330,18 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Collibra",
+    "slug": "collibra",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Coursera",
     "slug": "coursera",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Dashlane",
+    "slug": "dashlane",
     "ats": "greenhouse"
   },
   {
@@ -187,6 +352,16 @@
   {
     "name": "Datadog",
     "slug": "datadog",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Dialpad",
+    "slug": "dialpad",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Discord",
+    "slug": "discord",
     "ats": "greenhouse"
   },
   {
@@ -205,6 +380,11 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Epic Games",
+    "slug": "epicgames",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Fastly",
     "slug": "fastly",
     "ats": "greenhouse"
@@ -220,8 +400,23 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Flatiron Health",
+    "slug": "flatironhealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Flexport",
+    "slug": "flexport",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Gemini",
     "slug": "gemini",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Ghost",
+    "slug": "ghost",
     "ats": "greenhouse"
   },
   {
@@ -230,8 +425,23 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Guild Education",
+    "slug": "guild",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Gusto",
     "slug": "gusto",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Honeycomb",
+    "slug": "honeycomb",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Imply",
+    "slug": "imply",
     "ats": "greenhouse"
   },
   {
@@ -245,8 +455,73 @@
     "ats": "greenhouse"
   },
   {
+    "name": "JFrog",
+    "slug": "jfrog",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Kalshi",
+    "slug": "kalshi",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Khan Academy",
+    "slug": "khanacademy",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Komodo Health",
+    "slug": "komodohealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "LastPass",
+    "slug": "lastpass",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "LaunchDarkly",
+    "slug": "launchdarkly",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Lightmatter",
+    "slug": "lightmatter",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Lithic",
+    "slug": "lithic",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Lyft",
     "slug": "lyft",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Marqeta",
+    "slug": "marqeta",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "MasterClass",
+    "slug": "masterclass",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Materialize",
+    "slug": "materialize",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Maven Clinic",
+    "slug": "mavenclinic",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Medium",
+    "slug": "medium",
     "ats": "greenhouse"
   },
   {
@@ -265,8 +540,23 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Mozilla",
+    "slug": "mozilla",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Netskope",
+    "slug": "netskope",
+    "ats": "greenhouse"
+  },
+  {
     "name": "New Relic",
     "slug": "newrelic",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Nuro",
+    "slug": "nuro",
     "ats": "greenhouse"
   },
   {
@@ -275,8 +565,28 @@
     "ats": "greenhouse"
   },
   {
+    "name": "One Medical",
+    "slug": "onemedical",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Orca Security",
+    "slug": "orcasecurity",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Oscar Health",
     "slug": "oscar",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Outschool",
+    "slug": "outschool",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Pagaya",
+    "slug": "pagaya",
     "ats": "greenhouse"
   },
   {
@@ -285,8 +595,33 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Patch",
+    "slug": "patch",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Peloton",
+    "slug": "peloton",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Pendo",
+    "slug": "pendo",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Pinterest",
     "slug": "pinterest",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "PlanetScale",
+    "slug": "planetscale",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Public",
+    "slug": "public",
     "ats": "greenhouse"
   },
   {
@@ -305,8 +640,38 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Roblox",
+    "slug": "roblox",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Salesloft",
+    "slug": "salesloft",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Samsara",
+    "slug": "samsara",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Scale AI",
     "slug": "scaleai",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Sigma Computing",
+    "slug": "sigmacomputing",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Sila Nanotechnologies",
+    "slug": "silananotechnologies",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "SoFi",
+    "slug": "sofi",
     "ats": "greenhouse"
   },
   {
@@ -315,8 +680,43 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Stability AI",
+    "slug": "stabilityai",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "StarTree",
+    "slug": "startree",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Stripe",
     "slug": "stripe",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Tailscale",
+    "slug": "tailscale",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Talkspace",
+    "slug": "talkspace",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Thirty Madison",
+    "slug": "thirtymadison",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "ThoughtWorks",
+    "slug": "thoughtworks",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Tia",
+    "slug": "tia",
     "ats": "greenhouse"
   },
   {
@@ -325,8 +725,18 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Transcarent",
+    "slug": "transcarent",
+    "ats": "greenhouse"
+  },
+  {
     "name": "Twilio",
     "slug": "twilio",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Udacity",
+    "slug": "udacity",
     "ats": "greenhouse"
   },
   {
@@ -335,8 +745,53 @@
     "ats": "greenhouse"
   },
   {
+    "name": "Unity",
+    "slug": "unity3d",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Upstart",
+    "slug": "upstart",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Upwork",
+    "slug": "upwork",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Verana Health",
+    "slug": "veranahealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Watershed",
+    "slug": "watershed",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Zero",
+    "slug": "zero",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Zipline",
+    "slug": "flyzipline",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Outreach",
+    "slug": "outreach",
+    "ats": "lever"
+  },
+  {
     "name": "Palantir",
     "slug": "palantir",
+    "ats": "lever"
+  },
+  {
+    "name": "Secureframe",
+    "slug": "secureframe",
     "ats": "lever"
   }
 ]
