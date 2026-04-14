@@ -6,9 +6,11 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.1"
-BUILD_DATE = "2026-04-12"
+BUILD_VERSION = "1.9.2"
+BUILD_DATE = "2026-04-13"
 RECENT_CHANGES = [
+    {"version": "1.9.2", "date": "2026-04-13", "status": "active", "change": "ATS EXPANSION: Added Workday (41 tenants — NVIDIA, Salesforce, Adobe, PayPal, Capital One, Walmart, Target, Boeing, Disney, Intel + more) and SmartRecruiters (Bosch, Visa, Experian, ServiceNow) adapters. Total 206 company boards across 5 ATS platforms. All ATS sources ship disabled by default — enable from Sources panel."},
+    {"version": "1.9.1", "date": "2026-04-12", "status": "active", "change": "ATS COMPANY LIST EXPANDED: Mega-probed 300+ candidates → 159 verified (116 Greenhouse, 40 Ashby, 3 Lever). Admin CRUD endpoints for ats-companies."},
     {"version": "1.8.0", "date": "2026-04-12", "status": "active", "change": "SOURCE MANAGEMENT: Enable/disable any of the 14+ job sources from the dashboard. New 'Sources' button in header opens toggle UI. Disabled sources skip scraping entirely. Settings persist in database."},
     {"version": "1.6.0", "date": "2026-04-10", "status": "active", "change": "6 NEW SOURCES: USAJobs (gov engineering/analyst), Jooble (8M+ aggregator), Adzuna (massive aggregator), CareerJet (global), FindWork.dev (tech), JustRemote (RSS). Now 13 sources total. All fire every cycle for every profile."},
     {"version": "1.4.9", "date": "2026-04-10", "status": "active", "change": "Scraper reliability overhaul — JobSpy runs SEQUENTIAL with 3s delays (was hundreds of parallel calls causing IP bans), profiles run sequentially (not parallel), Remotive broad fetch + client filter (server search too strict), Jobicy list crash fixed, limited to 5 JobSpy terms/profile"},

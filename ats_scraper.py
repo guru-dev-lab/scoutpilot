@@ -522,6 +522,246 @@ async def fetch_ashby(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Workday adapter
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def fetch_workday(
+    client: httpx.AsyncClient,
+    company: dict,
+    profile_id: Optional[int],
+    search_terms: list[str],
+) -> list[dict]:
+    """Fetch jobs from a Workday tenant's public CxS jobs endpoint.
+
+    Workday entries in ats_companies.json must include either:
+      - ``workday_url``: full base (e.g. https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite)
+      - OR the three parts ``tenant``, ``wd``, ``site``.
+
+    The public list endpoint returns 'postings' with title, locationsText,
+    externalPath, postedOn. We search with ``searchText='Remote'`` to narrow
+    results to remote-eligible roles, then filter locationsText for US markers.
+    """
+    slug = company.get("slug") or company.get("tenant") or ""
+    company_name = company.get("name", slug)
+
+    # Build the base URL
+    base = company.get("workday_url") or ""
+    if not base:
+        tenant = company.get("tenant")
+        wd = company.get("wd")
+        site = company.get("site")
+        if not (tenant and wd and site):
+            logger.warning(f"[Workday:{slug}] missing workday_url or (tenant,wd,site)")
+            return []
+        base = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"
+
+    list_url = base.rstrip("/") + "/jobs"
+
+    # Derive the user-facing apply URL root (no /wday/cxs prefix)
+    # e.g. https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite{externalPath}
+    apply_root = ""
+    m = re.match(r"(https?://[^/]+)/wday/cxs/([^/]+)/([^/]+)", base)
+    if m:
+        host = m.group(1)
+        site_name = m.group(3)
+        apply_root = f"{host}/en-US/{site_name}"
+
+    postings_raw: list[dict] = []
+    try:
+        # Page through up to 3 × 20 = 60 most recent remote postings
+        for offset in (0, 20, 40):
+            resp = await client.post(
+                list_url,
+                json={
+                    "appliedFacets": {},
+                    "limit": 20,
+                    "offset": offset,
+                    "searchText": "Remote",
+                },
+            )
+            if resp.status_code != 200:
+                if offset == 0:
+                    logger.warning(f"[Workday:{slug}] HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            batch = data.get("jobPostings", []) or []
+            postings_raw.extend(batch)
+            if len(batch) < 20:
+                break
+    except Exception as e:
+        logger.warning(f"[Workday:{slug}] fetch error: {e}")
+        return []
+
+    inserted: list[dict] = []
+
+    for item in postings_raw:
+        try:
+            title = (item.get("title") or "").strip()
+            if not title:
+                continue
+
+            loc_text = (item.get("locationsText") or "").strip()
+            loc_low = loc_text.lower()
+
+            # Accept if any of: locationsText says 'remote'/'united states'/state,
+            # OR it's a multi-location posting (then we assume US-based Workday
+            # customers include US as one of the locations, since we already
+            # searchText='Remote' filtered).
+            is_multi_loc = "location" in loc_low and any(ch.isdigit() for ch in loc_low)
+            has_remote = "remote" in loc_low or is_multi_loc
+            if not has_remote:
+                continue
+            if not (is_multi_loc or is_us_location(loc_text)):
+                continue
+
+            if not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+
+            ext_path = item.get("externalPath") or ""
+            if not ext_path:
+                continue
+            apply_url = (apply_root + ext_path) if apply_root else ""
+            if not apply_url:
+                continue
+
+            # Description isn't in the list endpoint — leave minimal but non-empty
+            # so downstream systems don't drop it for blankness.
+            desc = f"{title} at {company_name}. Apply directly on Workday."
+
+            posted_on = (item.get("postedOn") or "").strip()
+
+            job = {
+                "title": title,
+                "company_name": company_name,
+                "company_domain": "",
+                "location": loc_text or "Remote",
+                "is_remote": True,
+                "work_type": "remote",
+                "description": desc,
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "workday",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(posted_on),
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[Workday:{slug}] item skip: {e}")
+            continue
+
+    if inserted:
+        logger.info(f"[Workday:{slug}] +{len(inserted)} new jobs ({len(postings_raw)} remote postings on board)")
+    return inserted
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartRecruiters adapter
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def fetch_smartrecruiters(
+    client: httpx.AsyncClient,
+    company: dict,
+    profile_id: Optional[int],
+    search_terms: list[str],
+) -> list[dict]:
+    """Fetch jobs from a SmartRecruiters company public posting API.
+
+    Uses the public ``/v1/companies/{slug}/postings`` endpoint, filtered to
+    ``country=us`` to cut down volume. Only items with ``location.remote=True``
+    are kept.
+    """
+    slug = company["slug"]
+    company_name = company.get("name", slug)
+
+    url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+    params = {"country": "us", "limit": 100, "offset": 0}
+
+    all_items: list[dict] = []
+    try:
+        for _ in range(3):  # up to 300 postings per company per cycle
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200:
+                if params["offset"] == 0:
+                    logger.warning(f"[SmartRecruiters:{slug}] HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            batch = data.get("content", []) or []
+            all_items.extend(batch)
+            if len(batch) < params["limit"]:
+                break
+            params["offset"] += params["limit"]
+    except Exception as e:
+        logger.warning(f"[SmartRecruiters:{slug}] fetch error: {e}")
+        return []
+
+    inserted: list[dict] = []
+
+    for item in all_items:
+        try:
+            title = (item.get("name") or "").strip()
+            if not title:
+                continue
+
+            loc = item.get("location") or {}
+            if not loc.get("remote"):
+                continue
+
+            country = (loc.get("country") or "").lower()
+            full_loc = loc.get("fullLocation") or f"{loc.get('city','')}, {loc.get('region','')}"
+            # Accept only if country is us OR full location is US-eligible
+            if country != "us" and not is_us_location(full_loc):
+                continue
+
+            if not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+
+            apply_url = item.get("applyUrl") or item.get("postingUrl") or ""
+            if not apply_url:
+                continue
+
+            desc = f"{title} at {company_name}. Remote role in {full_loc}."
+
+            job = {
+                "title": title,
+                "company_name": company_name,
+                "company_domain": "",
+                "location": full_loc or "Remote, US",
+                "is_remote": True,
+                "work_type": "remote",
+                "description": desc,
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "smartrecruiters",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(item.get("releasedDate") or ""),
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+
+            was_inserted = await insert_job(job)
+            if was_inserted:
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[SmartRecruiters:{slug}] item skip: {e}")
+            continue
+
+    if inserted:
+        logger.info(f"[SmartRecruiters:{slug}] +{len(inserted)} new jobs ({len(all_items)} US postings on board)")
+    return inserted
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Platform dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -529,6 +769,8 @@ _PLATFORM_FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "lever": fetch_lever,
     "ashby": fetch_ashby,
+    "workday": fetch_workday,
+    "smartrecruiters": fetch_smartrecruiters,
 }
 
 

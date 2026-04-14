@@ -724,9 +724,11 @@ ALL_SOURCES = [
 
 # ATS sources — ship DISABLED by default (user flips on from dashboard when ready)
 ATS_SOURCES = [
-    {"source_key": "greenhouse", "display_name": "Greenhouse (ATS)", "category": "ats", "requires_key": ""},
-    {"source_key": "lever",      "display_name": "Lever (ATS)",      "category": "ats", "requires_key": ""},
-    {"source_key": "ashby",      "display_name": "Ashby (ATS)",      "category": "ats", "requires_key": ""},
+    {"source_key": "greenhouse",      "display_name": "Greenhouse (ATS)",      "category": "ats", "requires_key": ""},
+    {"source_key": "lever",           "display_name": "Lever (ATS)",           "category": "ats", "requires_key": ""},
+    {"source_key": "ashby",           "display_name": "Ashby (ATS)",           "category": "ats", "requires_key": ""},
+    {"source_key": "workday",         "display_name": "Workday (ATS)",         "category": "ats", "requires_key": ""},
+    {"source_key": "smartrecruiters", "display_name": "SmartRecruiters (ATS)", "category": "ats", "requires_key": ""},
 ]
 
 

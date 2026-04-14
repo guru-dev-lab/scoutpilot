@@ -793,5 +793,363 @@
     "name": "Secureframe",
     "slug": "secureframe",
     "ats": "lever"
+  },
+  {
+    "name": "Bosch Group",
+    "slug": "BoschGroup",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Experian",
+    "slug": "Experian",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "LVMH",
+    "slug": "LVMH",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "ServiceNow",
+    "slug": "ServiceNow",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Thales",
+    "slug": "Thales",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Visa",
+    "slug": "Visa",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "3M",
+    "slug": "3m",
+    "ats": "workday",
+    "tenant": "3m",
+    "wd": "wd1",
+    "site": "Search"
+  },
+  {
+    "name": "AIG",
+    "slug": "aig",
+    "ats": "workday",
+    "tenant": "aig",
+    "wd": "wd1",
+    "site": "aig"
+  },
+  {
+    "name": "Adobe",
+    "slug": "adobe",
+    "ats": "workday",
+    "tenant": "adobe",
+    "wd": "wd5",
+    "site": "external_experienced"
+  },
+  {
+    "name": "Amgen",
+    "slug": "amgen",
+    "ats": "workday",
+    "tenant": "amgen",
+    "wd": "wd1",
+    "site": "Careers"
+  },
+  {
+    "name": "Autodesk",
+    "slug": "autodesk",
+    "ats": "workday",
+    "tenant": "autodesk",
+    "wd": "wd1",
+    "site": "uni"
+  },
+  {
+    "name": "Baxter",
+    "slug": "baxter",
+    "ats": "workday",
+    "tenant": "baxter",
+    "wd": "wd1",
+    "site": "baxter"
+  },
+  {
+    "name": "Boeing",
+    "slug": "boeing",
+    "ats": "workday",
+    "tenant": "boeing",
+    "wd": "wd1",
+    "site": "EXTERNAL_CAREERS"
+  },
+  {
+    "name": "Cadence",
+    "slug": "cadence",
+    "ats": "workday",
+    "tenant": "cadence",
+    "wd": "wd1",
+    "site": "External_Careers"
+  },
+  {
+    "name": "Capital One",
+    "slug": "capitalone",
+    "ats": "workday",
+    "tenant": "capitalone",
+    "wd": "wd12",
+    "site": "Capital_One"
+  },
+  {
+    "name": "Carmax",
+    "slug": "carmax",
+    "ats": "workday",
+    "tenant": "carmax",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Citi",
+    "slug": "citi",
+    "ats": "workday",
+    "tenant": "citi",
+    "wd": "wd5",
+    "site": "2"
+  },
+  {
+    "name": "Comcast",
+    "slug": "comcast",
+    "ats": "workday",
+    "tenant": "comcast",
+    "wd": "wd5",
+    "site": "Comcast_Careers"
+  },
+  {
+    "name": "ConocoPhillips",
+    "slug": "conocophillips",
+    "ats": "workday",
+    "tenant": "conocophillips",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Danaher",
+    "slug": "danaher",
+    "ats": "workday",
+    "tenant": "danaher",
+    "wd": "wd1",
+    "site": "danaherjobs"
+  },
+  {
+    "name": "Dell",
+    "slug": "dell",
+    "ats": "workday",
+    "tenant": "dell",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Disney",
+    "slug": "disney",
+    "ats": "workday",
+    "tenant": "disney",
+    "wd": "wd5",
+    "site": "disneycareer"
+  },
+  {
+    "name": "Dow",
+    "slug": "dow",
+    "ats": "workday",
+    "tenant": "dow",
+    "wd": "wd1",
+    "site": "ExternalCareers"
+  },
+  {
+    "name": "Eli Lilly",
+    "slug": "lilly",
+    "ats": "workday",
+    "tenant": "lilly",
+    "wd": "wd5",
+    "site": "LLY"
+  },
+  {
+    "name": "Equinix",
+    "slug": "equinix",
+    "ats": "workday",
+    "tenant": "equinix",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Fidelity",
+    "slug": "fmr",
+    "ats": "workday",
+    "tenant": "fmr",
+    "wd": "wd1",
+    "site": "FidelityCareers"
+  },
+  {
+    "name": "Gilead",
+    "slug": "gilead",
+    "ats": "workday",
+    "tenant": "gilead",
+    "wd": "wd1",
+    "site": "gileadcareers"
+  },
+  {
+    "name": "HP",
+    "slug": "hp",
+    "ats": "workday",
+    "tenant": "hp",
+    "wd": "wd5",
+    "site": "ExternalCareerSite"
+  },
+  {
+    "name": "HPE",
+    "slug": "hpe",
+    "ats": "workday",
+    "tenant": "hpe",
+    "wd": "wd5",
+    "site": "Jobsathpe"
+  },
+  {
+    "name": "Intel",
+    "slug": "intel",
+    "ats": "workday",
+    "tenant": "intel",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Marathon Petroleum",
+    "slug": "mpc",
+    "ats": "workday",
+    "tenant": "mpc",
+    "wd": "wd1",
+    "site": "MpcCareers"
+  },
+  {
+    "name": "Marvell",
+    "slug": "marvell",
+    "ats": "workday",
+    "tenant": "marvell",
+    "wd": "wd1",
+    "site": "marvellcareers2"
+  },
+  {
+    "name": "Mastercard",
+    "slug": "mastercard",
+    "ats": "workday",
+    "tenant": "mastercard",
+    "wd": "wd1",
+    "site": "CorporateCareers"
+  },
+  {
+    "name": "Medtronic",
+    "slug": "medtronic",
+    "ats": "workday",
+    "tenant": "medtronic",
+    "wd": "wd1",
+    "site": "MedtronicCareers"
+  },
+  {
+    "name": "Micron",
+    "slug": "micron",
+    "ats": "workday",
+    "tenant": "micron",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "NVIDIA",
+    "slug": "nvidia",
+    "ats": "workday",
+    "tenant": "nvidia",
+    "wd": "wd5",
+    "site": "NVIDIAExternalCareerSite"
+  },
+  {
+    "name": "PTC",
+    "slug": "ptc",
+    "ats": "workday",
+    "tenant": "ptc",
+    "wd": "wd1",
+    "site": "ptc"
+  },
+  {
+    "name": "PVH",
+    "slug": "pvh",
+    "ats": "workday",
+    "tenant": "pvh",
+    "wd": "wd1",
+    "site": "pvh_careers"
+  },
+  {
+    "name": "PayPal",
+    "slug": "paypal",
+    "ats": "workday",
+    "tenant": "paypal",
+    "wd": "wd1",
+    "site": "jobs"
+  },
+  {
+    "name": "Pfizer",
+    "slug": "pfizer",
+    "ats": "workday",
+    "tenant": "pfizer",
+    "wd": "wd1",
+    "site": "PfizerCareers"
+  },
+  {
+    "name": "Regeneron",
+    "slug": "regeneron",
+    "ats": "workday",
+    "tenant": "regeneron",
+    "wd": "wd1",
+    "site": "Careers"
+  },
+  {
+    "name": "Salesforce",
+    "slug": "salesforce",
+    "ats": "workday",
+    "tenant": "salesforce",
+    "wd": "wd12",
+    "site": "External_Career_Site"
+  },
+  {
+    "name": "Stryker",
+    "slug": "stryker",
+    "ats": "workday",
+    "tenant": "stryker",
+    "wd": "wd1",
+    "site": "StrykerCareers"
+  },
+  {
+    "name": "Target",
+    "slug": "target",
+    "ats": "workday",
+    "tenant": "target",
+    "wd": "wd5",
+    "site": "targetcareers"
+  },
+  {
+    "name": "Walmart",
+    "slug": "walmart",
+    "ats": "workday",
+    "tenant": "walmart",
+    "wd": "wd5",
+    "site": "WalmartExternal"
+  },
+  {
+    "name": "Warner Bros",
+    "slug": "warnerbros",
+    "ats": "workday",
+    "tenant": "warnerbros",
+    "wd": "wd5",
+    "site": "global"
+  },
+  {
+    "name": "Workday",
+    "slug": "workday",
+    "ats": "workday",
+    "tenant": "workday",
+    "wd": "wd5",
+    "site": "Workday"
   }
 ]
