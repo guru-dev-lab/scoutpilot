@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.5"
+BUILD_VERSION = "1.9.6"
 BUILD_DATE = "2026-04-13"
 RECENT_CHANGES = [
+    {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
     {"version": "1.9.4", "date": "2026-04-13", "status": "active", "change": "THREE-PATH AUTO-DISCOVERY: Discovery now runs three paths in order. (1) URL extraction from direct_apply_url/source_url — now also captures JobSpy's job_url_direct field, which is the real employer ATS link for Indeed rows (JobSpy already resolved it during its scrape, we just weren't reading it). (2) HTML second-link fetch — for aggregator URLs (Indeed/LinkedIn/Glassdoor/SimplyHired/Wellfound/BuiltIn/etc), ScoutPilot GETs the listing page and regex-extracts any embedded ATS apply URL. (3) Name-based slug fuzzing — generates slug variants from unknown company names, probes each ATS, and fuzzy-matches the returned board name against the expected company (rapidfuzz threshold 70) to prevent false positives. Negative results cached in discovery_checked.json so repeat probes are free. The list now grows from Indeed/LinkedIn jobs too, not just direct-ATS jobs."},
     {"version": "1.9.3", "date": "2026-04-13", "status": "active", "change": "ATS AUTO-DISCOVERY: ScoutPilot now self-grows its company list. Every 6th scrape cycle (~30min) it scans recent job URLs from ALL sources (Indeed, LinkedIn, JobSpy, etc), extracts Greenhouse/Lever/Ashby/Workday/SmartRecruiters slugs via regex, verifies them against live ATS APIs, and auto-adds any new companies. Also exposes POST /api/admin/ats-discover for on-demand runs. The list compounds over time — every new company hiring through a supported ATS gets picked up automatically."},
@@ -154,18 +155,21 @@ async def scheduled_scrape(cycle_number: int = 1):
                 "expanded": profile.get("expanded_titles", []),
                 "keywords": kws,
                 "excluded": excl,
+                "signature": profile.get("skill_signature") or {},
             })
 
         ai_scored = 0
         from ai_engine import score_relevance_fuzzy
         for job in new_jobs:
             # STEP 1: Find best-matching profile using FREE fuzzy scoring
+            # (now with skill-signature description rescue baked in)
             best_fuzzy = 0
             best_profile = all_profiles_data[0] if all_profiles_data else None
             for pd in all_profiles_data:
                 fuzzy = score_relevance_fuzzy(
                     job["title"], job.get("description", ""),
                     pd["title"], pd["expanded"], pd["keywords"],
+                    skill_signature=pd.get("signature"),
                 )
                 if fuzzy > best_fuzzy:
                     best_fuzzy = fuzzy
@@ -178,6 +182,7 @@ async def scheduled_scrape(cycle_number: int = 1):
                     job["title"], job.get("description", ""),
                     best_profile["title"], best_profile["expanded"],
                     best_profile["keywords"], best_profile["excluded"],
+                    skill_signature=best_profile.get("signature"),
                 )
             else:
                 relevance = best_fuzzy
@@ -313,14 +318,24 @@ async def scheduled_deep_sweep():
                 excl = profile.get("excluded_keywords", [])
                 if isinstance(excl, str):
                     excl = [k.strip() for k in excl.split(",") if k.strip()]
-                all_pd.append({"title": profile["title"], "expanded": profile.get("expanded_titles", []), "keywords": kws, "excluded": excl})
+                all_pd.append({
+                    "title": profile["title"],
+                    "expanded": profile.get("expanded_titles", []),
+                    "keywords": kws,
+                    "excluded": excl,
+                    "signature": profile.get("skill_signature") or {},
+                })
 
             for job in new_jobs:
-                # Find best profile with FREE fuzzy, then AI only for that one
+                # Find best profile with FREE fuzzy (with signature rescue), then AI only for that one
                 best_fuzzy = 0
                 best_pd = all_pd[0] if all_pd else None
                 for pd in all_pd:
-                    f = score_relevance_fuzzy(job["title"], job.get("description", ""), pd["title"], pd["expanded"], pd["keywords"])
+                    f = score_relevance_fuzzy(
+                        job["title"], job.get("description", ""),
+                        pd["title"], pd["expanded"], pd["keywords"],
+                        skill_signature=pd.get("signature"),
+                    )
                     if f > best_fuzzy:
                         best_fuzzy = f
                         best_pd = pd
@@ -330,6 +345,7 @@ async def scheduled_deep_sweep():
                         job["title"], job.get("description", ""),
                         best_pd["title"], best_pd["expanded"],
                         best_pd["keywords"], best_pd["excluded"],
+                        skill_signature=best_pd.get("signature"),
                     )
                 else:
                     relevance = best_fuzzy
@@ -883,8 +899,18 @@ async def api_create_profile(request: Request):
     expanded = await expand_title_ai(data["title"])
     data["expanded_titles"] = expanded
 
+    # v1.9.6: also generate the skill signature so description-rescue
+    # works on day one. One AI call per profile, cached forever.
+    try:
+        from ai_engine import generate_skill_signature_ai
+        sig = await generate_skill_signature_ai(data["title"], data.get("keywords"))
+        if sig:
+            data["skill_signature"] = sig
+    except Exception as e:
+        logger.error(f"[Profile] Signature generation failed: {e}")
+
     profile_id = await create_profile(data)
-    return {"id": profile_id, "expanded_titles": expanded}
+    return {"id": profile_id, "expanded_titles": expanded, "skill_signature": data.get("skill_signature", {})}
 
 
 @app.put("/api/profiles/{profile_id}")
@@ -1230,6 +1256,36 @@ async def api_re_expand_titles():
     return {"ok": True, "profiles": results}
 
 
+@app.post("/api/admin/generate-signatures")
+async def api_generate_signatures(force: bool = False):
+    """Admin: generate skill signatures for every profile that doesn't have
+    one yet. One Haiku call per profile, cached in DB forever. Pass
+    ?force=true to regenerate signatures even for profiles that already
+    have one."""
+    from ai_engine import generate_skill_signature_ai
+    profiles = await get_profiles()
+    results = []
+    for p in profiles:
+        existing = p.get("skill_signature") or {}
+        if existing and not force:
+            results.append({"id": p["id"], "title": p["title"], "status": "skipped (exists)"})
+            continue
+        try:
+            sig = await generate_skill_signature_ai(p["title"], p.get("keywords"))
+            await update_profile(p["id"], {"skill_signature": sig})
+            results.append({
+                "id": p["id"],
+                "title": p["title"],
+                "foundation": len(sig.get("foundation", [])),
+                "toolkit": len(sig.get("toolkit", [])),
+                "bonus": len(sig.get("bonus", [])),
+            })
+            logger.info(f"[Admin] Generated signature for '{p['title']}'")
+        except Exception as e:
+            results.append({"id": p["id"], "title": p["title"], "error": str(e)})
+    return {"ok": True, "profiles": results}
+
+
 @app.post("/api/admin/rescore-all-jobs")
 async def api_rescore_all_jobs(threshold: int = 40):
     """Admin: re-score every job in the DB against all profiles using the
@@ -1242,16 +1298,19 @@ async def api_rescore_all_jobs(threshold: int = 40):
     if not profiles:
         return {"error": "no profiles"}
 
-    # Prebuild clean profile data
+    # Prebuild clean profile data (with skill signature for description rescue)
+    from ai_engine import _get_fallback_signature
     pds = []
     for p in profiles:
         kws = p.get("keywords", [])
         if isinstance(kws, str):
             kws = [k.strip() for k in kws.split(",") if k.strip()]
+        sig = p.get("skill_signature") or _get_fallback_signature(p["title"])
         pds.append({
             "title": p["title"],
             "expanded": _sanitize_expansions(p["title"], p.get("expanded_titles", []) or []),
             "keywords": kws,
+            "signature": sig,
         })
 
     db = await get_db()
@@ -1264,7 +1323,10 @@ async def api_rescore_all_jobs(threshold: int = 40):
             jid, jtitle, jdesc = row[0], row[1] or "", row[2] or ""
             best = 0
             for pd in pds:
-                s = score_relevance_fuzzy(jtitle, jdesc, pd["title"], pd["expanded"], pd["keywords"])
+                s = score_relevance_fuzzy(
+                    jtitle, jdesc, pd["title"], pd["expanded"], pd["keywords"],
+                    skill_signature=pd.get("signature"),
+                )
                 if s > best:
                     best = s
             await db.execute("UPDATE jobs SET relevance_score = ? WHERE id = ?", (best, jid))

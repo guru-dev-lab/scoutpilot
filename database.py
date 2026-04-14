@@ -140,6 +140,18 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT DEFAULT ''")
             await db.commit()
 
+        # Migration: add skill_signature column to search_profiles (v1.9.6)
+        # Stores a JSON object: {"foundation": [...], "toolkit": [...], "bonus": [...]}
+        # Used by the description-based rescue scorer so disguised roles
+        # (Solutions Engineer that's really a DA, Product Analyst that's
+        # really a DA, etc.) can be matched without per-job AI calls.
+        try:
+            await db.execute("SELECT skill_signature FROM search_profiles LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding skill_signature column to search_profiles")
+            await db.execute("ALTER TABLE search_profiles ADD COLUMN skill_signature TEXT DEFAULT '{}'")
+            await db.commit()
+
         # Backfill: extract skills for ALL jobs missing skills (one pass)
         cursor = await db.execute(
             "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
@@ -507,10 +519,14 @@ async def update_job_scores(job_id: int, relevance: int, trust: int):
 async def create_profile(data: dict) -> int:
     db = await get_db()
     try:
+        sig = data.get("skill_signature") or {}
+        if not isinstance(sig, dict):
+            sig = {}
         cursor = await db.execute(
             """INSERT INTO search_profiles (title, expanded_titles, keywords, excluded_keywords,
-               locations, remote_only, min_salary, freshness_hours, min_relevance, min_trust)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               locations, remote_only, min_salary, freshness_hours, min_relevance, min_trust,
+               skill_signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data["title"],
                 json.dumps(data.get("expanded_titles", [])),
@@ -522,6 +538,7 @@ async def create_profile(data: dict) -> int:
                 data.get("freshness_hours", 24),
                 data.get("min_relevance", 0),
                 data.get("min_trust", 0),
+                json.dumps(sig),
             ),
         )
         await db.commit()
@@ -542,6 +559,11 @@ async def get_profiles() -> list[dict]:
             p["keywords"] = json.loads(p["keywords"])
             p["excluded_keywords"] = json.loads(p["excluded_keywords"])
             p["locations"] = json.loads(p["locations"])
+            # v1.9.6: parse skill_signature if present
+            try:
+                p["skill_signature"] = json.loads(p.get("skill_signature") or "{}")
+            except Exception:
+                p["skill_signature"] = {}
             profiles.append(p)
         return profiles
     finally:
@@ -565,6 +587,7 @@ async def update_profile(profile_id: int, data: dict):
             "freshness_hours": ("freshness_hours", lambda v: v),
             "min_relevance": ("min_relevance", lambda v: v),
             "min_trust": ("min_trust", lambda v: v),
+            "skill_signature": ("skill_signature", lambda v: json.dumps(v) if isinstance(v, dict) else (v or "{}")),
         }
         for key, (col, transform) in field_map.items():
             if key in data:

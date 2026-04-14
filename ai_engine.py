@@ -173,6 +173,7 @@ async def score_relevance_ai(
     expanded_titles: list[str],
     keywords: list[str] = [],
     excluded_keywords: list[str] = [],
+    skill_signature: dict | None = None,
 ) -> int:
     """Smart relevance scoring — fuzzy pre-filter saves API calls.
 
@@ -190,8 +191,11 @@ async def score_relevance_ai(
         if kw.lower() in desc_lower or kw.lower() in title_lower:
             return 5
 
-    # Always run fuzzy first (free, instant)
-    fuzzy = score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
+    # Always run fuzzy first (free, instant) — now with skill-signature rescue
+    fuzzy = score_relevance_fuzzy(
+        job_title, job_description, target_title, expanded_titles, keywords,
+        skill_signature=skill_signature,
+    )
 
     # Fall back to fuzzy only if no API key
     if not settings.anthropic_api_key:
@@ -227,7 +231,10 @@ Return ONLY the number.""",
         logger.error(f"[AI] Relevance scoring failed: {e}")
 
     # Fallback to fuzzy if AI call fails
-    return score_relevance_fuzzy(job_title, job_description, target_title, expanded_titles, keywords)
+    return score_relevance_fuzzy(
+        job_title, job_description, target_title, expanded_titles, keywords,
+        skill_signature=skill_signature,
+    )
 
 
 # ──────────────────────────────────────────────
@@ -353,6 +360,7 @@ def score_relevance_fuzzy(
     target_title: str,
     expanded_titles: list[str],
     keywords: list[str] = [],
+    skill_signature: dict | None = None,
 ) -> int:
     """
     Fuzzy matching score with role-family fence.
@@ -423,6 +431,7 @@ def score_relevance_fuzzy(
         target_family = _detect_family(exp.lower())
     job_family = _detect_family(job_lower)
 
+    fence_capped = False
     if target_family and job_family and job_family != target_family:
         allowed = _FAMILY_ADJACENCY.get(target_family, {target_family})
         if job_family not in allowed:
@@ -430,6 +439,30 @@ def score_relevance_fuzzy(
             # keyword overlap should rescue this job.
             base_title_score = min(base_title_score, 22)
             best_score = base_title_score
+            fence_capped = True
+
+    # ── v1.9.6: Skill-signature description rescue ───────────────────────
+    # If the family fence just capped this job at 22, OR if the title-only
+    # score is weak (< 50), check whether the description matches the
+    # profile's skill signature. A strong signature hit means this job is
+    # the role-in-disguise (Solutions Engineer → DA, Product Analyst → DA,
+    # Business Systems Analyst + EDW → DA). In that case we OVERRIDE the
+    # title-based score with the signature-based one, no AI call needed.
+    #
+    # If no signature is provided on the call, fall back to the built-in
+    # signature for the target role (so the rescue still works for older
+    # profile rows that don't have skill_signature populated yet).
+    if (fence_capped or best_score < 50) and job_description:
+        sig = skill_signature
+        if not sig:
+            sig = _get_fallback_signature(target_title)
+        if sig:
+            sig_score, _ = score_signature_match(job_title, job_description, sig)
+            if sig_score >= 60:
+                # Description clearly identifies this as the role —
+                # override whatever the title-based scoring said.
+                best_score = max(best_score, sig_score)
+                base_title_score = best_score
 
     # ── Keyword boost — only when title is ALREADY a reasonable match ────
     # Raised threshold from 40 → 50 so we don't rescue borderline noise.
@@ -447,6 +480,267 @@ def score_relevance_fuzzy(
         best_score = min(100, best_score + min(keyword_boost, 15))
 
     return int(min(100, best_score))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v1.9.6 — SKILL SIGNATURE: description-based rescue for disguised roles
+# ══════════════════════════════════════════════════════════════════════
+#
+# The family fence above is great at killing obvious mismatches but it
+# also blocks legit-but-disguised roles ("Solutions Engineer" that's
+# really 80% data work, "Product Analyst" that's really a Data Analyst,
+# "Business Systems Analyst" with EDW/SQL/Tableau in the description).
+#
+# Skill signature is a per-profile JSON object generated ONCE by Claude
+# Haiku when the profile is created. At runtime the scorer walks the
+# job description with PURE PYTHON (zero AI calls per job) looking for
+# foundation + toolkit hits. If the signature triggers strongly, the
+# scorer overrides the family-fence cap with a description-based score.
+#
+# Cost: 1 AI call per profile (one-time), 0 AI calls per job. Runs
+# in microseconds against thousands of jobs per cycle.
+# ══════════════════════════════════════════════════════════════════════
+
+# Hardcoded fallback signatures for common roles, used when AI is
+# unavailable or hasn't generated one yet. These give us a working
+# rescue path immediately, even before the first AI call.
+_FALLBACK_SIGNATURES: dict[str, dict] = {
+    "data analyst": {
+        "foundation": ["sql", "bigquery", "snowflake", "redshift", "postgres", "mysql", "athena"],
+        "toolkit": ["tableau", "power bi", "powerbi", "looker", "domo", "qlik", "thoughtspot",
+                    "microstrategy", "mode", "metabase", "excel", "google sheets"],
+        "bonus": ["dashboard", "dashboards", "reporting", "kpi", "kpis", "stakeholder",
+                  "ad-hoc analysis", "ad hoc analysis", "a/b test", "ab test", "cohort",
+                  "funnel", "etl", "data visualization", "self-service analytics", "insights"],
+    },
+    "business intelligence analyst": {
+        "foundation": ["sql", "bigquery", "snowflake", "redshift", "postgres", "athena"],
+        "toolkit": ["tableau", "power bi", "powerbi", "looker", "domo", "qlik", "thoughtspot",
+                    "microstrategy", "ssrs", "ssas", "ssis"],
+        "bonus": ["dashboard", "dashboards", "kpi", "reporting", "data warehouse",
+                  "olap", "cube", "etl", "executive reporting", "data mart"],
+    },
+    "data engineer": {
+        "foundation": ["airflow", "spark", "dbt", "kafka", "flink", "beam"],
+        "toolkit": ["snowflake", "bigquery", "redshift", "databricks", "s3", "gcs", "emr",
+                    "glue", "kinesis", "kafka", "pubsub"],
+        "bonus": ["pipeline", "pipelines", "etl", "elt", "orchestration", "dag",
+                  "data lake", "data warehouse", "data platform", "ingestion"],
+    },
+    "data scientist": {
+        "foundation": ["python", "r ", "scikit-learn", "tensorflow", "pytorch", "xgboost"],
+        "toolkit": ["jupyter", "pandas", "numpy", "spark", "mlflow", "kubeflow", "sagemaker"],
+        "bonus": ["machine learning", "deep learning", "regression", "classification",
+                  "clustering", "nlp", "computer vision", "feature engineering",
+                  "model training", "experimentation", "hypothesis testing"],
+    },
+    "software engineer": {
+        "foundation": ["python", "java", "javascript", "typescript", "go", "rust", "c++", "ruby"],
+        "toolkit": ["react", "node", "django", "flask", "spring", "rails", "express",
+                    "kubernetes", "docker", "aws", "gcp", "azure"],
+        "bonus": ["api", "microservices", "rest", "graphql", "ci/cd", "code review",
+                  "system design", "distributed", "production", "scalable"],
+    },
+    "devops engineer": {
+        "foundation": ["terraform", "ansible", "kubernetes", "docker", "helm"],
+        "toolkit": ["aws", "gcp", "azure", "jenkins", "gitlab ci", "github actions",
+                    "argocd", "prometheus", "grafana", "datadog", "elk"],
+        "bonus": ["ci/cd", "infrastructure as code", "iac", "sre", "reliability",
+                  "incident", "on-call", "monitoring", "observability", "deployment"],
+    },
+    "security engineer": {
+        "foundation": ["siem", "splunk", "crowdstrike", "wiz", "tenable", "burp"],
+        "toolkit": ["python", "bash", "wireshark", "nmap", "metasploit", "okta", "iam"],
+        "bonus": ["soc", "incident response", "threat hunting", "penetration test",
+                  "vulnerability", "compliance", "soc 2", "iso 27001", "pci"],
+    },
+    "product manager": {
+        "foundation": ["roadmap", "user research", "prioritization", "okrs"],
+        "toolkit": ["jira", "linear", "figma", "amplitude", "mixpanel", "looker", "tableau"],
+        "bonus": ["stakeholder", "discovery", "go-to-market", "gtm", "launch",
+                  "feature", "user story", "sprint", "agile", "metrics"],
+    },
+    "ux designer": {
+        "foundation": ["figma", "sketch", "adobe xd", "invision", "axure"],
+        "toolkit": ["wireframe", "prototype", "mockup", "design system", "user research"],
+        "bonus": ["accessibility", "wcag", "user testing", "usability", "user flow",
+                  "interaction design", "visual design", "personas"],
+    },
+}
+
+
+def _get_fallback_signature(title: str) -> dict:
+    """Return a built-in signature for common titles, or {} if unknown."""
+    tl = title.lower().strip()
+    # Exact match first
+    if tl in _FALLBACK_SIGNATURES:
+        return _FALLBACK_SIGNATURES[tl]
+    # Fuzzy match against fallback keys
+    best_key = None
+    best_score = 0
+    for key in _FALLBACK_SIGNATURES.keys():
+        s = fuzz.token_set_ratio(tl, key)
+        if s > best_score:
+            best_score = s
+            best_key = key
+    if best_score >= 80 and best_key:
+        return _FALLBACK_SIGNATURES[best_key]
+    return {}
+
+
+async def generate_skill_signature_ai(title: str, keywords: list[str] | None = None) -> dict:
+    """One-time Haiku call per profile: generate a {foundation, toolkit, bonus}
+    signature describing the SKILLS and TOOLS that mark a job description as
+    matching this role. Result is cached on the profile row forever.
+
+    This is the only AI call in the whole signature pipeline — runtime
+    scoring is pure Python.
+    """
+    fallback = _get_fallback_signature(title)
+    if not settings.anthropic_api_key:
+        return fallback
+
+    kw_hint = ""
+    if keywords:
+        kw_hint = f"\nThe user already lists these skills as important: {', '.join(keywords[:20])}"
+
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{
+                "role": "user",
+                "content": f"""For the job role "{title}", list the skills and tools that, when found together in a job description, identify it as this role REGARDLESS of what the job title says.{kw_hint}
+
+Return a JSON object with three lists:
+- "foundation": 5-12 core technical skills/languages/data stores. These are the "must have" items — at least one must appear in the description for the job to plausibly be this role. Examples for Data Analyst: SQL, BigQuery, Snowflake, Redshift, Postgres.
+- "toolkit": 5-15 tools/libraries/frameworks specific to the day-to-day work. At least one must appear alongside a foundation item. Examples for Data Analyst: Tableau, Power BI, Looker, Domo, Excel, Mode, Metabase.
+- "bonus": 8-20 supporting concepts, methodologies, or weaker signals that strengthen the match. Examples for Data Analyst: dashboards, KPIs, stakeholder reporting, ad-hoc analysis, A/B testing, cohort analysis, funnel.
+
+Rules:
+- Use lowercase strings.
+- Use the most common substring people would actually write (e.g. "power bi" not "Microsoft Power BI Desktop").
+- foundation + toolkit together should be enough to identify the role from a description alone, even if the title is something misleading like "Solutions Engineer" or "Business Systems Analyst".
+- Keep items generic enough to match how real job descriptions are written.
+- NO seniority words, NO company names, NO management terms.
+
+Return ONLY the JSON object, no commentary.""",
+            }],
+        )
+        text = response.content[0].text.strip()
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            obj = json.loads(match.group())
+            sig = {
+                "foundation": [s.lower().strip() for s in obj.get("foundation", []) if isinstance(s, str) and s.strip()],
+                "toolkit":    [s.lower().strip() for s in obj.get("toolkit", [])    if isinstance(s, str) and s.strip()],
+                "bonus":      [s.lower().strip() for s in obj.get("bonus", [])      if isinstance(s, str) and s.strip()],
+            }
+            # Merge with fallback so we always have something even if AI returned thin lists
+            if fallback:
+                for bucket in ("foundation", "toolkit", "bonus"):
+                    seen = set(sig[bucket])
+                    for item in fallback.get(bucket, []):
+                        if item not in seen:
+                            sig[bucket].append(item)
+                            seen.add(item)
+            logger.info(f"[Signature] Generated for '{title}': "
+                        f"{len(sig['foundation'])} foundation, {len(sig['toolkit'])} toolkit, {len(sig['bonus'])} bonus")
+            return sig
+    except Exception as e:
+        logger.error(f"[Signature] AI generation failed for '{title}': {e}")
+
+    return fallback
+
+
+def score_signature_match(job_title: str, job_description: str, signature: dict) -> tuple[int, dict]:
+    """ZERO-AI runtime scorer. Walks the description looking for signature
+    matches and returns (score 0-100, breakdown dict).
+
+    Scoring rule:
+      - 0 foundation hits         → 0          (not this role at all)
+      - 1 foundation + 0 toolkit  → 25         (weak — could be anything)
+      - 1 foundation + 1 toolkit  → 60         (looks like the role)
+      - 2+ foundation + 1 toolkit → 70
+      - 1 foundation + 2+ toolkit → 75
+      - 2+ foundation + 2+ toolkit→ 80
+      - + bonus signals (each)    → +2 each, capped at +15
+      - title contains a foundation/toolkit word → +5
+
+    A score of ≥ 60 is enough to bypass the family fence in the main scorer.
+    """
+    if not signature or not isinstance(signature, dict):
+        return 0, {}
+
+    foundation = signature.get("foundation") or []
+    toolkit = signature.get("toolkit") or []
+    bonus = signature.get("bonus") or []
+
+    # Combine title + description for searching — title-mentions get bonus.
+    title_lower = (job_title or "").lower()
+    desc_lower = (job_description or "").lower()
+    blob = title_lower + " \n " + desc_lower
+
+    def count_hits(items):
+        hit_list = []
+        for item in items:
+            it = item.lower().strip()
+            if not it:
+                continue
+            # Word-boundary-ish check — avoid matching "java" inside "javascript".
+            # Cheap heuristic: require non-alnum on both sides OR start/end of blob.
+            idx = blob.find(it)
+            if idx < 0:
+                continue
+            # Verify boundary
+            left_ok = idx == 0 or not blob[idx - 1].isalnum()
+            end = idx + len(it)
+            right_ok = end >= len(blob) or not blob[end].isalnum()
+            if left_ok and right_ok:
+                hit_list.append(it)
+        return hit_list
+
+    found_hits = count_hits(foundation)
+    tool_hits = count_hits(toolkit)
+    bonus_hits = count_hits(bonus)
+
+    n_found = len(found_hits)
+    n_tool = len(tool_hits)
+    n_bonus = len(bonus_hits)
+
+    # Base score from foundation × toolkit combination
+    if n_found == 0:
+        base = 0
+    elif n_tool == 0:
+        base = 25
+    elif n_found == 1 and n_tool == 1:
+        base = 60
+    elif n_found >= 2 and n_tool == 1:
+        base = 70
+    elif n_found == 1 and n_tool >= 2:
+        base = 75
+    else:  # n_found >= 2 and n_tool >= 2
+        base = 80
+
+    # Bonus signals — each adds +2, capped at +15
+    base += min(n_bonus * 2, 15)
+
+    # Title also contains a foundation/toolkit term → +5
+    title_has_signal = any(
+        h in title_lower for h in (found_hits + tool_hits)
+    )
+    if title_has_signal:
+        base += 5
+
+    score = int(min(100, base))
+    return score, {
+        "foundation_hits": found_hits,
+        "toolkit_hits": tool_hits,
+        "bonus_hits": bonus_hits,
+        "base": base,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -731,12 +1025,14 @@ async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     excluded = profile.get("excluded_keywords", [])
     if isinstance(excluded, str):
         excluded = [k.strip() for k in excluded.split(",") if k.strip()]
+    sig = profile.get("skill_signature") or _get_fallback_signature(target_title)
 
     scored = []
     for job in jobs:
         relevance = await score_relevance_ai(
             job["title"], job.get("description", ""),
             target_title, expanded, keywords, excluded,
+            skill_signature=sig,
         )
         # Heuristic trust only — NO API call (saves ~50% of Anthropic costs)
         trust = score_trust_heuristic(
