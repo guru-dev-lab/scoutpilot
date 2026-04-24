@@ -196,17 +196,33 @@ def get_rotation_slice(companies: list[dict], cycle_number: int, platform: str) 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _title_matches_profile(title: str, search_terms: list[str]) -> bool:
-    """True if any word from any search term appears in title."""
+    """v1.9.8: LOOSE title pre-filter for ATS sources.
+
+    ATS boards are curated company data (not noisy aggregators like Indeed),
+    so we let MOST jobs through and rely on the relevance scorer + skill
+    signatures to decide true relevance. The old filter required ALL words
+    from a search term to appear — this killed BI Analyst, Data Analyst,
+    Reporting Analyst, and every disguised role (exactly what skill
+    signatures were built to rescue).
+
+    New rule: accept the job if ANY meaningful word from ANY search term
+    appears in the title. This is just a lightweight pre-filter to avoid
+    inserting completely unrelated roles (e.g. Janitor, Nurse) from a
+    company's full board. The real scoring happens downstream.
+    """
     if not search_terms:
-        return True  # No terms = accept everything
+        return True
     title_lower = title.lower()
+    # v1.9.8: match if ANY meaningful word (> 3 chars) from ANY search term
+    # appears in the title. Still filters out completely unrelated roles
+    # (Janitor, Nurse, Chef) but lets through "BI Analyst" when searching
+    # for "Business Intelligence Analyst" because "analyst" matches.
     for term in search_terms:
         term_lower = term.lower().replace(" remote", "").strip()
-        words = [w for w in term_lower.split() if len(w) > 2]
-        if not words:
-            continue
-        if all(w in title_lower for w in words):
-            return True
+        words = [w for w in term_lower.split() if len(w) > 3]
+        for w in words:
+            if w in title_lower:
+                return True
     return False
 
 
@@ -571,13 +587,14 @@ async def fetch_workday(
 
     postings_raw: list[dict] = []
     try:
-        # Page through up to 3 × 20 = 60 most recent remote postings
-        for offset in (0, 20, 40):
+        # v1.9.8: page through up to 5 × 40 = 200 remote postings per tenant
+        # (was 3 × 20 = 60, which missed most jobs at large employers like NVIDIA)
+        for offset in range(0, 200, 40):
             resp = await client.post(
                 list_url,
                 json={
                     "appliedFacets": {},
-                    "limit": 20,
+                    "limit": 40,
                     "offset": offset,
                     "searchText": "Remote",
                 },
@@ -589,7 +606,7 @@ async def fetch_workday(
             data = resp.json()
             batch = data.get("jobPostings", []) or []
             postings_raw.extend(batch)
-            if len(batch) < 20:
+            if len(batch) < 40:
                 break
     except Exception as e:
         logger.warning(f"[Workday:{slug}] fetch error: {e}")
@@ -848,20 +865,32 @@ async def scrape_all_ats(
         logger.info(f"[ATS] No companies configured — skipping")
         return results
 
-    for platform in active_platforms:
+    # v1.9.8: fire ALL platforms in parallel (was sequential).
+    # Each platform has its own concurrency semaphore internally,
+    # and they hit completely different API domains, so no reason to queue.
+    async def _run_platform(platform):
         slice_ = get_rotation_slice(companies, cycle_number, platform)
         if not slice_:
-            results[platform] = 0
-            continue
+            return platform, 0
         logger.info(
             f"[ATS] cycle#{cycle_number} {platform}: "
             f"fetching {len(slice_)} companies (bucket {cycle_number % ROTATION_BUCKETS + 1}/{ROTATION_BUCKETS})"
         )
         try:
             count = await _fetch_platform(platform, slice_, profile_id, search_terms)
-            results[platform] = count
+            return platform, count
         except Exception as e:
             logger.error(f"[ATS] {platform} dispatcher crashed: {e}")
-            results[platform] = 0
+            return platform, 0
+
+    platform_results = await asyncio.gather(
+        *[_run_platform(p) for p in active_platforms],
+        return_exceptions=True,
+    )
+    for r in platform_results:
+        if isinstance(r, tuple):
+            results[r[0]] = r[1]
+        elif isinstance(r, Exception):
+            logger.error(f"[ATS] platform task crashed: {r}")
 
     return results

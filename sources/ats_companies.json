@@ -1151,5 +1151,30 @@
     "tenant": "workday",
     "wd": "wd5",
     "site": "Workday"
+  },
+  {
+    "slug": "spotify",
+    "name": "Spotify",
+    "ats": "lever"
+  },
+  {
+    "slug": "plaid",
+    "name": "Plaid",
+    "ats": "lever"
+  },
+  {
+    "slug": "neon",
+    "name": "Neon",
+    "ats": "lever"
+  },
+  {
+    "slug": "anyscale",
+    "name": "Anyscale",
+    "ats": "lever"
+  },
+  {
+    "slug": "mistral",
+    "name": "Mistral AI",
+    "ats": "lever"
   }
 ]

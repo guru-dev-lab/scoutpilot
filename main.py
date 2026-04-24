@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.7"
+BUILD_VERSION = "1.9.8"
 BUILD_DATE = "2026-04-24"
 RECENT_CHANGES = [
+    {"version": "1.9.8", "date": "2026-04-24", "status": "active", "change": "ATS THROUGHPUT OVERHAUL: (1) ATS title filter relaxed — old filter required ALL words from search term in title, killing 'BI Analyst' when searching 'Business Intelligence Analyst'. Now matches ANY word, so the relevance scorer + skill signatures do the real filtering. (2) Workday pagination bumped from 60→200 results per tenant. (3) All 5 ATS platforms now fire in parallel instead of sequentially. (4) ATS auto-discovery moved to dedicated hourly scheduler job (was cycle-based, timing was unpredictable). (5) Added 5 new Lever companies (Spotify, Plaid, Neon, Anyscale, Mistral AI). Total 211 companies across 5 ATS platforms."},
     {"version": "1.9.7", "date": "2026-04-24", "status": "active", "change": "PARALLEL SCRAPING OVERHAUL: Indeed, LinkedIn, and Google now fire as separate parallel streams instead of bundled sequential calls. Per-site semaphores (2 concurrent per site) allow Indeed+LinkedIn+Google to run simultaneously while keeping per-site rate reasonable. Search terms bumped from 3→5 per profile, results from 50→100 per query. Inter-call sleep cut from 3s→1s (safe with split sites). ATS rotation buckets reduced from 6→3 so all 206 companies are covered every ~15 min instead of ~30 min. ATS platform concurrency bumped 15→25. Deep sweep also uses the new parallel split-site pattern. Net result: ~4-5× more LinkedIn/Indeed coverage per hour without increasing per-site rate pressure."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
@@ -486,6 +487,30 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(cooldown)
 
     asyncio.create_task(_continuous_scrape_loop())
+
+    # v1.9.8: dedicated hourly ATS auto-discovery job.
+    # Scans recent job URLs, extracts ATS slugs, verifies them against
+    # live APIs, and auto-adds any new companies to the list. Runs every
+    # 1 hour on a separate scheduler job (not tied to cycle counting).
+    async def scheduled_ats_discovery():
+        try:
+            from ats_discovery import discover_new_ats_companies
+            stats = await discover_new_ats_companies()
+            new = stats.get("new_verified", 0)
+            if new > 0:
+                logger.info(f"[Discovery] Hourly run added {new} new ATS companies: {stats}")
+            else:
+                logger.info(f"[Discovery] Hourly run — no new companies (scanned {stats.get('jobs_scanned', 0)} jobs)")
+        except Exception as e:
+            logger.error(f"[Discovery] Hourly run crashed: {e}")
+
+    scheduler.add_job(
+        scheduled_ats_discovery,
+        "interval",
+        hours=1,
+        id="ats_discovery",
+        replace_existing=True,
+    )
 
     # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(

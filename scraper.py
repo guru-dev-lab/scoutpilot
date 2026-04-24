@@ -2152,20 +2152,8 @@ async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:
 
     logger.info(f"[Scrape] Cycle #{cycle_number} done: {total_new} new jobs, {len(all_errors)} errors")
 
-    # ── ATS AUTO-DISCOVERY ──
-    # Every 6 cycles (~30 min) scan recent job URLs to auto-grow the company
-    # list. Fully isolated: failures here never touch the scrape result.
-    try:
-        if cycle_number % 6 == 0:
-            from ats_discovery import discover_new_ats_companies
-            disc_stats = await discover_new_ats_companies()
-            if disc_stats.get("new_verified", 0) > 0:
-                logger.info(
-                    f"[Scrape] ATS auto-discovery added "
-                    f"{disc_stats['new_verified']} new companies"
-                )
-    except Exception as e:
-        logger.error(f"[Scrape] ATS discovery crashed: {e}")
+    # v1.9.8: ATS auto-discovery moved to a dedicated hourly scheduler job
+    # in main.py (no longer tied to cycle counting here).
 
     return {
         "new_jobs": total_new,
