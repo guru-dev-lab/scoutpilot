@@ -1954,17 +1954,19 @@ def _build_profile_terms(profile: dict) -> list[str]:
     return out[:15] if out else [title]
 
 
-# ── Global semaphore: only 1 JobSpy call at a time across ALL bots ──
-# This prevents IP blocking while letting each profile bot run independently.
-# Lazy-init because asyncio.Semaphore must be created inside a running event loop.
-_jobspy_semaphore: Optional[asyncio.Semaphore] = None
+# ── Per-site semaphores: allow parallel calls across sites ──
+# v1.9.7: split Indeed and LinkedIn into separate parallel call streams.
+# Each site gets its own semaphore so indeed and linkedin fire simultaneously.
+# 2 concurrent calls per site keeps rate pressure reasonable while still
+# allowing multiple profiles to search at the same time.
+_site_semaphores: dict[str, asyncio.Semaphore] = {}
 
 
-def _get_jobspy_semaphore() -> asyncio.Semaphore:
-    global _jobspy_semaphore
-    if _jobspy_semaphore is None:
-        _jobspy_semaphore = asyncio.Semaphore(1)
-    return _jobspy_semaphore
+def _get_site_semaphore(site: str) -> asyncio.Semaphore:
+    """Get (or lazy-create) a per-site semaphore. 2 concurrent calls per site."""
+    if site not in _site_semaphores:
+        _site_semaphores[site] = asyncio.Semaphore(2)
+    return _site_semaphores[site]
 
 
 async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
@@ -2054,27 +2056,50 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
 
     logger.info(f"[Bot:{title}] Light sources done — {total_new} new jobs")
 
-    # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
-    MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
-    jobspy_terms = terms[:3]
+    # ── JobSpy: split Indeed & LinkedIn into separate parallel streams ──
+    # v1.9.7: each site fires independently with its own semaphore (2
+    # concurrent per site). This lets Indeed and LinkedIn run at the same
+    # time AND allows multiple profiles to overlap their calls. Combined
+    # with 5 terms × 100 results = 5× more coverage per cycle.
+    MAIN_SITES = [s for s in ["indeed", "linkedin", "google"] if s in enabled]
+    jobspy_terms = terms[:5]  # v1.9.7: bumped from 3 → 5
 
+    async def _jobspy_for_site(site: str, term: str, loc: str):
+        """Fire one JobSpy call for a single site, gated by per-site semaphore."""
+        async with _get_site_semaphore(site):
+            try:
+                result = await scrape_jobspy(
+                    search_term=term, location=loc,
+                    results_wanted=100,  # v1.9.7: bumped from 50 → 100
+                    hours_old=72, profile_id=profile_id,
+                    sites=[site],
+                )
+                return len(result) if isinstance(result, list) else 0
+            except Exception as e:
+                errors.append(f"JobSpy/{site} '{term}' @ '{loc}': {e}")
+                logger.error(f"[Bot:{title}] JobSpy/{site} '{term}' @ '{loc}': {e}")
+                return 0
+            finally:
+                await asyncio.sleep(1)  # v1.9.7: reduced from 3s → 1s per-site
+
+    # Build all (site × term × location) tasks then fire them all at once.
+    # Per-site semaphores (2 concurrent) naturally throttle each site while
+    # allowing cross-site parallelism.
+    jobspy_tasks = []
     for term in jobspy_terms:
-        if not MAIN_SITES:
-            break  # Both indeed and linkedin are disabled
         effective_term = f"{term} remote" if remote_only else term
         for loc in effective_locations:
-            async with _get_jobspy_semaphore():
-                try:
-                    result = await scrape_jobspy(
-                        search_term=effective_term, location=loc,
-                        results_wanted=50, hours_old=72, profile_id=profile_id,
-                        sites=MAIN_SITES,
-                    )
-                    total_new += len(result) if isinstance(result, list) else 0
-                except Exception as e:
-                    errors.append(f"JobSpy '{term}' @ '{loc}': {e}")
-                    logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
-            await asyncio.sleep(3)
+            for site in MAIN_SITES:
+                jobspy_tasks.append(_jobspy_for_site(site, effective_term, loc))
+
+    if jobspy_tasks:
+        jobspy_results = await asyncio.gather(*jobspy_tasks, return_exceptions=True)
+        for r in jobspy_results:
+            if isinstance(r, int):
+                total_new += r
+            elif isinstance(r, Exception):
+                errors.append(f"JobSpy: {r}")
+    logger.info(f"[Bot:{title}] JobSpy done — {len(jobspy_tasks)} calls across {len(MAIN_SITES)} sites")
 
     # ── ATS SOURCES (Greenhouse / Lever / Ashby) ──
     # Fully isolated: any failure here cannot affect existing sources above.
