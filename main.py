@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.9"
+BUILD_VERSION = "1.9.10"
 BUILD_DATE = "2026-04-24"
 RECENT_CHANGES = [
+    {"version": "1.9.10", "date": "2026-04-24", "status": "active", "change": "SCORING FIX: The scoring loop was only processing 100 jobs per cycle and only looking back 1 hour — with parallel scraping pulling 500+ jobs per cycle, thousands went unscored (stuck at default REL: 50). Fixed: (1) Scoring now processes up to 500 jobs per cycle looking back 72 hours. (2) On startup, a background task finds ALL jobs with the default REL:50/Trust:50 and runs full fuzzy+AI scoring on them (up to 5,000). This means Field Operations Manager, Technical Recruiter, VP Marketing etc. will finally get their proper low scores and stop showing up for Data Analyst profiles."},
     {"version": "1.9.9", "date": "2026-04-24", "status": "active", "change": "SALARY EXTRACTION FROM DESCRIPTIONS: Two-stage pay extraction for jobs missing structured salary data. (1) Regex engine handles $60k-$80k, $30-$45/hr, £45,000-£55,000, salary range labels, and 20+ formats — zero AI cost. (2) AI fallback via Haiku fires only when regex misses but pay keywords are detected in the description. New salary_period column (yearly/hourly/monthly) so the frontend displays the right unit instead of guessing from magnitude. Extraction runs at insert time for all new jobs. New POST /api/admin/backfill-salary endpoint for existing jobs (batch=500, capped at 50 AI calls). Salary badge on job cards now shows proper formatting based on period."},
     {"version": "1.9.8", "date": "2026-04-24", "status": "active", "change": "ATS THROUGHPUT OVERHAUL: (1) ATS title filter relaxed — old filter required ALL words from search term in title, killing 'BI Analyst' when searching 'Business Intelligence Analyst'. Now matches ANY word, so the relevance scorer + skill signatures do the real filtering. (2) Workday pagination bumped from 60→200 results per tenant. (3) All 5 ATS platforms now fire in parallel instead of sequentially. (4) ATS auto-discovery moved to dedicated hourly scheduler job (was cycle-based, timing was unpredictable). (5) Added 5 new Lever companies (Spotify, Plaid, Neon, Anyscale, Mistral AI). Total 211 companies across 5 ATS platforms."},
     {"version": "1.9.7", "date": "2026-04-24", "status": "active", "change": "PARALLEL SCRAPING OVERHAUL: Indeed, LinkedIn, and Google now fire as separate parallel streams instead of bundled sequential calls. Per-site semaphores (2 concurrent per site) allow Indeed+LinkedIn+Google to run simultaneously while keeping per-site rate reasonable. Search terms bumped from 3→5 per profile, results from 50→100 per query. Inter-call sleep cut from 3s→1s (safe with split sites). ATS rotation buckets reduced from 6→3 so all 206 companies are covered every ~15 min instead of ~30 min. ATS platform concurrency bumped 15→25. Deep sweep also uses the new parallel split-site pattern. Net result: ~4-5× more LinkedIn/Indeed coverage per hour without increasing per-site rate pressure."},
@@ -142,7 +143,10 @@ async def scheduled_scrape(cycle_number: int = 1):
         # Fuzzy runs first as fast pre-filter; AI only called when score is ambiguous (20-85)
         from database import get_jobs as _get_jobs, get_db as _get_db
         from ai_engine import score_relevance_ai, score_relevance_fuzzy, extract_direct_link_ai
-        new_jobs = await _get_jobs(hours=1, status="new", limit=100)
+        # Score ALL unscored jobs — not just last hour.  Jobs that arrived
+        # while a previous cycle was running can slip past the 1-hour window.
+        # Use relevance_score=50 (the default) as a proxy for "never scored".
+        new_jobs = await _get_jobs(hours=72, status="new", limit=500)
 
         # Build combined keyword/exclusion lists across all profiles
         all_profiles_data = []
@@ -327,7 +331,7 @@ async def scheduled_deep_sweep():
         if total_new > 0:
             from database import get_jobs as _get_jobs
             from ai_engine import score_relevance_fuzzy
-            new_jobs = await _get_jobs(hours=1, status="new", limit=200)
+            new_jobs = await _get_jobs(hours=72, status="new", limit=500)
 
             # Build profile data once
             all_pd = []
@@ -628,6 +632,94 @@ async def lifespan(app: FastAPI):
         finally:
             await db.close()
     asyncio.create_task(_backfill_salaries())
+
+    # ── v1.9.10: rescore all unscored jobs on startup ──
+    # The old scoring loop only scored 100 jobs per cycle and only looked
+    # at the last 1 hour.  With parallel scraping pulling 500+ per cycle,
+    # thousands slipped through with the default REL: 50.  This startup
+    # task catches every unscored job and runs fuzzy + AI scoring.
+    async def _rescore_unscored():
+        await asyncio.sleep(45)  # let salary backfill finish first
+        from database import get_db, get_profiles, update_job_scores
+        from ai_engine import score_relevance_fuzzy, score_relevance_ai
+        profiles = await get_profiles()
+        if not profiles:
+            return
+
+        # Build profile data
+        all_pd = []
+        for p in profiles:
+            kws = p.get("keywords", [])
+            if isinstance(kws, str):
+                kws = [k.strip() for k in kws.split(",") if k.strip()]
+            excl = p.get("excluded_keywords", [])
+            if isinstance(excl, str):
+                excl = [k.strip() for k in excl.split(",") if k.strip()]
+            all_pd.append({
+                "title": p["title"],
+                "expanded": p.get("expanded_titles", []),
+                "keywords": kws,
+                "excluded": excl,
+                "signature": p.get("skill_signature") or {},
+            })
+
+        db = await get_db()
+        try:
+            # Find all jobs still at the default score of 50 (never scored)
+            cursor = await db.execute(
+                "SELECT id, title, description FROM jobs "
+                "WHERE relevance_score = 50 AND trust_score = 50 "
+                "LIMIT 5000"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                logger.info("[Startup] No unscored jobs to rescore")
+                return
+
+            scored = 0
+            for row in rows:
+                job_id, title, desc = row[0], row[1] or "", row[2] or ""
+
+                # Find best profile via fuzzy
+                best_fuzzy = 0
+                best_pd = all_pd[0]
+                for pd in all_pd:
+                    f = score_relevance_fuzzy(
+                        title, desc, pd["title"], pd["expanded"],
+                        pd["keywords"], skill_signature=pd.get("signature"),
+                    )
+                    if f > best_fuzzy:
+                        best_fuzzy = f
+                        best_pd = pd
+
+                # AI scoring for best profile
+                try:
+                    relevance = await score_relevance_ai(
+                        title, desc,
+                        best_pd["title"], best_pd["expanded"],
+                        best_pd["keywords"], best_pd["excluded"],
+                        skill_signature=best_pd.get("signature"),
+                    )
+                except Exception:
+                    relevance = best_fuzzy
+
+                await db.execute(
+                    "UPDATE jobs SET relevance_score = ? WHERE id = ?",
+                    (relevance, job_id)
+                )
+                scored += 1
+                # Commit in batches to avoid holding locks
+                if scored % 50 == 0:
+                    await db.commit()
+                    logger.info(f"[Startup] Rescore progress: {scored}/{len(rows)}")
+
+            await db.commit()
+            logger.info(f"[Startup] Rescore complete: {scored} jobs scored")
+        except Exception as e:
+            logger.error(f"[Startup] Rescore failed: {e}")
+        finally:
+            await db.close()
+    asyncio.create_task(_rescore_unscored())
 
     yield
     scheduler.shutdown()
