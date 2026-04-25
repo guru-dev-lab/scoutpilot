@@ -588,6 +588,47 @@ async def lifespan(app: FastAPI):
             await db.close()
     asyncio.create_task(_fix_work_types())
 
+    # ── v1.9.9: one-time salary backfill on startup ──
+    # Extract salary from descriptions for existing jobs that have salary_min=0.
+    # Runs regex on all (free), AI on up to 100 with pay keywords.
+    # Non-blocking background task so startup isn't delayed.
+    async def _backfill_salaries():
+        await asyncio.sleep(30)  # let the app warm up first
+        from database import get_db
+        from salary_extractor import extract_salary_regex, has_pay_keywords, extract_salary_ai
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id, description FROM jobs "
+                "WHERE (salary_min = 0 AND salary_max = 0) "
+                "AND description != '' AND description IS NOT NULL "
+                "LIMIT 5000"
+            )
+            rows = await cursor.fetchall()
+            updated = 0
+            ai_calls = 0
+            for row in rows:
+                job_id, desc = row[0], row[1]
+                if not desc:
+                    continue
+                result = extract_salary_regex(desc)
+                if not result and has_pay_keywords(desc) and ai_calls < 100:
+                    result = await extract_salary_ai(desc)
+                    ai_calls += 1
+                if result:
+                    await db.execute(
+                        "UPDATE jobs SET salary_min = ?, salary_max = ?, salary_period = ? WHERE id = ?",
+                        (result["min"], result["max"], result["period"], job_id)
+                    )
+                    updated += 1
+            await db.commit()
+            logger.info(f"[Startup] Salary backfill: {updated}/{len(rows)} jobs updated ({ai_calls} AI calls)")
+        except Exception as e:
+            logger.error(f"[Startup] Salary backfill failed: {e}")
+        finally:
+            await db.close()
+    asyncio.create_task(_backfill_salaries())
+
     yield
     scheduler.shutdown()
 
