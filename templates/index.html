@@ -1141,9 +1141,22 @@ function renderJobs(jobs, searchInfo) {
       badges += '<span class="badge time-blue">' + fmtMs(pMs) + ' ago</span>';
     }
 
-    // 4. Salary
-    if (job.salary_max > 1000) badges += '<span class="badge salary">$' + Math.round(job.salary_min/1000) + 'k-$' + Math.round(job.salary_max/1000) + 'k</span>';
-    else if (job.salary_max > 0 && job.salary_max <= 1000) badges += '<span class="badge salary">$' + job.salary_min + '-$' + job.salary_max + '/hr</span>';
+    // 4. Salary — use salary_period from DB when available, else infer from magnitude
+    if (job.salary_max > 0 || job.salary_min > 0) {
+      var period = job.salary_period || (job.salary_max <= 500 ? 'hourly' : 'yearly');
+      var salMin = job.salary_min || 0;
+      var salMax = job.salary_max || salMin;
+      var salStr = '';
+      if (period === 'hourly') {
+        salStr = '$' + salMin + (salMax > salMin ? '-$' + salMax : '') + '/hr';
+      } else if (period === 'monthly') {
+        salStr = '$' + (salMin/1000).toFixed(1) + 'k' + (salMax > salMin ? '-$' + (salMax/1000).toFixed(1) + 'k' : '') + '/mo';
+      } else {
+        // yearly (default)
+        salStr = '$' + Math.round(salMin/1000) + 'k' + (salMax > salMin ? '-$' + Math.round(salMax/1000) + 'k' : '');
+      }
+      badges += '<span class="badge salary">' + salStr + '</span>';
+    }
 
     // 5. Relevance & Trust
     var rel = Math.round(job.relevance_score);

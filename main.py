@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.8"
+BUILD_VERSION = "1.9.9"
 BUILD_DATE = "2026-04-24"
 RECENT_CHANGES = [
+    {"version": "1.9.9", "date": "2026-04-24", "status": "active", "change": "SALARY EXTRACTION FROM DESCRIPTIONS: Two-stage pay extraction for jobs missing structured salary data. (1) Regex engine handles $60k-$80k, $30-$45/hr, £45,000-£55,000, salary range labels, and 20+ formats — zero AI cost. (2) AI fallback via Haiku fires only when regex misses but pay keywords are detected in the description. New salary_period column (yearly/hourly/monthly) so the frontend displays the right unit instead of guessing from magnitude. Extraction runs at insert time for all new jobs. New POST /api/admin/backfill-salary endpoint for existing jobs (batch=500, capped at 50 AI calls). Salary badge on job cards now shows proper formatting based on period."},
     {"version": "1.9.8", "date": "2026-04-24", "status": "active", "change": "ATS THROUGHPUT OVERHAUL: (1) ATS title filter relaxed — old filter required ALL words from search term in title, killing 'BI Analyst' when searching 'Business Intelligence Analyst'. Now matches ANY word, so the relevance scorer + skill signatures do the real filtering. (2) Workday pagination bumped from 60→200 results per tenant. (3) All 5 ATS platforms now fire in parallel instead of sequentially. (4) ATS auto-discovery moved to dedicated hourly scheduler job (was cycle-based, timing was unpredictable). (5) Added 5 new Lever companies (Spotify, Plaid, Neon, Anyscale, Mistral AI). Total 211 companies across 5 ATS platforms."},
     {"version": "1.9.7", "date": "2026-04-24", "status": "active", "change": "PARALLEL SCRAPING OVERHAUL: Indeed, LinkedIn, and Google now fire as separate parallel streams instead of bundled sequential calls. Per-site semaphores (2 concurrent per site) allow Indeed+LinkedIn+Google to run simultaneously while keeping per-site rate reasonable. Search terms bumped from 3→5 per profile, results from 50→100 per query. Inter-call sleep cut from 3s→1s (safe with split sites). ATS rotation buckets reduced from 6→3 so all 206 companies are covered every ~15 min instead of ~30 min. ATS platform concurrency bumped 15→25. Deep sweep also uses the new parallel split-site pattern. Net result: ~4-5× more LinkedIn/Indeed coverage per hour without increasing per-site rate pressure."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1400,6 +1401,49 @@ async def api_clear_all_jobs():
         return {"ok": True, "deleted": count}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await db.close()
+
+
+@app.post("/api/admin/backfill-salary")
+async def api_backfill_salary(batch: int = Query(500, ge=1, le=5000)):
+    """Admin: extract salary from descriptions for existing jobs missing pay data.
+    Runs regex on all, AI fallback only on those with pay keywords. Batch-limited."""
+    from database import get_db
+    from salary_extractor import extract_salary_regex, has_pay_keywords, extract_salary_ai
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, description FROM jobs "
+            "WHERE (salary_min = 0 AND salary_max = 0) "
+            "AND description != '' AND description IS NOT NULL "
+            "LIMIT ?", (batch,)
+        )
+        rows = await cursor.fetchall()
+        updated = 0
+        ai_calls = 0
+        for row in rows:
+            job_id, desc = row[0], row[1]
+            if not desc:
+                continue
+            # Stage 1: regex
+            result = extract_salary_regex(desc)
+            # Stage 2: AI fallback
+            if not result and has_pay_keywords(desc) and ai_calls < 50:
+                result = await extract_salary_ai(desc)
+                ai_calls += 1
+            if result:
+                await db.execute(
+                    "UPDATE jobs SET salary_min = ?, salary_max = ?, salary_period = ? WHERE id = ?",
+                    (result["min"], result["max"], result["period"], job_id)
+                )
+                updated += 1
+        await db.commit()
+        logger.info(f"[Admin] Salary backfill: {updated}/{len(rows)} jobs updated ({ai_calls} AI calls)")
+        return {"ok": True, "processed": len(rows), "updated": updated, "ai_calls": ai_calls}
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "traceback": traceback.format_exc()}, status_code=500)
     finally:
         await db.close()
 
