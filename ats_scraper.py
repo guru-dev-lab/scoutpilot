@@ -36,14 +36,11 @@ logger = logging.getLogger("scoutpilot.ats")
 COMPANIES_FILE = Path(__file__).parent / "sources" / "ats_companies.json"
 
 # How many rotation buckets. Full company list is covered every
-# ROTATION_BUCKETS × cycle_interval minutes.
-# v1.9.7: reduced from 6 → 3 so all 206 companies are covered every
-# ~15 min instead of ~30 min. ATS APIs are free and fast (no anti-bot).
-ROTATION_BUCKETS = 3
+# ROTATION_BUCKETS × cycle_interval minutes (default: 6 × 5min = 30min).
+ROTATION_BUCKETS = 6
 
 # Max concurrent HTTP fetches per ATS platform
-# v1.9.7: bumped from 15 → 25 to match the faster rotation
-PLATFORM_CONCURRENCY = 25
+PLATFORM_CONCURRENCY = 15
 
 # Hard cap on inserts per ATS platform per cycle (safety net)
 MAX_INSERTS_PER_PLATFORM_PER_CYCLE = 300
@@ -196,33 +193,17 @@ def get_rotation_slice(companies: list[dict], cycle_number: int, platform: str) 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _title_matches_profile(title: str, search_terms: list[str]) -> bool:
-    """v1.9.8: LOOSE title pre-filter for ATS sources.
-
-    ATS boards are curated company data (not noisy aggregators like Indeed),
-    so we let MOST jobs through and rely on the relevance scorer + skill
-    signatures to decide true relevance. The old filter required ALL words
-    from a search term to appear — this killed BI Analyst, Data Analyst,
-    Reporting Analyst, and every disguised role (exactly what skill
-    signatures were built to rescue).
-
-    New rule: accept the job if ANY meaningful word from ANY search term
-    appears in the title. This is just a lightweight pre-filter to avoid
-    inserting completely unrelated roles (e.g. Janitor, Nurse) from a
-    company's full board. The real scoring happens downstream.
-    """
+    """True if any word from any search term appears in title."""
     if not search_terms:
-        return True
+        return True  # No terms = accept everything
     title_lower = title.lower()
-    # v1.9.8: match if ANY meaningful word (> 3 chars) from ANY search term
-    # appears in the title. Still filters out completely unrelated roles
-    # (Janitor, Nurse, Chef) but lets through "BI Analyst" when searching
-    # for "Business Intelligence Analyst" because "analyst" matches.
     for term in search_terms:
         term_lower = term.lower().replace(" remote", "").strip()
-        words = [w for w in term_lower.split() if len(w) > 3]
-        for w in words:
-            if w in title_lower:
-                return True
+        words = [w for w in term_lower.split() if len(w) > 2]
+        if not words:
+            continue
+        if all(w in title_lower for w in words):
+            return True
     return False
 
 
@@ -587,14 +568,13 @@ async def fetch_workday(
 
     postings_raw: list[dict] = []
     try:
-        # v1.9.8: page through up to 5 × 40 = 200 remote postings per tenant
-        # (was 3 × 20 = 60, which missed most jobs at large employers like NVIDIA)
-        for offset in range(0, 200, 40):
+        # Page through up to 3 × 20 = 60 most recent remote postings
+        for offset in (0, 20, 40):
             resp = await client.post(
                 list_url,
                 json={
                     "appliedFacets": {},
-                    "limit": 40,
+                    "limit": 20,
                     "offset": offset,
                     "searchText": "Remote",
                 },
@@ -606,7 +586,7 @@ async def fetch_workday(
             data = resp.json()
             batch = data.get("jobPostings", []) or []
             postings_raw.extend(batch)
-            if len(batch) < 40:
+            if len(batch) < 20:
                 break
     except Exception as e:
         logger.warning(f"[Workday:{slug}] fetch error: {e}")
@@ -865,32 +845,20 @@ async def scrape_all_ats(
         logger.info(f"[ATS] No companies configured — skipping")
         return results
 
-    # v1.9.8: fire ALL platforms in parallel (was sequential).
-    # Each platform has its own concurrency semaphore internally,
-    # and they hit completely different API domains, so no reason to queue.
-    async def _run_platform(platform):
+    for platform in active_platforms:
         slice_ = get_rotation_slice(companies, cycle_number, platform)
         if not slice_:
-            return platform, 0
+            results[platform] = 0
+            continue
         logger.info(
             f"[ATS] cycle#{cycle_number} {platform}: "
             f"fetching {len(slice_)} companies (bucket {cycle_number % ROTATION_BUCKETS + 1}/{ROTATION_BUCKETS})"
         )
         try:
             count = await _fetch_platform(platform, slice_, profile_id, search_terms)
-            return platform, count
+            results[platform] = count
         except Exception as e:
             logger.error(f"[ATS] {platform} dispatcher crashed: {e}")
-            return platform, 0
-
-    platform_results = await asyncio.gather(
-        *[_run_platform(p) for p in active_platforms],
-        return_exceptions=True,
-    )
-    for r in platform_results:
-        if isinstance(r, tuple):
-            results[r[0]] = r[1]
-        elif isinstance(r, Exception):
-            logger.error(f"[ATS] platform task crashed: {r}")
+            results[platform] = 0
 
     return results

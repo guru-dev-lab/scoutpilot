@@ -6,9 +6,10 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.10"
-BUILD_DATE = "2026-04-24"
+BUILD_VERSION = "1.9.11"
+BUILD_DATE = "2026-04-27"
 RECENT_CHANGES = [
+    {"version": "1.9.11", "date": "2026-04-27", "status": "active", "change": "REVERT AGGRESSIVE SCRAPING: Rolled back v1.9.7/v1.9.8 parallel scraping changes that killed LinkedIn and Workday (both dead since Apr 24). Restored sequential JobSpy calls with global semaphore, 3s sleep, original concurrency. Kept: salary extraction from descriptions (regex+AI), scoring fix (500 jobs/cycle, 72h window), startup rescore for unscored jobs, salary backfill."},
     {"version": "1.9.10", "date": "2026-04-24", "status": "active", "change": "SCORING FIX: The scoring loop was only processing 100 jobs per cycle and only looking back 1 hour — with parallel scraping pulling 500+ jobs per cycle, thousands went unscored (stuck at default REL: 50). Fixed: (1) Scoring now processes up to 500 jobs per cycle looking back 72 hours. (2) On startup, a background task finds ALL jobs with the default REL:50/Trust:50 and runs full fuzzy+AI scoring on them (up to 5,000). This means Field Operations Manager, Technical Recruiter, VP Marketing etc. will finally get their proper low scores and stop showing up for Data Analyst profiles."},
     {"version": "1.9.9", "date": "2026-04-24", "status": "active", "change": "SALARY EXTRACTION FROM DESCRIPTIONS: Two-stage pay extraction for jobs missing structured salary data. (1) Regex engine handles $60k-$80k, $30-$45/hr, £45,000-£55,000, salary range labels, and 20+ formats — zero AI cost. (2) AI fallback via Haiku fires only when regex misses but pay keywords are detected in the description. New salary_period column (yearly/hourly/monthly) so the frontend displays the right unit instead of guessing from magnitude. Extraction runs at insert time for all new jobs. New POST /api/admin/backfill-salary endpoint for existing jobs (batch=500, capped at 50 AI calls). Salary badge on job cards now shows proper formatting based on period."},
     {"version": "1.9.8", "date": "2026-04-24", "status": "active", "change": "ATS THROUGHPUT OVERHAUL: (1) ATS title filter relaxed — old filter required ALL words from search term in title, killing 'BI Analyst' when searching 'Business Intelligence Analyst'. Now matches ANY word, so the relevance scorer + skill signatures do the real filtering. (2) Workday pagination bumped from 60→200 results per tenant. (3) All 5 ATS platforms now fire in parallel instead of sequentially. (4) ATS auto-discovery moved to dedicated hourly scheduler job (was cycle-based, timing was unpredictable). (5) Added 5 new Lever companies (Spotify, Plaid, Neon, Anyscale, Mistral AI). Total 211 companies across 5 ATS platforms."},
@@ -296,36 +297,19 @@ async def scheduled_deep_sweep():
             clean_expanded = _sanitize_expansions(title, expanded)
             search_terms = [title] + [t for t in clean_expanded if t.lower() != title.lower()]
 
-            # v1.9.7: deep sweep also uses split-site parallel calls
-            from scraper import _get_site_semaphore
-            enabled = await get_enabled_sources()
-            sweep_sites = [s for s in ["indeed", "linkedin", "google"] if s in enabled]
-
-            async def _deep_sweep_call(site, term, loc):
-                async with _get_site_semaphore(site):
-                    try:
-                        r = await scrape_jobspy(
-                            search_term=term, location=loc,
-                            results_wanted=100, hours_old=168,
-                            profile_id=profile_id, sites=[site],
-                        )
-                        return len(r) if isinstance(r, list) else 0
-                    except Exception as e:
-                        logger.error(f"[Deep Sweep] {site} '{term}': {e}")
-                        return 0
-                    finally:
-                        await asyncio.sleep(1)
-
-            sweep_tasks = []
-            for term in search_terms[:5]:
+            for term in search_terms[:5]:  # cap terms for deep sweep
                 for loc in (locations if locations else [""]):
-                    for site in sweep_sites:
-                        sweep_tasks.append(_deep_sweep_call(site, term, loc))
-            if sweep_tasks:
-                sweep_results = await asyncio.gather(*sweep_tasks, return_exceptions=True)
-                for r in sweep_results:
-                    if isinstance(r, int):
-                        total_new += r
+                    try:
+                        new_jobs = await scrape_jobspy(
+                            search_term=term,
+                            location=loc,
+                            results_wanted=50,
+                            hours_old=168,  # 7 days
+                            profile_id=profile_id,
+                        )
+                        total_new += len(new_jobs)
+                    except Exception as e:
+                        logger.error(f"[Deep Sweep] Error: {e}")
 
         # Score any new finds — best-profile-only + fuzzy gate (same as regular scrape)
         if total_new > 0:
@@ -492,30 +476,6 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(cooldown)
 
     asyncio.create_task(_continuous_scrape_loop())
-
-    # v1.9.8: dedicated hourly ATS auto-discovery job.
-    # Scans recent job URLs, extracts ATS slugs, verifies them against
-    # live APIs, and auto-adds any new companies to the list. Runs every
-    # 1 hour on a separate scheduler job (not tied to cycle counting).
-    async def scheduled_ats_discovery():
-        try:
-            from ats_discovery import discover_new_ats_companies
-            stats = await discover_new_ats_companies()
-            new = stats.get("new_verified", 0)
-            if new > 0:
-                logger.info(f"[Discovery] Hourly run added {new} new ATS companies: {stats}")
-            else:
-                logger.info(f"[Discovery] Hourly run — no new companies (scanned {stats.get('jobs_scanned', 0)} jobs)")
-        except Exception as e:
-            logger.error(f"[Discovery] Hourly run crashed: {e}")
-
-    scheduler.add_job(
-        scheduled_ats_discovery,
-        "interval",
-        hours=1,
-        id="ats_discovery",
-        replace_existing=True,
-    )
 
     # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(
