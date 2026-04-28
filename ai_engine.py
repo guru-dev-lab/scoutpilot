@@ -201,13 +201,10 @@ async def score_relevance_ai(
     if not settings.anthropic_api_key:
         return fuzzy
 
-    # COST GATE: skip AI for obvious cases
-    # v1.9.11: widened gate to 25-90 → only truly ambiguous jobs get AI
-    # The fuzzy scorer with family fence + skill signatures is already
-    # very good at separating matches from mismatches.
+    # COST GATE: skip AI for obvious cases (wider gate = fewer API calls)
     if fuzzy < 25:
         return fuzzy  # obvious mismatch — NO API call
-    if fuzzy > 90:
+    if fuzzy > 85:
         return fuzzy  # strong match — NO API call
 
     try:

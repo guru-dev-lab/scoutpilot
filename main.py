@@ -6,14 +6,9 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.11"
-BUILD_DATE = "2026-04-27"
+BUILD_VERSION = "1.9.6-stable"
+BUILD_DATE = "2026-04-28"
 RECENT_CHANGES = [
-    {"version": "1.9.11", "date": "2026-04-27", "status": "active", "change": "REVERT AGGRESSIVE SCRAPING: Rolled back v1.9.7/v1.9.8 parallel scraping changes that killed LinkedIn and Workday (both dead since Apr 24). Restored sequential JobSpy calls with global semaphore, 3s sleep, original concurrency. Kept: salary extraction from descriptions (regex+AI), scoring fix (500 jobs/cycle, 72h window), startup rescore for unscored jobs, salary backfill."},
-    {"version": "1.9.10", "date": "2026-04-24", "status": "active", "change": "SCORING FIX: The scoring loop was only processing 100 jobs per cycle and only looking back 1 hour — with parallel scraping pulling 500+ jobs per cycle, thousands went unscored (stuck at default REL: 50). Fixed: (1) Scoring now processes up to 500 jobs per cycle looking back 72 hours. (2) On startup, a background task finds ALL jobs with the default REL:50/Trust:50 and runs full fuzzy+AI scoring on them (up to 5,000). This means Field Operations Manager, Technical Recruiter, VP Marketing etc. will finally get their proper low scores and stop showing up for Data Analyst profiles."},
-    {"version": "1.9.9", "date": "2026-04-24", "status": "active", "change": "SALARY EXTRACTION FROM DESCRIPTIONS: Two-stage pay extraction for jobs missing structured salary data. (1) Regex engine handles $60k-$80k, $30-$45/hr, £45,000-£55,000, salary range labels, and 20+ formats — zero AI cost. (2) AI fallback via Haiku fires only when regex misses but pay keywords are detected in the description. New salary_period column (yearly/hourly/monthly) so the frontend displays the right unit instead of guessing from magnitude. Extraction runs at insert time for all new jobs. New POST /api/admin/backfill-salary endpoint for existing jobs (batch=500, capped at 50 AI calls). Salary badge on job cards now shows proper formatting based on period."},
-    {"version": "1.9.8", "date": "2026-04-24", "status": "active", "change": "ATS THROUGHPUT OVERHAUL: (1) ATS title filter relaxed — old filter required ALL words from search term in title, killing 'BI Analyst' when searching 'Business Intelligence Analyst'. Now matches ANY word, so the relevance scorer + skill signatures do the real filtering. (2) Workday pagination bumped from 60→200 results per tenant. (3) All 5 ATS platforms now fire in parallel instead of sequentially. (4) ATS auto-discovery moved to dedicated hourly scheduler job (was cycle-based, timing was unpredictable). (5) Added 5 new Lever companies (Spotify, Plaid, Neon, Anyscale, Mistral AI). Total 211 companies across 5 ATS platforms."},
-    {"version": "1.9.7", "date": "2026-04-24", "status": "active", "change": "PARALLEL SCRAPING OVERHAUL: Indeed, LinkedIn, and Google now fire as separate parallel streams instead of bundled sequential calls. Per-site semaphores (2 concurrent per site) allow Indeed+LinkedIn+Google to run simultaneously while keeping per-site rate reasonable. Search terms bumped from 3→5 per profile, results from 50→100 per query. Inter-call sleep cut from 3s→1s (safe with split sites). ATS rotation buckets reduced from 6→3 so all 206 companies are covered every ~15 min instead of ~30 min. ATS platform concurrency bumped 15→25. Deep sweep also uses the new parallel split-site pattern. Net result: ~4-5× more LinkedIn/Indeed coverage per hour without increasing per-site rate pressure."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
     {"version": "1.9.4", "date": "2026-04-13", "status": "active", "change": "THREE-PATH AUTO-DISCOVERY: Discovery now runs three paths in order. (1) URL extraction from direct_apply_url/source_url — now also captures JobSpy's job_url_direct field, which is the real employer ATS link for Indeed rows (JobSpy already resolved it during its scrape, we just weren't reading it). (2) HTML second-link fetch — for aggregator URLs (Indeed/LinkedIn/Glassdoor/SimplyHired/Wellfound/BuiltIn/etc), ScoutPilot GETs the listing page and regex-extracts any embedded ATS apply URL. (3) Name-based slug fuzzing — generates slug variants from unknown company names, probes each ATS, and fuzzy-matches the returned board name against the expected company (rapidfuzz threshold 70) to prevent false positives. Negative results cached in discovery_checked.json so repeat probes are free. The list now grows from Indeed/LinkedIn jobs too, not just direct-ATS jobs."},
@@ -144,10 +139,7 @@ async def scheduled_scrape(cycle_number: int = 1):
         # Fuzzy runs first as fast pre-filter; AI only called when score is ambiguous (20-85)
         from database import get_jobs as _get_jobs, get_db as _get_db
         from ai_engine import score_relevance_ai, score_relevance_fuzzy, extract_direct_link_ai
-        # Score ALL unscored jobs — not just last hour.  Jobs that arrived
-        # while a previous cycle was running can slip past the 1-hour window.
-        # Use relevance_score=50 (the default) as a proxy for "never scored".
-        new_jobs = await _get_jobs(hours=72, status="new", limit=500)
+        new_jobs = await _get_jobs(hours=1, status="new", limit=100)
 
         # Build combined keyword/exclusion lists across all profiles
         all_profiles_data = []
@@ -315,7 +307,7 @@ async def scheduled_deep_sweep():
         if total_new > 0:
             from database import get_jobs as _get_jobs
             from ai_engine import score_relevance_fuzzy
-            new_jobs = await _get_jobs(hours=72, status="new", limit=500)
+            new_jobs = await _get_jobs(hours=1, status="new", limit=200)
 
             # Build profile data once
             all_pd = []
@@ -495,8 +487,9 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("[Scheduler] Continuous scrape loop started. Fast cycles every ~30s, JobSpy every 3rd (~90s cooldown), full sweep every 15th (~120s). Deep sweep 12h, cleanup 3AM.")
 
-    # Re-expand ALL profile titles with latest AI prompt (25+ titles per profile)
-    asyncio.create_task(_re_expand_profiles())
+    # DISABLED — was re-expanding ALL profiles on every deploy (~1 AI call per profile)
+    # Titles only need re-expansion when the prompt changes. Use /api/admin/re-expand-titles manually.
+    # asyncio.create_task(_re_expand_profiles())
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
@@ -551,112 +544,6 @@ async def lifespan(app: FastAPI):
         finally:
             await db.close()
     asyncio.create_task(_fix_work_types())
-
-    # ── v1.9.9: one-time salary backfill on startup ──
-    # Extract salary from descriptions for existing jobs that have salary_min=0.
-    # Runs regex on all (free), AI on up to 100 with pay keywords.
-    # Non-blocking background task so startup isn't delayed.
-    async def _backfill_salaries():
-        await asyncio.sleep(30)  # let the app warm up first
-        from database import get_db
-        from salary_extractor import extract_salary_regex, has_pay_keywords, extract_salary_ai
-        db = await get_db()
-        try:
-            cursor = await db.execute(
-                "SELECT id, description FROM jobs "
-                "WHERE (salary_min = 0 AND salary_max = 0) "
-                "AND description != '' AND description IS NOT NULL "
-                "LIMIT 5000"
-            )
-            rows = await cursor.fetchall()
-            updated = 0
-            ai_calls = 0
-            for row in rows:
-                job_id, desc = row[0], row[1]
-                if not desc:
-                    continue
-                result = extract_salary_regex(desc)
-                if not result and has_pay_keywords(desc) and ai_calls < 25:
-                    result = await extract_salary_ai(desc)
-                    ai_calls += 1
-                if result:
-                    await db.execute(
-                        "UPDATE jobs SET salary_min = ?, salary_max = ?, salary_period = ? WHERE id = ?",
-                        (result["min"], result["max"], result["period"], job_id)
-                    )
-                    updated += 1
-            await db.commit()
-            logger.info(f"[Startup] Salary backfill: {updated}/{len(rows)} jobs updated ({ai_calls} AI calls)")
-        except Exception as e:
-            logger.error(f"[Startup] Salary backfill failed: {e}")
-        finally:
-            await db.close()
-    asyncio.create_task(_backfill_salaries())
-
-    # ── v1.9.11: rescore unscored jobs — FUZZY ONLY (zero AI cost) ──
-    # Uses the fuzzy scorer (with family fence + skill signatures) which
-    # is already good enough to separate Data Analyst from VP Marketing.
-    # No Haiku calls = $0 cost.  Runs once on startup.
-    async def _rescore_unscored():
-        await asyncio.sleep(45)
-        from database import get_db, get_profiles
-        from ai_engine import score_relevance_fuzzy
-        profiles = await get_profiles()
-        if not profiles:
-            return
-
-        all_pd = []
-        for p in profiles:
-            kws = p.get("keywords", [])
-            if isinstance(kws, str):
-                kws = [k.strip() for k in kws.split(",") if k.strip()]
-            all_pd.append({
-                "title": p["title"],
-                "expanded": p.get("expanded_titles", []),
-                "keywords": kws,
-                "signature": p.get("skill_signature") or {},
-            })
-
-        db = await get_db()
-        try:
-            cursor = await db.execute(
-                "SELECT id, title, description FROM jobs "
-                "WHERE relevance_score = 50 AND trust_score = 50 "
-                "LIMIT 5000"
-            )
-            rows = await cursor.fetchall()
-            if not rows:
-                logger.info("[Startup] No unscored jobs to rescore")
-                return
-
-            scored = 0
-            for row in rows:
-                job_id, title, desc = row[0], row[1] or "", row[2] or ""
-                best_fuzzy = 0
-                for pd in all_pd:
-                    f = score_relevance_fuzzy(
-                        title, desc, pd["title"], pd["expanded"],
-                        pd["keywords"], skill_signature=pd.get("signature"),
-                    )
-                    if f > best_fuzzy:
-                        best_fuzzy = f
-
-                await db.execute(
-                    "UPDATE jobs SET relevance_score = ? WHERE id = ?",
-                    (best_fuzzy, job_id)
-                )
-                scored += 1
-                if scored % 200 == 0:
-                    await db.commit()
-                    logger.info(f"[Startup] Rescore progress: {scored}/{len(rows)}")
-
-            await db.commit()
-            logger.info(f"[Startup] Rescore complete: {scored} jobs (fuzzy only, $0 AI cost)")
-        except Exception as e:
-            logger.error(f"[Startup] Rescore failed: {e}")
-        finally:
-            await db.close()
-    asyncio.create_task(_rescore_unscored())
 
     yield
     scheduler.shutdown()
@@ -1246,30 +1133,26 @@ async def api_reprocess_jobs():
 
 
 async def _re_expand_profiles():
-    """Expand profile titles ONLY if they have no expansions yet.
-    v1.9.11: stopped re-expanding on every deploy — was burning AI tokens
-    for no benefit (expansions don't change). Use POST /api/admin/re-expand-titles
-    to manually refresh if needed."""
+    """Re-expand all profile titles with the latest AI prompt on each deploy.
+    This ensures search terms stay up-to-date with the best role families."""
     try:
-        await asyncio.sleep(5)
+        await asyncio.sleep(5)  # Let the app fully start first
         profiles = await get_profiles()
         for profile in profiles:
             title = profile["title"]
-            existing = profile.get("expanded_titles", [])
-            if existing and len(existing) > 3:
-                logger.info(f"[Startup] '{title}' already has {len(existing)} expansions — skipping")
-                continue
-            logger.info(f"[Startup] Expanding titles for '{title}' (first time)...")
+            logger.info(f"[Startup] Re-expanding titles for '{title}'...")
             try:
                 expanded = await expand_title_ai(title)
                 if expanded and len(expanded) > 3:
                     await update_profile(profile["id"], {"expanded_titles": expanded})
                     logger.info(f"[Startup] '{title}' expanded to {len(expanded)} distinct role names")
+                else:
+                    logger.info(f"[Startup] '{title}' expansion returned too few results, keeping existing")
             except Exception as e:
                 logger.error(f"[Startup] Failed to expand '{title}': {e}")
-        logger.info("[Startup] Profile expansion check complete")
+        logger.info("[Startup] Profile re-expansion complete")
     except Exception as e:
-        logger.error(f"[Startup] Profile expansion failed: {e}")
+        logger.error(f"[Startup] Profile re-expansion failed: {e}")
 
 
 async def _reprocess_existing_jobs():
@@ -1475,49 +1358,6 @@ async def api_clear_all_jobs():
         return {"ok": True, "deleted": count}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-    finally:
-        await db.close()
-
-
-@app.post("/api/admin/backfill-salary")
-async def api_backfill_salary(batch: int = Query(500, ge=1, le=5000)):
-    """Admin: extract salary from descriptions for existing jobs missing pay data.
-    Runs regex on all, AI fallback only on those with pay keywords. Batch-limited."""
-    from database import get_db
-    from salary_extractor import extract_salary_regex, has_pay_keywords, extract_salary_ai
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT id, description FROM jobs "
-            "WHERE (salary_min = 0 AND salary_max = 0) "
-            "AND description != '' AND description IS NOT NULL "
-            "LIMIT ?", (batch,)
-        )
-        rows = await cursor.fetchall()
-        updated = 0
-        ai_calls = 0
-        for row in rows:
-            job_id, desc = row[0], row[1]
-            if not desc:
-                continue
-            # Stage 1: regex
-            result = extract_salary_regex(desc)
-            # Stage 2: AI fallback
-            if not result and has_pay_keywords(desc) and ai_calls < 50:
-                result = await extract_salary_ai(desc)
-                ai_calls += 1
-            if result:
-                await db.execute(
-                    "UPDATE jobs SET salary_min = ?, salary_max = ?, salary_period = ? WHERE id = ?",
-                    (result["min"], result["max"], result["period"], job_id)
-                )
-                updated += 1
-        await db.commit()
-        logger.info(f"[Admin] Salary backfill: {updated}/{len(rows)} jobs updated ({ai_calls} AI calls)")
-        return {"ok": True, "processed": len(rows), "updated": updated, "ai_calls": ai_calls}
-    except Exception as e:
-        import traceback
-        return JSONResponse({"error": str(e), "traceback": traceback.format_exc()}, status_code=500)
     finally:
         await db.close()
 

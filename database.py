@@ -152,28 +152,6 @@ async def init_db():
             await db.execute("ALTER TABLE search_profiles ADD COLUMN skill_signature TEXT DEFAULT '{}'")
             await db.commit()
 
-        # Migration: add salary_period column (v1.9.9)
-        # Stores "yearly", "hourly", "monthly", "weekly" — lets frontend
-        # display salary with the right unit instead of guessing from magnitude.
-        try:
-            await db.execute("SELECT salary_period FROM jobs LIMIT 1")
-        except Exception:
-            logger.info("[Migration] Adding salary_period column to jobs table")
-            await db.execute("ALTER TABLE jobs ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
-            await db.commit()
-
-        # Migration: add salary_period to jobs_archive too (v1.9.11 fix)
-        # Without this, cleanup_old_jobs() crashes when trying to archive
-        try:
-            await db.execute("SELECT salary_period FROM jobs_archive LIMIT 1")
-        except Exception:
-            logger.info("[Migration] Adding salary_period column to jobs_archive table")
-            try:
-                await db.execute("ALTER TABLE jobs_archive ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
-                await db.commit()
-            except Exception:
-                pass  # table might not exist yet — init_archive_table will create it
-
         # Backfill: extract skills for ALL jobs missing skills (one pass)
         cursor = await db.execute(
             "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
@@ -282,45 +260,22 @@ async def insert_job(job_data: dict) -> bool:
                         f"[Dedup] Fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
                     )
                     return False
-                # v1.9.11: removed AI dedup (was calling Haiku for every
-                # borderline case). Lower the fuzzy threshold to 80 instead —
-                # catches most real dupes without any API cost.
-                if score >= 80:
-                    logger.debug(
-                        f"[Dedup] Borderline fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
-                    )
-                    return False
+                # Borderline fuzzy (70-87): was calling AI to confirm — DISABLED to cut costs
+                # Fuzzy dedup at 87+ is reliable enough; false negatives are acceptable
+                # if 70 <= score < FUZZY_TITLE_THRESHOLD:
+                #     ... AI dedup removed ...
 
         now = datetime.now(timezone.utc).isoformat()
         # If no posted_at from source, leave empty — DON'T fake it with scrape time
         # first_seen_at always has the real scrape time for sorting
         posted_at = job_data.get("posted_at", "") or ""
         skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
-
-        # ── Salary extraction from description (v1.9.9) ──
-        # If the source didn't provide salary data, try to extract it from the
-        # job description using regex first, then AI fallback if pay keywords
-        # are present.  This runs at insert time so every new job gets parsed.
-        sal_min = job_data.get("salary_min", 0) or 0
-        sal_max = job_data.get("salary_max", 0) or 0
-        sal_period = job_data.get("salary_period", "yearly")
-        if sal_min == 0 and sal_max == 0 and job_data.get("description"):
-            try:
-                from salary_extractor import extract_salary
-                sal_result = await extract_salary(job_data["description"])
-                if sal_result:
-                    sal_min = sal_result["min"]
-                    sal_max = sal_result["max"]
-                    sal_period = sal_result["period"]
-            except Exception as e:
-                logger.debug(f"[Salary] Extraction error: {e}")
-
         await db.execute(
             """INSERT INTO jobs (hash, hash_cross, title, company_name, company_domain, location,
-               is_remote, work_type, description, salary_min, salary_max, salary_period, source, source_url,
+               is_remote, work_type, description, salary_min, salary_max, source, source_url,
                direct_apply_url, posted_at, first_seen_at, relevance_score, trust_score,
                is_direct_apply, skills, status, search_profile_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 h,
                 cross_hash or "",
@@ -331,9 +286,8 @@ async def insert_job(job_data: dict) -> bool:
                 1 if job_data.get("is_remote") else 0,
                 job_data.get("work_type", "onsite"),
                 job_data.get("description", ""),
-                sal_min,
-                sal_max,
-                sal_period,
+                job_data.get("salary_min", 0),
+                job_data.get("salary_max", 0),
                 job_data.get("source", ""),
                 job_data.get("source_url", ""),
                 job_data.get("direct_apply_url", ""),
@@ -677,7 +631,6 @@ async def init_archive_table():
                 description TEXT DEFAULT '',
                 salary_min INTEGER DEFAULT 0,
                 salary_max INTEGER DEFAULT 0,
-                salary_period TEXT DEFAULT 'yearly',
                 source TEXT DEFAULT '',
                 source_url TEXT DEFAULT '',
                 direct_apply_url TEXT DEFAULT '',
@@ -715,11 +668,11 @@ async def cleanup_old_jobs() -> dict:
             await db.execute(
                 """INSERT OR IGNORE INTO jobs_archive
                    (id, hash, title, company_name, company_domain, location,
-                    is_remote, work_type, description, salary_min, salary_max, salary_period,
+                    is_remote, work_type, description, salary_min, salary_max,
                     source, source_url, direct_apply_url, posted_at, first_seen_at,
                     relevance_score, trust_score, is_direct_apply, status, search_profile_id)
                    SELECT id, hash, title, company_name, company_domain, location,
-                          is_remote, work_type, description, salary_min, salary_max, salary_period,
+                          is_remote, work_type, description, salary_min, salary_max,
                           source, source_url, direct_apply_url, posted_at, first_seen_at,
                           relevance_score, trust_score, is_direct_apply, status, search_profile_id
                    FROM jobs WHERE first_seen_at < datetime('now', ?)""",
