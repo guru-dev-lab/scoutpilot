@@ -270,18 +270,14 @@ async def insert_job(job_data: dict) -> bool:
                         f"[Dedup] Fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
                     )
                     return False
-                # Borderline fuzzy (70-87): ask AI to confirm if it's a duplicate
-                if 70 <= score < FUZZY_TITLE_THRESHOLD:
-                    try:
-                        from ai_engine import ai_is_duplicate
-                        is_dup = await ai_is_duplicate(
-                            job_data.get("title", ""), job_data.get("company_name", ""),
-                            row[1] or "", row[2] or "", score,
-                        )
-                        if is_dup:
-                            return False
-                    except Exception as e:
-                        logger.debug(f"[Dedup] AI check failed: {e}")
+                # v1.9.11: removed AI dedup (was calling Haiku for every
+                # borderline case). Lower the fuzzy threshold to 80 instead —
+                # catches most real dupes without any API cost.
+                if score >= 80:
+                    logger.debug(
+                        f"[Dedup] Borderline fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
+                    )
+                    return False
 
         now = datetime.now(timezone.utc).isoformat()
         # If no posted_at from source, leave empty — DON'T fake it with scrape time

@@ -576,7 +576,7 @@ async def lifespan(app: FastAPI):
                 if not desc:
                     continue
                 result = extract_salary_regex(desc)
-                if not result and has_pay_keywords(desc) and ai_calls < 100:
+                if not result and has_pay_keywords(desc) and ai_calls < 25:
                     result = await extract_salary_ai(desc)
                     ai_calls += 1
                 if result:
@@ -593,39 +593,32 @@ async def lifespan(app: FastAPI):
             await db.close()
     asyncio.create_task(_backfill_salaries())
 
-    # ── v1.9.10: rescore all unscored jobs on startup ──
-    # The old scoring loop only scored 100 jobs per cycle and only looked
-    # at the last 1 hour.  With parallel scraping pulling 500+ per cycle,
-    # thousands slipped through with the default REL: 50.  This startup
-    # task catches every unscored job and runs fuzzy + AI scoring.
+    # ── v1.9.11: rescore unscored jobs — FUZZY ONLY (zero AI cost) ──
+    # Uses the fuzzy scorer (with family fence + skill signatures) which
+    # is already good enough to separate Data Analyst from VP Marketing.
+    # No Haiku calls = $0 cost.  Runs once on startup.
     async def _rescore_unscored():
-        await asyncio.sleep(45)  # let salary backfill finish first
-        from database import get_db, get_profiles, update_job_scores
-        from ai_engine import score_relevance_fuzzy, score_relevance_ai
+        await asyncio.sleep(45)
+        from database import get_db, get_profiles
+        from ai_engine import score_relevance_fuzzy
         profiles = await get_profiles()
         if not profiles:
             return
 
-        # Build profile data
         all_pd = []
         for p in profiles:
             kws = p.get("keywords", [])
             if isinstance(kws, str):
                 kws = [k.strip() for k in kws.split(",") if k.strip()]
-            excl = p.get("excluded_keywords", [])
-            if isinstance(excl, str):
-                excl = [k.strip() for k in excl.split(",") if k.strip()]
             all_pd.append({
                 "title": p["title"],
                 "expanded": p.get("expanded_titles", []),
                 "keywords": kws,
-                "excluded": excl,
                 "signature": p.get("skill_signature") or {},
             })
 
         db = await get_db()
         try:
-            # Find all jobs still at the default score of 50 (never scored)
             cursor = await db.execute(
                 "SELECT id, title, description FROM jobs "
                 "WHERE relevance_score = 50 AND trust_score = 50 "
@@ -639,10 +632,7 @@ async def lifespan(app: FastAPI):
             scored = 0
             for row in rows:
                 job_id, title, desc = row[0], row[1] or "", row[2] or ""
-
-                # Find best profile via fuzzy
                 best_fuzzy = 0
-                best_pd = all_pd[0]
                 for pd in all_pd:
                     f = score_relevance_fuzzy(
                         title, desc, pd["title"], pd["expanded"],
@@ -650,31 +640,18 @@ async def lifespan(app: FastAPI):
                     )
                     if f > best_fuzzy:
                         best_fuzzy = f
-                        best_pd = pd
-
-                # AI scoring for best profile
-                try:
-                    relevance = await score_relevance_ai(
-                        title, desc,
-                        best_pd["title"], best_pd["expanded"],
-                        best_pd["keywords"], best_pd["excluded"],
-                        skill_signature=best_pd.get("signature"),
-                    )
-                except Exception:
-                    relevance = best_fuzzy
 
                 await db.execute(
                     "UPDATE jobs SET relevance_score = ? WHERE id = ?",
-                    (relevance, job_id)
+                    (best_fuzzy, job_id)
                 )
                 scored += 1
-                # Commit in batches to avoid holding locks
-                if scored % 50 == 0:
+                if scored % 200 == 0:
                     await db.commit()
                     logger.info(f"[Startup] Rescore progress: {scored}/{len(rows)}")
 
             await db.commit()
-            logger.info(f"[Startup] Rescore complete: {scored} jobs scored")
+            logger.info(f"[Startup] Rescore complete: {scored} jobs (fuzzy only, $0 AI cost)")
         except Exception as e:
             logger.error(f"[Startup] Rescore failed: {e}")
         finally:
@@ -1269,26 +1246,30 @@ async def api_reprocess_jobs():
 
 
 async def _re_expand_profiles():
-    """Re-expand all profile titles with the latest AI prompt on each deploy.
-    This ensures search terms stay up-to-date with the best role families."""
+    """Expand profile titles ONLY if they have no expansions yet.
+    v1.9.11: stopped re-expanding on every deploy — was burning AI tokens
+    for no benefit (expansions don't change). Use POST /api/admin/re-expand-titles
+    to manually refresh if needed."""
     try:
-        await asyncio.sleep(5)  # Let the app fully start first
+        await asyncio.sleep(5)
         profiles = await get_profiles()
         for profile in profiles:
             title = profile["title"]
-            logger.info(f"[Startup] Re-expanding titles for '{title}'...")
+            existing = profile.get("expanded_titles", [])
+            if existing and len(existing) > 3:
+                logger.info(f"[Startup] '{title}' already has {len(existing)} expansions — skipping")
+                continue
+            logger.info(f"[Startup] Expanding titles for '{title}' (first time)...")
             try:
                 expanded = await expand_title_ai(title)
                 if expanded and len(expanded) > 3:
                     await update_profile(profile["id"], {"expanded_titles": expanded})
                     logger.info(f"[Startup] '{title}' expanded to {len(expanded)} distinct role names")
-                else:
-                    logger.info(f"[Startup] '{title}' expansion returned too few results, keeping existing")
             except Exception as e:
                 logger.error(f"[Startup] Failed to expand '{title}': {e}")
-        logger.info("[Startup] Profile re-expansion complete")
+        logger.info("[Startup] Profile expansion check complete")
     except Exception as e:
-        logger.error(f"[Startup] Profile re-expansion failed: {e}")
+        logger.error(f"[Startup] Profile expansion failed: {e}")
 
 
 async def _reprocess_existing_jobs():
