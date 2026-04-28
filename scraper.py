@@ -25,7 +25,7 @@ def _normalize_posted_at(raw: str) -> str:
     Returns empty string if unparseable."""
     if not raw or raw == "None":
         return ""
-    raw = raw.strip()
+    raw = str(raw).strip()  # coerce int/float timestamps to string
 
     # Already ISO datetime (e.g. 2026-03-27T12:00:00Z or 2026-03-27T12:00:00+00:00)
     if re.match(r"^\d{4}-\d{2}-\d{2}T", raw):
@@ -1074,7 +1074,8 @@ async def scrape_jobicy(
 
             # Relevance: any search word in title OR job industry/type
             title_lower = title.lower()
-            job_type = (item.get("jobType", "") or "").lower()
+            raw_type = item.get("jobType", "") or ""
+            job_type = " ".join(raw_type).lower() if isinstance(raw_type, list) else str(raw_type).lower()
             raw_industry = item.get("jobIndustry", "") or ""
             if isinstance(raw_industry, list):
                 industry = " ".join(str(i) for i in raw_industry).lower()
@@ -1712,14 +1713,14 @@ async def scrape_findwork(
             if _is_blocked_company(company):
                 continue
 
-            location_str = item.get("location", "")
-            description = item.get("text", "") or item.get("description", "")
+            location_str = item.get("location") or ""
+            description = item.get("text") or item.get("description") or ""
             clean_desc = re.sub(r"<[^>]+>", " ", str(description))
             clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
-            apply_url = item.get("url", "")
+            apply_url = item.get("url") or ""
             is_direct = _is_direct_url(apply_url)
-            posted_at = _normalize_posted_at(item.get("date_posted", ""))
+            posted_at = _normalize_posted_at(item.get("date_posted") or "")
 
             is_remote = item.get("remote", False)
             work_type = "remote" if is_remote else _detect_work_type({

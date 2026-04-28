@@ -162,6 +162,18 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
             await db.commit()
 
+        # Migration: add salary_period to jobs_archive too (v1.9.11 fix)
+        # Without this, cleanup_old_jobs() crashes when trying to archive
+        try:
+            await db.execute("SELECT salary_period FROM jobs_archive LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding salary_period column to jobs_archive table")
+            try:
+                await db.execute("ALTER TABLE jobs_archive ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
+                await db.commit()
+            except Exception:
+                pass  # table might not exist yet — init_archive_table will create it
+
         # Backfill: extract skills for ALL jobs missing skills (one pass)
         cursor = await db.execute(
             "SELECT id, title, description FROM jobs WHERE skills IS NULL OR skills = ''"
