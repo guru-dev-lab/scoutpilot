@@ -103,11 +103,19 @@ def is_us_location(location: str) -> bool:
     """Heuristic: does this location string indicate a US-eligible role?
 
     Returns True for explicit US mentions, US states, Worldwide/Anywhere.
+    Returns True for bare "Remote" (no country qualifier) — assume US-eligible.
     Returns False if a non-US country/region is clearly named without US.
     """
     if not location:
         return False
-    loc = f" {location.lower().strip()} "
+
+    # Bare "Remote" without any country qualifier — accept as US-eligible
+    stripped = location.strip().lower()
+    if stripped in ("remote", "remote - us", "remote - usa", "remote, usa",
+                    "remote, us", "anywhere"):
+        return True
+
+    loc = f" {stripped} "
 
     # Fast allow: worldwide/anywhere/global = US-eligible
     for tok in ("worldwide", "anywhere", "global"):
@@ -193,16 +201,16 @@ def get_rotation_slice(companies: list[dict], cycle_number: int, platform: str) 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _title_matches_profile(title: str, search_terms: list[str]) -> bool:
-    """True if any word from any search term appears in title."""
+    """True if at least one core search word appears in title (ANY-word matching)."""
     if not search_terms:
         return True  # No terms = accept everything
     title_lower = title.lower()
     for term in search_terms:
-        term_lower = term.lower().replace(" remote", "").strip()
-        words = [w for w in term_lower.split() if len(w) > 2]
-        if not words:
+        # ANY-word matching — at least one search word must appear
+        search_words = [w.lower() for w in term.split() if len(w) > 2]  # skip tiny words like "a", "of"
+        if not search_words:
             continue
-        if all(w in title_lower for w in words):
+        if any(w in title_lower for w in search_words):
             return True
     return False
 
@@ -568,8 +576,8 @@ async def fetch_workday(
 
     postings_raw: list[dict] = []
     try:
-        # Page through up to 3 × 20 = 60 most recent remote postings
-        for offset in (0, 20, 40):
+        # Page through up to 5 × 20 = 100 most recent remote postings
+        for offset in range(0, 100, 20):
             resp = await client.post(
                 list_url,
                 json={

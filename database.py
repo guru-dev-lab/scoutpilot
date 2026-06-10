@@ -140,6 +140,14 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT DEFAULT ''")
             await db.commit()
 
+        # Migration: add salary_period column if missing (v2.0.0)
+        try:
+            await db.execute("SELECT salary_period FROM jobs LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding salary_period column to jobs table")
+            await db.execute("ALTER TABLE jobs ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
+            await db.commit()
+
         # Migration: add skill_signature column to search_profiles (v1.9.6)
         # Stores a JSON object: {"foundation": [...], "toolkit": [...], "bonus": [...]}
         # Used by the description-based rescue scorer so disguised roles
@@ -270,12 +278,23 @@ async def insert_job(job_data: dict) -> bool:
         # first_seen_at always has the real scrape time for sorting
         posted_at = job_data.get("posted_at", "") or ""
         skills = extract_skills(job_data.get("title", ""), job_data.get("description", "")) or "_none"
+
+        # v2.0.0: Extract salary from description if not provided by source
+        salary_period = job_data.get("salary_period", "yearly")
+        if not job_data.get("salary_min") and not job_data.get("salary_max"):
+            from salary_extractor import extract_salary_regex
+            salary_info = extract_salary_regex(job_data.get("description", ""))
+            if salary_info:
+                job_data["salary_min"] = salary_info["min"]
+                job_data["salary_max"] = salary_info["max"]
+                salary_period = salary_info["period"]
+
         await db.execute(
             """INSERT INTO jobs (hash, hash_cross, title, company_name, company_domain, location,
-               is_remote, work_type, description, salary_min, salary_max, source, source_url,
+               is_remote, work_type, description, salary_min, salary_max, salary_period, source, source_url,
                direct_apply_url, posted_at, first_seen_at, relevance_score, trust_score,
                is_direct_apply, skills, status, search_profile_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 h,
                 cross_hash or "",
@@ -288,6 +307,7 @@ async def insert_job(job_data: dict) -> bool:
                 job_data.get("description", ""),
                 job_data.get("salary_min", 0),
                 job_data.get("salary_max", 0),
+                salary_period,
                 job_data.get("source", ""),
                 job_data.get("source_url", ""),
                 job_data.get("direct_apply_url", ""),
@@ -334,6 +354,13 @@ async def get_jobs(
             placeholders = ",".join("?" for _ in profile_ids)
             conditions.append(f"search_profile_id IN ({placeholders})")
             params.extend(profile_ids)
+        else:
+            # Ghost profile fix: when no specific profile filter is set,
+            # only show jobs from active profiles (soft-deleted profiles excluded)
+            conditions.append(
+                "(search_profile_id IS NULL OR search_profile_id IN "
+                "(SELECT id FROM search_profiles WHERE is_active = 1))"
+            )
 
         if hours > 0:
             conditions.append(
@@ -603,6 +630,8 @@ async def delete_profile(profile_id: int):
     db = await get_db()
     try:
         await db.execute("UPDATE search_profiles SET is_active = 0 WHERE id = ?", (profile_id,))
+        # Hard-delete the profile's jobs so they don't linger as ghost data
+        await db.execute("DELETE FROM jobs WHERE search_profile_id = ?", (profile_id,))
         await db.commit()
     finally:
         await db.close()
@@ -647,6 +676,14 @@ async def init_archive_table():
             CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON jobs_archive(archived_at);
         """)
         await db.commit()
+
+        # Migration: add salary_period column to archive table if missing (v2.0.0)
+        try:
+            await db.execute("SELECT salary_period FROM jobs_archive LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding salary_period column to jobs_archive table")
+            await db.execute("ALTER TABLE jobs_archive ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
+            await db.commit()
     finally:
         await db.close()
 
@@ -737,7 +774,7 @@ ALL_SOURCES = [
     {"source_key": "himalayas_rss", "display_name": "Himalayas RSS",   "category": "rss",     "requires_key": ""},
 ]
 
-# ATS sources — ship DISABLED by default (user flips on from dashboard when ready)
+# ATS sources — enabled by default (free, no API keys needed)
 ATS_SOURCES = [
     {"source_key": "greenhouse",      "display_name": "Greenhouse (ATS)",      "category": "ats", "requires_key": ""},
     {"source_key": "lever",           "display_name": "Lever (ATS)",           "category": "ats", "requires_key": ""},
@@ -757,11 +794,11 @@ async def init_source_settings():
                    VALUES (?, ?, 1, ?, ?)""",
                 (src["source_key"], src["display_name"], src["category"], src["requires_key"]),
             )
-        # ATS sources: inserted DISABLED so enabling is an explicit opt-in
+        # ATS sources: enabled by default (free, no API keys needed)
         for src in ATS_SOURCES:
             await db.execute(
                 """INSERT OR IGNORE INTO source_settings (source_key, display_name, enabled, category, requires_key)
-                   VALUES (?, ?, 0, ?, ?)""",
+                   VALUES (?, ?, 1, ?, ?)""",
                 (src["source_key"], src["display_name"], src["category"], src["requires_key"]),
             )
         await db.commit()

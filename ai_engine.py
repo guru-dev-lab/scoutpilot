@@ -202,9 +202,10 @@ async def score_relevance_ai(
         return fuzzy
 
     # COST GATE: skip AI for obvious cases (wider gate = fewer API calls)
-    if fuzzy < 25:
+    # v2.0.0: narrowed AI band from 25-85 to 30-70 to cut token costs
+    if fuzzy < 30:
         return fuzzy  # obvious mismatch — NO API call
-    if fuzzy > 85:
+    if fuzzy > 70:
         return fuzzy  # strong match — NO API call
 
     try:
@@ -458,9 +459,10 @@ def score_relevance_fuzzy(
             sig = _get_fallback_signature(target_title)
         if sig:
             sig_score, _ = score_signature_match(job_title, job_description, sig)
-            if sig_score >= 60:
+            if sig_score >= 75:
                 # Description clearly identifies this as the role —
                 # override whatever the title-based scoring said.
+                # v2.0.0: raised from 60 to 75 to reduce false rescues
                 best_score = max(best_score, sig_score)
                 base_title_score = best_score
 

@@ -6,8 +6,8 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "1.9.6-stable"
-BUILD_DATE = "2026-04-28"
+BUILD_VERSION = "2.0.0"
+BUILD_DATE = "2026-06-10"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
@@ -76,7 +76,7 @@ from database import (
     bulk_update_source_settings,
 )
 from scraper import run_scrape_cycle, scrape_jobspy
-from ai_engine import expand_title_ai, score_relevance_ai, score_trust_ai
+from ai_engine import expand_title_ai, score_relevance_ai, score_trust_ai, score_trust_heuristic
 
 # Logging
 logging.basicConfig(
@@ -139,7 +139,9 @@ async def scheduled_scrape(cycle_number: int = 1):
         # Fuzzy runs first as fast pre-filter; AI only called when score is ambiguous (20-85)
         from database import get_jobs as _get_jobs, get_db as _get_db
         from ai_engine import score_relevance_ai, score_relevance_fuzzy, extract_direct_link_ai
-        new_jobs = await _get_jobs(hours=1, status="new", limit=100)
+        # v2.0.0: widened from hours=1/limit=100 to hours=72/limit=500
+        # so unscored jobs from previous cycles get caught up
+        new_jobs = await _get_jobs(hours=72, status="new", limit=500)
 
         # Build combined keyword/exclusion lists across all profiles
         all_profiles_data = []
@@ -187,7 +189,13 @@ async def scheduled_scrape(cycle_number: int = 1):
             else:
                 relevance = best_fuzzy
 
-            trust = 50
+            # v2.0.0: real trust scoring instead of hardcoded 50
+            trust = score_trust_heuristic(
+                job["title"], job.get("company_name", ""),
+                job.get("description", ""), job.get("salary_min", 0),
+                job.get("salary_max", 0), job.get("company_domain", ""),
+                job.get("source", ""),
+            )
             await update_job_scores(job["id"], relevance, trust)
             ai_scored += 1
 
@@ -350,7 +358,13 @@ async def scheduled_deep_sweep():
                 else:
                     relevance = best_fuzzy
 
-                trust = 50  # Heuristic trust — no API call
+                # v2.0.0: real trust scoring instead of hardcoded 50
+                trust = score_trust_heuristic(
+                    job["title"], job.get("company_name", ""),
+                    job.get("description", ""), job.get("salary_min", 0),
+                    job.get("salary_max", 0), job.get("company_domain", ""),
+                    job.get("source", ""),
+                )
                 await update_job_scores(job["id"], relevance, trust)
 
         logger.info(f"[Deep Sweep] Complete — {total_new} new jobs discovered")
@@ -457,13 +471,13 @@ async def lifespan(app: FastAPI):
                 await scheduled_scrape(cycle_number=cycle_count)
             except Exception as e:
                 logger.error(f"[Continuous] Cycle #{cycle_count} crashed: {e}")
-            # Smart cooldown: heavier cycles get more breathing room
+            # v2.0.0: 5-minute minimum cooldown to reduce token burn and API pressure
             if ran_jobspy and ran_strict:
-                cooldown = 120  # Full sweep — give all APIs time to recover
+                cooldown = 420  # Full sweep — give all APIs time to recover
             elif ran_jobspy:
-                cooldown = 90   # JobSpy hit — Indeed/LinkedIn need space
+                cooldown = 360  # JobSpy hit — Indeed/LinkedIn need space
             else:
-                cooldown = 30   # Fast APIs only — quick turnaround
+                cooldown = 300  # Fast APIs only — 5 min baseline
             logger.info(f"[Continuous] Cycle #{cycle_count} done — {cooldown}s cooldown")
             await asyncio.sleep(cooldown)
 
@@ -485,7 +499,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("[Scheduler] Continuous scrape loop started. Fast cycles every ~30s, JobSpy every 3rd (~90s cooldown), full sweep every 15th (~120s). Deep sweep 12h, cleanup 3AM.")
+    logger.info("[Scheduler] Continuous scrape loop started. Fast cycles every ~5min, JobSpy every 3rd (~6min cooldown), full sweep every 15th (~7min). Deep sweep 12h, cleanup 3AM.")
 
     # DISABLED — was re-expanding ALL profiles on every deploy (~1 AI call per profile)
     # Titles only need re-expansion when the prompt changes. Use /api/admin/re-expand-titles manually.

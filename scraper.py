@@ -2006,17 +2006,19 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
         if "remoteok" in enabled:
             light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
-    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — one call per profile
-    if "weworkremotely" in enabled:
-        light_tasks.append(("WWR", scrape_weworkremotely(title, profile_id)))
-    if "jobicy" in enabled:
-        light_tasks.append(("Jobicy", scrape_jobicy(title, profile_id)))
-    if "himalayas" in enabled:
-        light_tasks.append(("Himalayas", scrape_himalayas(title, profile_id)))
-    if "arbeitnow" in enabled:
-        light_tasks.append(("Arbeitnow", scrape_arbeitnow(title, profile_id)))
-    if "themuse" in enabled:
-        light_tasks.append(("TheMuse", scrape_themuse(title, profile_id)))
+    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — top 3 expanded titles
+    light_terms = terms[:3]
+    for lt in light_terms:
+        if "weworkremotely" in enabled:
+            light_tasks.append(("WWR", scrape_weworkremotely(lt, profile_id)))
+        if "jobicy" in enabled:
+            light_tasks.append(("Jobicy", scrape_jobicy(lt, profile_id)))
+        if "himalayas" in enabled:
+            light_tasks.append(("Himalayas", scrape_himalayas(lt, profile_id)))
+        if "arbeitnow" in enabled:
+            light_tasks.append(("Arbeitnow", scrape_arbeitnow(lt, profile_id)))
+        if "themuse" in enabled:
+            light_tasks.append(("TheMuse", scrape_themuse(lt, profile_id)))
 
     # ── API SOURCES ──
     if "usajobs" in enabled:
@@ -2035,11 +2037,11 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
     if "findwork" in enabled:
         light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 
-    if "jobicy_rss" in enabled:
-        light_tasks.append(("JobicyRSS", scrape_jobicy_rss(title, profile_id)))
-
-    if "himalayas_rss" in enabled:
-        light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(title, profile_id)))
+    for lt in light_terms:
+        if "jobicy_rss" in enabled:
+            light_tasks.append(("JobicyRSS", scrape_jobicy_rss(lt, profile_id)))
+        if "himalayas_rss" in enabled:
+            light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(lt, profile_id)))
 
     # SerpApi / JSearch if keys available AND enabled
     if settings.serpapi_key and "google" in enabled:
@@ -2060,7 +2062,7 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
 
     # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
     MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
-    jobspy_terms = terms[:3]
+    jobspy_terms = terms[:5]
 
     for term in jobspy_terms:
         if not MAIN_SITES:
@@ -2071,14 +2073,14 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
                 try:
                     result = await scrape_jobspy(
                         search_term=effective_term, location=loc,
-                        results_wanted=50, hours_old=72, profile_id=profile_id,
+                        results_wanted=100, hours_old=72, profile_id=profile_id,
                         sites=MAIN_SITES,
                     )
                     total_new += len(result) if isinstance(result, list) else 0
                 except Exception as e:
                     errors.append(f"JobSpy '{term}' @ '{loc}': {e}")
                     logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
     # ── ATS SOURCES (Greenhouse / Lever / Ashby) ──
     # Fully isolated: any failure here cannot affect existing sources above.
