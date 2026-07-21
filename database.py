@@ -148,6 +148,17 @@ async def init_db():
             await db.execute("ALTER TABLE jobs ADD COLUMN salary_period TEXT DEFAULT 'yearly'")
             await db.commit()
 
+        # Migration: add scored_at column if missing (v2.1.0)
+        # CRITICAL COST FIX: without this, scored jobs kept status='new' and were
+        # re-scored through Haiku every 5-minute cycle for up to 72h (~800x per job).
+        # scored_at marks a job as already-scored so AI relevance runs exactly ONCE.
+        try:
+            await db.execute("SELECT scored_at FROM jobs LIMIT 1")
+        except Exception:
+            logger.info("[Migration] Adding scored_at column to jobs table")
+            await db.execute("ALTER TABLE jobs ADD COLUMN scored_at TEXT DEFAULT ''")
+            await db.commit()
+
         # Migration: add skill_signature column to search_profiles (v1.9.6)
         # Stores a JSON object: {"foundation": [...], "toolkit": [...], "bonus": [...]}
         # Used by the description-based rescue scorer so disguised roles
@@ -524,11 +535,40 @@ async def update_job_status(job_id: int, status: str):
 async def update_job_scores(job_id: int, relevance: int, trust: int):
     db = await get_db()
     try:
+        # Stamp scored_at so this job is never re-scored through AI again.
+        # This is the core cost fix — see get_unscored_jobs().
         await db.execute(
-            "UPDATE jobs SET relevance_score = ?, trust_score = ? WHERE id = ?",
+            "UPDATE jobs SET relevance_score = ?, trust_score = ?, "
+            "scored_at = datetime('now') WHERE id = ?",
             (relevance, trust, job_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_unscored_jobs(limit: int = 400) -> list[dict]:
+    """Return jobs that have NEVER been scored (scored_at empty/null).
+
+    This replaces the old `get_jobs(status='new')` scoring query, which
+    re-fetched the same up-to-500 jobs every cycle and re-ran Haiku on each
+    one for up to 72h. With scored_at, each job is AI-scored exactly once.
+    """
+    db = await get_db()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM jobs
+            WHERE (scored_at IS NULL OR scored_at = '')
+              AND status = 'new'
+            ORDER BY first_seen_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
     finally:
         await db.close()
 

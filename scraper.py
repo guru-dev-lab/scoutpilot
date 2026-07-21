@@ -1172,7 +1172,8 @@ async def scrape_himalayas(
 
         for item in all_items:
             title = item.get("title", "")
-            company = item.get("companyName", item.get("company_name", ""))
+            # Company is under companyName (fall back to companySlug)
+            company = item.get("companyName", "") or item.get("companySlug", "") or item.get("company_name", "")
 
             if _is_blocked_company(company):
                 continue
@@ -1183,23 +1184,42 @@ async def scrape_himalayas(
             if not any(w in combined_him for w in search_words):
                 continue
 
-            apply_url = item.get("applicationUrl", item.get("url", ""))
+            # Live API key for the apply URL is 'applicationLink' (was applicationUrl/url)
+            apply_url = item.get("applicationLink", "") or item.get("applicationUrl", "") or item.get("url", "")
             if not apply_url:
                 continue
             is_direct = _is_direct_url(apply_url)
             description = item.get("description", "")
             clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
 
+            # Location is 'locationRestrictions' (a list), not 'location'
+            loc_raw = item.get("locationRestrictions")
+            if isinstance(loc_raw, list):
+                location = ", ".join(str(l) for l in loc_raw if l) or "Remote"
+            elif isinstance(loc_raw, str) and loc_raw.strip():
+                location = loc_raw.strip()
+            else:
+                location = item.get("location", "Remote") or "Remote"
+
+            # Salary is minSalary/maxSalary (guard against missing/None)
+            salary_min = 0
+            salary_max = 0
+            try:
+                salary_min = int(float(item.get("minSalary", 0) or 0))
+                salary_max = int(float(item.get("maxSalary", 0) or 0))
+            except (ValueError, TypeError):
+                pass
+
             job = {
                 "title": title,
                 "company_name": company,
                 "company_domain": "",
-                "location": item.get("location", "Remote"),
+                "location": location,
                 "is_remote": True,
                 "work_type": "remote",
                 "description": clean_desc[:10000],
-                "salary_min": 0,
-                "salary_max": 0,
+                "salary_min": salary_min,
+                "salary_max": salary_max,
                 "source": "himalayas",
                 "source_url": apply_url,
                 "direct_apply_url": apply_url if is_direct else "",
@@ -1231,8 +1251,12 @@ async def scrape_weworkremotely(
         import feedparser
 
         headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        # WWR has category-based RSS feeds — use the main programming feed
+        # WWR feeds. Three category feeds (data/business/finance) 301-redirect to
+        # dead endpoints, so we ALSO pull the master feed which carries every
+        # category (including data/business/finance) and keep the two category
+        # feeds that still resolve. follow_redirects handles any 301s cleanly.
         rss_urls = [
+            "https://weworkremotely.com/remote-jobs.rss",  # master — all categories
             "https://weworkremotely.com/categories/remote-programming-jobs.rss",
             "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
             "https://weworkremotely.com/categories/remote-data-jobs.rss",
@@ -1243,7 +1267,11 @@ async def scrape_weworkremotely(
         search_lower = search_term.lower().replace(" remote", "").strip()
         search_words = search_lower.split()
 
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+        # De-dupe by apply URL so the master + category feed overlap doesn't
+        # create duplicate jobs within a single run.
+        seen_urls = set()
+
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
             for rss_url in rss_urls:
                 try:
                     resp = await client.get(rss_url)
@@ -1271,6 +1299,11 @@ async def scrape_weworkremotely(
                             continue
 
                         apply_url = entry.get("link", "")
+                        # Skip URLs we've already emitted this run (master/category overlap)
+                        if apply_url and apply_url in seen_urls:
+                            continue
+                        if apply_url:
+                            seen_urls.add(apply_url)
                         description = entry.get("summary", entry.get("description", ""))
                         clean_desc = re.sub(r"<[^>]+>", " ", description).strip()
                         posted_at = _normalize_posted_at(entry.get("published", ""))

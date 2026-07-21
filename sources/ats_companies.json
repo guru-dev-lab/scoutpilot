@@ -1176,5 +1176,25 @@
     "slug": "mistral",
     "name": "Mistral AI",
     "ats": "lever"
+  },
+  {
+    "name": "Vercel",
+    "slug": "vercel",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Vanta",
+    "slug": "vanta",
+    "ats": "ashby"
+  },
+  {
+    "name": "Gopuff",
+    "slug": "gopuff",
+    "ats": "lever"
+  },
+  {
+    "name": "Match Group",
+    "slug": "matchgroup",
+    "ats": "lever"
   }
 ]

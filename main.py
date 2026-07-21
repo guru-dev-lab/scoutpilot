@@ -6,8 +6,8 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.0.0"
-BUILD_DATE = "2026-06-10"
+BUILD_VERSION = "2.1.0"
+BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
@@ -137,11 +137,13 @@ async def scheduled_scrape(cycle_number: int = 1):
         # Score new jobs — AI-powered relevance scoring
         # Uses Haiku for smart matching: understands "Data Analyst" ≈ "BI Analyst" ≈ "BI Developer"
         # Fuzzy runs first as fast pre-filter; AI only called when score is ambiguous (20-85)
-        from database import get_jobs as _get_jobs, get_db as _get_db
+        from database import get_jobs as _get_jobs, get_db as _get_db, get_unscored_jobs
         from ai_engine import score_relevance_ai, score_relevance_fuzzy, extract_direct_link_ai
-        # v2.0.0: widened from hours=1/limit=100 to hours=72/limit=500
-        # so unscored jobs from previous cycles get caught up
-        new_jobs = await _get_jobs(hours=72, status="new", limit=500)
+        # v2.1.0 COST FIX: only fetch jobs that have NEVER been scored.
+        # Previously this used get_jobs(status='new', hours=72, limit=500), which
+        # re-fetched the same jobs every 5-min cycle and re-ran Haiku on each for
+        # up to 72h (~800x per job). scored_at makes AI scoring run once per job.
+        new_jobs = await get_unscored_jobs(limit=400)
 
         # Build combined keyword/exclusion lists across all profiles
         all_profiles_data = []
@@ -200,7 +202,14 @@ async def scheduled_scrape(cycle_number: int = 1):
             ai_scored += 1
 
         if ai_scored:
-            logger.info(f"[Scrape] AI-scored {ai_scored} new jobs")
+            from ai_engine import pop_ai_call_stats
+            _stats = pop_ai_call_stats()
+            logger.info(
+                f"[Scrape] Scored {ai_scored} new jobs | "
+                f"Haiku calls: {_stats['total']} "
+                f"(relevance={_stats['relevance']}, expand={_stats['expand']}, "
+                f"signature={_stats['signature']}, trust={_stats['trust']}, other={_stats['other']})"
+            )
 
         # AI enhancements for new jobs (capped at 20 per cycle to keep it fast)
         # Light pass — heuristic-only quality checks (NO API calls)
@@ -313,9 +322,10 @@ async def scheduled_deep_sweep():
 
         # Score any new finds — best-profile-only + fuzzy gate (same as regular scrape)
         if total_new > 0:
-            from database import get_jobs as _get_jobs
+            from database import get_unscored_jobs
             from ai_engine import score_relevance_fuzzy
-            new_jobs = await _get_jobs(hours=1, status="new", limit=200)
+            # v2.1.0 COST FIX: only score jobs never scored before (see update_job_scores)
+            new_jobs = await get_unscored_jobs(limit=400)
 
             # Build profile data once
             all_pd = []

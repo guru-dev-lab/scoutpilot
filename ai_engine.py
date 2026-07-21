@@ -14,6 +14,27 @@ from config import settings
 logger = logging.getLogger("scoutpilot.ai")
 
 # ──────────────────────────────────────────────
+# AI call meter — real visibility into token spend.
+# Every Anthropic API call increments _AI_CALLS. main.py logs and resets it
+# each cycle so the owner can see exactly how many Haiku calls were made.
+# ──────────────────────────────────────────────
+_AI_CALLS = {"relevance": 0, "expand": 0, "signature": 0, "trust": 0, "other": 0}
+
+
+def note_ai_call(kind: str = "other") -> None:
+    _AI_CALLS[kind] = _AI_CALLS.get(kind, 0) + 1
+
+
+def pop_ai_call_stats() -> dict:
+    """Return a copy of the AI call counts since last reset, then reset to zero."""
+    global _AI_CALLS
+    snapshot = dict(_AI_CALLS)
+    snapshot["total"] = sum(snapshot.values())
+    _AI_CALLS = {"relevance": 0, "expand": 0, "signature": 0, "trust": 0, "other": 0}
+    return snapshot
+
+
+# ──────────────────────────────────────────────
 # Title Expansion (with or without AI)
 # ──────────────────────────────────────────────
 
@@ -78,6 +99,7 @@ async def expand_title_ai(title: str) -> list[str]:
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("expand")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -213,6 +235,7 @@ async def score_relevance_ai(
 
         kw_str = ", ".join(keywords[:10]) if keywords else "none"
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("relevance")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=5,
@@ -609,6 +632,7 @@ async def generate_skill_signature_ai(title: str, keywords: list[str] | None = N
     try:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("signature")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -767,6 +791,7 @@ async def score_trust_ai(
             import anthropic
 
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            note_ai_call("trust")
             response = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=50,
@@ -856,6 +881,7 @@ async def ai_is_duplicate(
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("other")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
@@ -918,6 +944,7 @@ async def extract_direct_link_ai(
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("other")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
@@ -981,6 +1008,7 @@ async def extract_skills_ai(title: str, description: str) -> str:
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("other")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
@@ -1067,6 +1095,7 @@ async def verify_work_type_ai(
     try:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("other")
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,

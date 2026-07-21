@@ -733,9 +733,15 @@ async def fetch_smartrecruiters(
             if _is_blocked_company(company_name):
                 continue
 
-            apply_url = item.get("applyUrl") or item.get("postingUrl") or ""
-            if not apply_url:
+            # SmartRecruiters postings no longer expose applyUrl/postingUrl.
+            # Build the public apply URL from company identifier + posting id:
+            #   https://jobs.smartrecruiters.com/{identifier}/{id}
+            company_obj = item.get("company") or {}
+            company_identifier = (company_obj.get("identifier") or slug or "").strip()
+            posting_id = str(item.get("id") or "").strip()
+            if not (company_identifier and posting_id):
                 continue
+            apply_url = f"https://jobs.smartrecruiters.com/{company_identifier}/{posting_id}"
 
             desc = f"{title} at {company_name}. Remote role in {full_loc}."
 
