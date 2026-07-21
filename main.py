@@ -655,6 +655,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "sp_session", new_sid,
                 httponly=True, max_age=60 * 60 * 24 * 30, samesite="lax",
             )
+            # Persist the Xhire token (httponly) so the "Prep for this job"
+            # feature can call the Xhire API server-side on the user's behalf.
+            response.set_cookie(
+                "xhire_token", xhire_tok,
+                httponly=True, max_age=60 * 60 * 24 * 30, samesite="lax",
+            )
             return response
 
         # Not authenticated — redirect browser requests, block API calls
@@ -1177,6 +1183,75 @@ async def api_export_csv(
 # ──────────────────────────────────────────────
 
 _background_tasks = set()  # prevent GC of background tasks
+
+@app.post("/api/prep-for-job")
+async def api_prep_for_job(request: Request):
+    """Xhire Suite — turn a ScoutPilot listing into a pre-filled Xhire
+    interview-prep session. Server-side so the Xhire JWT stays httponly.
+
+    Isolation-safe: this only touches Xhire over the network. Any failure
+    (no token, Xhire down, error) returns a friendly JSON error and never
+    affects ScoutPilot's own operation.
+    """
+    from database import get_job_by_id
+
+    xhire_tok = request.cookies.get("xhire_token", "")
+    if not xhire_tok or not _validate_xhire_jwt(xhire_tok):
+        return JSONResponse(
+            {"error": "not_linked",
+             "message": "Open Job Scout from your Xhire launcher to prep interviews."},
+            status_code=403,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    job_id = body.get("job_id")
+    if not job_id:
+        return JSONResponse({"error": "missing_job_id"}, status_code=400)
+
+    job = await get_job_by_id(int(job_id))
+    if not job:
+        return JSONResponse({"error": "job_not_found"}, status_code=404)
+
+    payload = {
+        "company": job.get("company_name", "") or "",
+        "role": job.get("title", "") or "",
+        "jd": job.get("description", "") or "",
+        "resume": "",
+    }
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{settings.xhire_base_url.rstrip('/')}/api/sessions",
+                json=payload,
+                headers={"Authorization": f"Bearer {xhire_tok}"},
+            )
+        if r.status_code >= 400:
+            # Surface Xhire's own message (e.g. plan limit) without crashing.
+            try:
+                msg = r.json().get("error", "Could not create prep session.")
+            except Exception:
+                msg = "Could not create prep session."
+            return JSONResponse({"error": "xhire_error", "message": msg}, status_code=502)
+        data = r.json()
+        session_id = data.get("id")
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "session_url": f"{settings.xhire_base_url.rstrip('/')}/launcher",
+        }
+    except Exception as e:
+        logger.error(f"[Prep] Xhire session creation failed: {e}")
+        return JSONResponse(
+            {"error": "xhire_unreachable",
+             "message": "Xhire is unreachable right now — try again shortly."},
+            status_code=502,
+        )
+
 
 @app.post("/api/scrape")
 async def api_trigger_scrape():

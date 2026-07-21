@@ -573,6 +573,18 @@ async def get_unscored_jobs(limit: int = 400) -> list[dict]:
         await db.close()
 
 
+async def get_job_by_id(job_id: int) -> Optional[dict]:
+    """Fetch a single job row by id (used by the 'Prep for this job' loop)."""
+    db = await get_db()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
 # --- Search Profiles ---
 
 async def create_profile(data: dict) -> int:

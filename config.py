@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     # Empty = feature off (password-only, unchanged behavior).
     jwt_secret: str = ""
 
+    # Xhire app base URL — used by the "Prep for this job" loop to create an
+    # interview-prep session from a listing.
+    xhire_base_url: str = "https://xhire.app"
+
     # Optional APIs
     serpapi_key: str = ""
     rapidapi_key: str = ""

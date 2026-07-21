@@ -1472,6 +1472,7 @@ function renderDetailPanel(job) {
     + '<div class="detail-actions">'
     + '<a href="' + escAttr(applyUrl) + '" target="_blank" rel="noopener" class="apply-btn' + (job.is_direct_apply ? ' direct' : '') + '" onclick="markViewed(' + job.id + ')">'
     + (job.is_direct_apply ? '&#10003; Apply Direct' : 'View Job') + '</a>'
+    + '<button class="detail-action-btn prep-btn" onclick="prepForJob(' + job.id + ', this)" title="Create a pre-filled Xhire interview-prep session for this role">&#127891; Prep for this</button>'
     + '<button class="detail-action-btn' + (isSaved ? ' active-save' : '') + '" onclick="toggleSaved(' + job.id + ',' + !isSaved + ')">' + (isSaved ? '&#9733; Saved' : '&#9734; Save') + '</button>'
     + '<button class="detail-action-btn' + (isApplied ? ' active-applied' : '') + '" onclick="toggleApplied(' + job.id + ',' + !isApplied + ')">' + (isApplied ? '&#10003; Applied' : 'Applied?') + '</button>'
     + '<button class="detail-action-btn" onclick="markStatus(' + job.id + ',\'hidden\')" style="color:var(--text3);">Hide</button>'
@@ -1912,6 +1913,30 @@ async function saveSourceSettings() {
 // ══════════════════════════════════════════════
 // Actions
 // ══════════════════════════════════════════════
+async function prepForJob(id, btn) {
+  // Xhire Suite — create a pre-filled interview-prep session from this job.
+  var original = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Creating…'; }
+  try {
+    var res = await fetch(API + '/api/prep-for-job', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: id })
+    });
+    var data = await res.json();
+    if (res.ok && data.ok) {
+      if (btn) { btn.innerHTML = '✓ Prep created'; btn.classList.add('active-applied'); }
+      if (data.session_url) { window.open(data.session_url, '_blank'); }
+    } else {
+      if (btn) { btn.disabled = false; btn.innerHTML = original; }
+      alert(data.message || 'Could not create prep session.');
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = original; }
+    alert('Could not reach Xhire right now. Try again shortly.');
+  }
+}
+
 async function markViewed(id) {
   var card = document.querySelector('[data-job-id="' + id + '"]');
   if (card && !card.classList.contains('status-applied') && !card.classList.contains('status-saved') && !card.classList.contains('status-viewed')) {
