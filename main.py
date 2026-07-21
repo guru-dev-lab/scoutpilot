@@ -596,6 +596,25 @@ def _make_session_id() -> str:
     return secrets.token_hex(24)
 
 
+def _validate_xhire_jwt(token: str) -> bool:
+    """Xhire Suite SSO — verify a JWT minted by the Xhire app using the shared
+    HS256 secret. Returns True only for a valid, non-suspended token.
+
+    Fully guarded: if the secret is unset or PyJWT isn't installed, returns
+    False so the caller falls back to normal password auth. Never raises.
+    """
+    if not token or not settings.jwt_secret:
+        return False
+    try:
+        import jwt as _pyjwt
+        payload = _pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        if payload.get("suspended"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
@@ -616,6 +635,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
         session_id = request.cookies.get("sp_session")
         if session_id and session_id in _valid_sessions:
             return await call_next(request)
+
+        # Xhire Suite SSO — accept a valid Xhire JWT (query param on first hit,
+        # cookie, or Authorization: Bearer). On success, mint an sp_session and
+        # set the cookie so subsequent requests use the normal session path.
+        # This is purely additive: password login is unchanged, and if the
+        # shared secret is unset this whole block is a no-op.
+        xhire_tok = (
+            request.query_params.get("xhire_token")
+            or request.cookies.get("xhire_token")
+            or (request.headers.get("authorization", "").replace("Bearer ", "")
+                if request.headers.get("authorization", "").startswith("Bearer ") else "")
+        )
+        if xhire_tok and _validate_xhire_jwt(xhire_tok):
+            new_sid = _make_session_id()
+            _valid_sessions.add(new_sid)
+            response = await call_next(request)
+            response.set_cookie(
+                "sp_session", new_sid,
+                httponly=True, max_age=60 * 60 * 24 * 30, samesite="lax",
+            )
+            return response
 
         # Not authenticated — redirect browser requests, block API calls
         if path.startswith("/api/"):

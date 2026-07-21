@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     # AI
     anthropic_api_key: str = ""
 
+    # Xhire Suite SSO — shared HS256 secret with the Xhire app (env JWT_SECRET).
+    # When set, a valid Xhire JWT is accepted as an alternative to the password.
+    # Empty = feature off (password-only, unchanged behavior).
+    jwt_secret: str = ""
+
     # Optional APIs
     serpapi_key: str = ""
     rapidapi_key: str = ""
