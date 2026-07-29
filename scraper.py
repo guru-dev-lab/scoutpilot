@@ -432,10 +432,16 @@ async def scrape_jobspy(
     hours_old: int = 24,
     profile_id: Optional[int] = None,
     sites: Optional[list[str]] = None,
+    fetch_description: bool = True,
+    timeout: int = 120,
 ) -> list[dict]:
     """
     Scrape jobs using JobSpy (LinkedIn, Indeed, Glassdoor, Google, ZipRecruiter).
     Runs in a thread since JobSpy is synchronous.
+
+    `fetch_description` controls LinkedIn's per-job description fetch — it's slow
+    (one extra request per result), so callers scraping LinkedIn at volume turn
+    it off or cap results. `timeout` is per call.
     """
     if sites is None:
         sites = ["indeed", "linkedin", "google", "glassdoor", "zip_recruiter"]
@@ -450,9 +456,9 @@ async def scrape_jobspy(
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
                 "country_indeed": "USA",
-                "linkedin_fetch_description": True,
+                "linkedin_fetch_description": fetch_description,
                 "description_format": "markdown",
-                "verbose": 2,  # Maximum verbosity to diagnose failures
+                "verbose": 1,
             }
             if location:
                 kwargs["location"] = location
@@ -463,22 +469,20 @@ async def scrape_jobspy(
             if count == 0:
                 logger.warning(f"[JobSpy] EMPTY for '{search_term}' @ '{location}' sites={sites} — possible rate limit or IP block")
             else:
-                logger.info(f"[JobSpy] Raw results for '{search_term}': {count} rows")
+                logger.info(f"[JobSpy] Raw results for '{search_term}' {sites}: {count} rows")
             return results
         except Exception as e:
-            logger.error(f"[JobSpy] Error scraping '{search_term}': {e}")
-            import traceback
-            logger.error(f"[JobSpy] Traceback: {traceback.format_exc()}")
+            logger.error(f"[JobSpy] Error scraping '{search_term}' {sites}: {e}")
             return None
 
     loop = asyncio.get_event_loop()
     try:
         df = await asyncio.wait_for(
             loop.run_in_executor(None, _scrape),
-            timeout=120,  # 2 min per query — JobSpy hits multiple sites
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"[JobSpy] TIMEOUT after 120s for '{search_term}' — skipping")
+        logger.warning(f"[JobSpy] TIMEOUT after {timeout}s for '{search_term}' {sites} — skipping")
         return []
 
     if df is None or df.empty:
@@ -2081,25 +2085,42 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
     terms = _build_profile_terms(profile)
     enabled = await get_enabled_sources()
 
-    MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
-    if not MAIN_SITES:
+    do_indeed = "indeed" in enabled
+    do_linkedin = "linkedin" in enabled
+    if not (do_indeed or do_linkedin):
         return 0
-    jobspy_terms = terms[:8]
+    # Indeed and LinkedIn run as SEPARATE calls so a slow LinkedIn never kills
+    # Indeed's results. Indeed: high volume, fast (description is inline).
+    # LinkedIn: capped low + descriptions on, so it finishes without timing out.
+    jobspy_terms = terms[:6]
     total_new = 0
     for term in jobspy_terms:
         effective_term = f"{term} remote" if remote_only else term
         for loc in effective_locations:
-            async with _get_jobspy_semaphore():
-                try:
-                    result = await scrape_jobspy(
-                        search_term=effective_term, location=loc,
-                        results_wanted=175, hours_old=72, profile_id=profile_id,
-                        sites=MAIN_SITES,
-                    )
-                    total_new += len(result) if isinstance(result, list) else 0
-                except Exception as e:
-                    logger.error(f"[JobSpy:{title}] '{term}' @ '{loc}': {e}")
-            await asyncio.sleep(2)
+            if do_indeed:
+                async with _get_jobspy_semaphore():
+                    try:
+                        r = await scrape_jobspy(
+                            search_term=effective_term, location=loc,
+                            results_wanted=200, hours_old=72, profile_id=profile_id,
+                            sites=["indeed"], fetch_description=True, timeout=90,
+                        )
+                        total_new += len(r) if isinstance(r, list) else 0
+                    except Exception as e:
+                        logger.error(f"[JobSpy:{title}] Indeed '{term}' @ '{loc}': {e}")
+                await asyncio.sleep(1.5)
+            if do_linkedin:
+                async with _get_jobspy_semaphore():
+                    try:
+                        r = await scrape_jobspy(
+                            search_term=effective_term, location=loc,
+                            results_wanted=50, hours_old=72, profile_id=profile_id,
+                            sites=["linkedin"], fetch_description=True, timeout=90,
+                        )
+                        total_new += len(r) if isinstance(r, list) else 0
+                    except Exception as e:
+                        logger.error(f"[JobSpy:{title}] LinkedIn '{term}' @ '{loc}': {e}")
+                await asyncio.sleep(1.5)
     logger.info(f"[JobSpy:{title}] +{total_new} new jobs")
     return total_new
 
