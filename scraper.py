@@ -2039,8 +2039,10 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
         if "remoteok" in enabled:
             light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
-    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — top 3 expanded titles
-    light_terms = terms[:3]
+    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — widened to top 6 title
+    # variants (v2.2.0). The AI relevance gate drops off-target results, so we
+    # cast a wider net at fetch time to surface more real matches.
+    light_terms = terms[:6]
     for lt in light_terms:
         if "weworkremotely" in enabled:
             light_tasks.append(("WWR", scrape_weworkremotely(lt, profile_id)))
@@ -2095,7 +2097,8 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
 
     # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
     MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
-    jobspy_terms = terms[:5]
+    # v2.2.0: widened from top 5 to top 8 title variants — AI gate filters noise.
+    jobspy_terms = terms[:8]
 
     for term in jobspy_terms:
         if not MAIN_SITES:
