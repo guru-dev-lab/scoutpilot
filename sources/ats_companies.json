@@ -6011,5 +6011,609 @@
     "name": "CarbonChain",
     "slug": "carbonchain",
     "ats": "greenhouse"
+  },
+  {
+    "name": "Alcoa",
+    "slug": "alcoa",
+    "ats": "workday",
+    "tenant": "alcoa",
+    "wd": "wd5",
+    "site": "Careers"
+  },
+  {
+    "name": "Amcor",
+    "slug": "amcor",
+    "ats": "workday",
+    "tenant": "amcor",
+    "wd": "wd5",
+    "site": "Amcor_External_Career_Site"
+  },
+  {
+    "name": "Analog Devices",
+    "slug": "analogdevices",
+    "ats": "workday",
+    "tenant": "analogdevices",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "AstraZeneca",
+    "slug": "astrazeneca",
+    "ats": "workday",
+    "tenant": "astrazeneca",
+    "wd": "wd3",
+    "site": "Careers"
+  },
+  {
+    "name": "CACI",
+    "slug": "caci",
+    "ats": "workday",
+    "tenant": "caci",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Cigna",
+    "slug": "cigna",
+    "ats": "workday",
+    "tenant": "cigna",
+    "wd": "wd5",
+    "site": "CignaCareers"
+  },
+  {
+    "name": "Duke Energy",
+    "slug": "dukeenergy",
+    "ats": "workday",
+    "tenant": "dukeenergy",
+    "wd": "wd1",
+    "site": "Search"
+  },
+  {
+    "name": "Illinois Tool Works",
+    "slug": "itw",
+    "ats": "workday",
+    "tenant": "itw",
+    "wd": "wd5",
+    "site": "External"
+  },
+  {
+    "name": "JLL",
+    "slug": "jll",
+    "ats": "workday",
+    "tenant": "jll",
+    "wd": "wd1",
+    "site": "jllCareers"
+  },
+  {
+    "name": "KeyBank",
+    "slug": "keybank",
+    "ats": "workday",
+    "tenant": "keybank",
+    "wd": "wd5",
+    "site": "External_Career_Site"
+  },
+  {
+    "name": "LPL Financial",
+    "slug": "lplfinancial",
+    "ats": "workday",
+    "tenant": "lplfinancial",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Leidos",
+    "slug": "leidos",
+    "ats": "workday",
+    "tenant": "leidos",
+    "wd": "wd5",
+    "site": "External"
+  },
+  {
+    "name": "McKesson",
+    "slug": "mckesson",
+    "ats": "workday",
+    "tenant": "mckesson",
+    "wd": "wd3",
+    "site": "External_Careers"
+  },
+  {
+    "name": "Motorola Solutions",
+    "slug": "motorolasolutions",
+    "ats": "workday",
+    "tenant": "motorolasolutions",
+    "wd": "wd5",
+    "site": "Careers"
+  },
+  {
+    "name": "PNC",
+    "slug": "pnc",
+    "ats": "workday",
+    "tenant": "pnc",
+    "wd": "wd5",
+    "site": "External"
+  },
+  {
+    "name": "Rite Aid",
+    "slug": "riteaid",
+    "ats": "workday",
+    "tenant": "riteaid",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "State Street",
+    "slug": "statestreet",
+    "ats": "workday",
+    "tenant": "statestreet",
+    "wd": "wd1",
+    "site": "Global"
+  },
+  {
+    "name": "T-Mobile",
+    "slug": "tmobile",
+    "ats": "workday",
+    "tenant": "tmobile",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Takeda",
+    "slug": "takeda",
+    "ats": "workday",
+    "tenant": "takeda",
+    "wd": "wd3",
+    "site": "External"
+  },
+  {
+    "name": "Travelers",
+    "slug": "travelers",
+    "ats": "workday",
+    "tenant": "travelers",
+    "wd": "wd5",
+    "site": "External"
+  },
+  {
+    "name": "Truist",
+    "slug": "truist",
+    "ats": "workday",
+    "tenant": "truist",
+    "wd": "wd1",
+    "site": "Careers"
+  },
+  {
+    "name": "Xcel Energy",
+    "slug": "xcelenergy",
+    "ats": "workday",
+    "tenant": "xcelenergy",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "Applied Materials",
+    "slug": "amat",
+    "ats": "workday",
+    "tenant": "amat",
+    "wd": "wd1",
+    "site": "External"
+  },
+  {
+    "name": "CrowdStrike",
+    "slug": "crowdstrike",
+    "ats": "workday",
+    "tenant": "crowdstrike",
+    "wd": "wd5",
+    "site": "crowdstrikeCareers"
+  },
+  {
+    "name": "General Dynamics",
+    "slug": "gdit",
+    "ats": "workday",
+    "tenant": "gdit",
+    "wd": "wd5",
+    "site": "External_Career_Site"
+  },
+  {
+    "name": "Marsh McLennan",
+    "slug": "mmc",
+    "ats": "workday",
+    "tenant": "mmc",
+    "wd": "wd1",
+    "site": "Careers"
+  },
+  {
+    "name": "Synchrony",
+    "slug": "synchronyfinancial",
+    "ats": "workday",
+    "tenant": "synchronyfinancial",
+    "wd": "wd5",
+    "site": "Careers"
+  },
+  {
+    "name": "Sysco",
+    "slug": "sysco",
+    "ats": "workday",
+    "tenant": "sysco",
+    "wd": "wd5",
+    "site": "SyscoCareers"
+  },
+  {
+    "name": "Applied Intuition",
+    "slug": "applied",
+    "ats": "ashby"
+  },
+  {
+    "name": "AlphaSense",
+    "slug": "alphasense",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "TRM Labs",
+    "slug": "trm-labs",
+    "ats": "ashby"
+  },
+  {
+    "name": "Neko Health",
+    "slug": "neko-health",
+    "ats": "ashby"
+  },
+  {
+    "name": "Kodiak",
+    "slug": "kodiak",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Oklo",
+    "slug": "oklo",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Divergent",
+    "slug": "divergent",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Benchling",
+    "slug": "benchling",
+    "ats": "ashby"
+  },
+  {
+    "name": "May Mobility",
+    "slug": "maymobility",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Latitude AI",
+    "slug": "latitude",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Factory AI",
+    "slug": "factory",
+    "ats": "ashby"
+  },
+  {
+    "name": "Bitgo",
+    "slug": "bitgo",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Valar Atomics",
+    "slug": "valaratomics",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Prompt",
+    "slug": "prompt",
+    "ats": "ashby"
+  },
+  {
+    "name": "Rula",
+    "slug": "rula",
+    "ats": "ashby"
+  },
+  {
+    "name": "Antora Energy",
+    "slug": "antora",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Traba",
+    "slug": "traba",
+    "ats": "ashby"
+  },
+  {
+    "name": "Nudge Security",
+    "slug": "nudge",
+    "ats": "ashby"
+  },
+  {
+    "name": "Otter AI",
+    "slug": "otter",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Kairos Power",
+    "slug": "kairospower",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Merkle Science",
+    "slug": "merklescience",
+    "ats": "lever"
+  },
+  {
+    "name": "Socket",
+    "slug": "socket",
+    "ats": "ashby"
+  },
+  {
+    "name": "MinIO",
+    "slug": "minio",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Middesk",
+    "slug": "middesk",
+    "ats": "ashby"
+  },
+  {
+    "name": "Dapper Labs",
+    "slug": "dapper",
+    "ats": "ashby"
+  },
+  {
+    "name": "Kabam",
+    "slug": "kabam",
+    "ats": "lever"
+  },
+  {
+    "name": "Rondo Energy",
+    "slug": "rondoenergy",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Mintlify",
+    "slug": "mintlify",
+    "ats": "ashby"
+  },
+  {
+    "name": "Read AI",
+    "slug": "read-ai",
+    "ats": "ashby"
+  },
+  {
+    "name": "Playground AI",
+    "slug": "playground",
+    "ats": "ashby"
+  },
+  {
+    "name": "Lunar Energy",
+    "slug": "lunarenergy",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Bugcrowd",
+    "slug": "bugcrowd",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Profluent",
+    "slug": "profluent",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Cyberhaven",
+    "slug": "cyberhaven",
+    "ats": "ashby"
+  },
+  {
+    "name": "Gcore",
+    "slug": "gcore",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Quaise",
+    "slug": "quaise",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Elicit",
+    "slug": "elicit",
+    "ats": "ashby"
+  },
+  {
+    "name": "Omnidian",
+    "slug": "omnidian",
+    "ats": "lever"
+  },
+  {
+    "name": "Whop",
+    "slug": "whop",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Rec Room",
+    "slug": "rec",
+    "ats": "ashby"
+  },
+  {
+    "name": "Apiiro",
+    "slug": "apiiro",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Synack",
+    "slug": "synack",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Reka",
+    "slug": "reka",
+    "ats": "ashby"
+  },
+  {
+    "name": "Corti",
+    "slug": "corti",
+    "ats": "ashby"
+  },
+  {
+    "name": "Securitize",
+    "slug": "securitize",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Zus Health",
+    "slug": "zus-health",
+    "ats": "ashby"
+  },
+  {
+    "name": "Sweep",
+    "slug": "sweep",
+    "ats": "ashby"
+  },
+  {
+    "name": "David",
+    "slug": "david",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Albedo",
+    "slug": "albedo",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Turbopuffer",
+    "slug": "turbopuffer",
+    "ats": "ashby"
+  },
+  {
+    "name": "Sweet Security",
+    "slug": "sweetsecurity",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Genmo",
+    "slug": "genmo",
+    "ats": "ashby"
+  },
+  {
+    "name": "Sifflet",
+    "slug": "sifflet",
+    "ats": "ashby"
+  },
+  {
+    "name": "BrightHire",
+    "slug": "brighthire",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Zencastr",
+    "slug": "zencastr",
+    "ats": "ashby"
+  },
+  {
+    "name": "Comet",
+    "slug": "comet",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "MotherDuck",
+    "slug": "motherduck",
+    "ats": "ashby"
+  },
+  {
+    "name": "Cala Health",
+    "slug": "calahealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Valo Health",
+    "slug": "valohealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "David Energy",
+    "slug": "davidenergy",
+    "ats": "ashby"
+  },
+  {
+    "name": "FlutterFlow",
+    "slug": "flutterflow",
+    "ats": "ashby"
+  },
+  {
+    "name": "Enveda",
+    "slug": "enveda",
+    "ats": "lever"
+  },
+  {
+    "name": "Svix",
+    "slug": "svix",
+    "ats": "ashby"
+  },
+  {
+    "name": "Windmill",
+    "slug": "windmill",
+    "ats": "ashby"
+  },
+  {
+    "name": "Dune",
+    "slug": "dune",
+    "ats": "ashby"
+  },
+  {
+    "name": "Centrifuge",
+    "slug": "centrifuge",
+    "ats": "lever"
+  },
+  {
+    "name": "Bicycle Health",
+    "slug": "bicyclehealth",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Vaulted Deep",
+    "slug": "vaulted-deep",
+    "ats": "ashby"
+  },
+  {
+    "name": "Imbue",
+    "slug": "imbue",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Amperon",
+    "slug": "amperon",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Impulse Space",
+    "slug": "impulse",
+    "ats": "ashby"
+  },
+  {
+    "name": "Raygun",
+    "slug": "raygun",
+    "ats": "smartrecruiters"
+  },
+  {
+    "name": "Cloverly",
+    "slug": "cloverly",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "Apex Eye",
+    "slug": "apex",
+    "ats": "greenhouse"
+  },
+  {
+    "name": "tldraw",
+    "slug": "tldraw",
+    "ats": "ashby"
+  },
+  {
+    "name": "Navattic",
+    "slug": "navattic",
+    "ats": "smartrecruiters"
   }
 ]
