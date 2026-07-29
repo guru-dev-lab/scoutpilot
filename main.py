@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.5.0"
+BUILD_VERSION = "2.5.1"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -555,12 +555,13 @@ async def lifespan(app: FastAPI):
             sample = ", ".join(f"{c['name']}(wd:{c['jobs_seen']})" for c in found[:6])
             logger.info(f"[Discovery/Workday] +{len(found)} new Workday employers (bot total {total}) — {sample}")
 
-    # One worker per ATS platform, each on its own interval:
-    asyncio.create_task(_worker("ATS-greenhouse", 90, _make_ats_body("greenhouse")))
-    asyncio.create_task(_worker("ATS-ashby", 100, _make_ats_body("ashby")))
-    asyncio.create_task(_worker("ATS-lever", 110, _make_ats_body("lever")))
-    asyncio.create_task(_worker("ATS-smartrecruiters", 130, _make_ats_body("smartrecruiters")))
-    asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))  # heavier: POST + pagination
+    # One worker per ATS platform. Fast public APIs now sweep ALL their companies
+    # every run (no rotation), so intervals are sized to a full sweep + politeness.
+    asyncio.create_task(_worker("ATS-greenhouse", 180, _make_ats_body("greenhouse")))     # ~770 companies/run
+    asyncio.create_task(_worker("ATS-ashby", 150, _make_ats_body("ashby")))               # ~360
+    asyncio.create_task(_worker("ATS-lever", 130, _make_ats_body("lever")))               # ~200
+    asyncio.create_task(_worker("ATS-smartrecruiters", 150, _make_ats_body("smartrecruiters")))  # ~145
+    asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
     # Non-ATS source groups + scoring + discovery:
     asyncio.create_task(_worker("Light", 120, _light_body))   # fast API sources (Remotive, RemoteOK, keyed…)
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval

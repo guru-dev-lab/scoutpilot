@@ -35,10 +35,18 @@ logger = logging.getLogger("scoutpilot.ats")
 
 COMPANIES_FILE = Path(__file__).parent / "sources" / "ats_companies.json"
 
-# How many rotation buckets. Full company list is covered every
-# ROTATION_BUCKETS × cycle_interval minutes (3 × 5min = full coverage ~15min).
-# Tightened from 6 for max volume across the 743-company roster.
-ROTATION_BUCKETS = 3
+# Rotation buckets PER PLATFORM. Each platform has its own worker now, so the
+# well-behaved public APIs sweep ALL their companies every run (buckets=1 = no
+# rotation). Only Workday rotates, because its WAF rate-limits aggressively and
+# we share the IP with discovery — so we spread its companies over a few runs.
+ROTATION_BUCKETS = 1  # default for any platform not listed below
+_PLATFORM_BUCKETS = {
+    "greenhouse": 1,       # public API, no rotation — scrape all every run
+    "ashby": 1,
+    "lever": 1,
+    "smartrecruiters": 1,
+    "workday": 4,          # WAF-sensitive — cover the roster over 4 runs
+}
 
 # Max concurrent HTTP fetches per ATS platform
 PLATFORM_CONCURRENCY = 20
@@ -203,16 +211,17 @@ def save_companies(companies: list[dict]) -> bool:
 
 
 def get_rotation_slice(companies: list[dict], cycle_number: int, platform: str) -> list[dict]:
-    """Return the subset of companies for this ATS platform to fetch this cycle.
-
-    Uses (cycle_number % ROTATION_BUCKETS) as the bucket index, so every
-    company gets fetched every ROTATION_BUCKETS cycles.
-    """
+    """Companies for this platform to fetch this run. buckets=1 (the fast public
+    APIs) => the whole list every run, no rotation. buckets>1 (Workday) => spread
+    over that many runs so we stay under its WAF limits."""
     platform_companies = [c for c in companies if c.get("ats") == platform]
     if not platform_companies:
         return []
-    bucket_idx = cycle_number % ROTATION_BUCKETS
-    return [c for i, c in enumerate(platform_companies) if i % ROTATION_BUCKETS == bucket_idx]
+    buckets = _PLATFORM_BUCKETS.get(platform, ROTATION_BUCKETS)
+    if buckets <= 1:
+        return platform_companies
+    bucket_idx = cycle_number % buckets
+    return [c for i, c in enumerate(platform_companies) if i % buckets == bucket_idx]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
