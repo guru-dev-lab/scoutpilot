@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     careerjet_affid: str = ""       # https://www.careerjet.com/partners/api
     findwork_token: str = ""        # https://findwork.dev/developers/
 
+    # Relevance: jobs the AI classifier scores below this are hidden from the
+    # board (clearly-wrong roles). Reversible — they're set status='hidden', not deleted.
+    relevance_hide_below: int = 40
+
     # Scraping
     scrape_interval_minutes: int = 5
 

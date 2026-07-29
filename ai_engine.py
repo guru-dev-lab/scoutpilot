@@ -1044,6 +1044,77 @@ JSON array only. Use known names: Python, SQL, Power BI, Tableau, Excel, AWS, Az
     return ""
 
 
+async def classify_jobs_batch(
+    target_title: str,
+    keywords: list[str],
+    excluded: list[str],
+    jobs: list[dict],
+    jd_chars: int = 280,
+) -> dict[int, int]:
+    """Score a batch of jobs (0-100) for fit against one target role in ONE Haiku call.
+
+    Judges primarily by the TITLE, using a short JD snippet only to disambiguate a
+    vague title. This is the semantic relevance gate that fuzzy scoring can't do
+    (e.g. it knows a "Sales Engineer" is NOT a "Data Analyst" even if the JD says SQL).
+
+    Batching ~15-20 jobs per call keeps cost low: hundreds of jobs = a dozen calls.
+    Returns {job_id: score}. On no-key / failure, returns {} so the caller falls
+    back to fuzzy — never breaks scoring.
+    """
+    if not settings.anthropic_api_key or not jobs:
+        return {}
+
+    kw = ", ".join([k for k in keywords[:12] if k]) if keywords else "(none given)"
+    ex = ", ".join([e for e in excluded[:12] if e]) if excluded else "(none)"
+
+    lines = []
+    for idx, j in enumerate(jobs):
+        title = (j.get("title") or "").strip()[:120]
+        comp = (j.get("company_name") or "").strip()[:60]
+        jd = " ".join((j.get("description") or "").split())[:jd_chars]
+        lines.append(f'{idx}. TITLE: "{title}" | COMPANY: {comp} | JD: {jd}')
+    listing = "\n".join(lines)
+
+    prompt = f"""You screen job listings for someone whose TARGET ROLE is: "{target_title}".
+Key skills/context: {kw}
+Roles to exclude: {ex}
+
+Rate EACH listing 0-100 for how well it matches the TARGET ROLE "{target_title}" — i.e. a job someone in that exact role would genuinely apply to.
+Rules:
+- Judge PRIMARILY by the title. Use the JD only to disambiguate a vague/generic title.
+- Same role or clear synonym (e.g. "BI Analyst" ~ "Data Analyst") = 80-100.
+- Adjacent specialty in the SAME family = 45-70.
+- Different role family (Software Engineer, Sales, Marketing, Recruiter, QA, Support, etc. for a Data Analyst) = 0-25 — EVEN IF the JD mentions the same tools (SQL, Python, Excel).
+- Seniority difference alone is NOT a reason to score low.
+
+Return ONLY a compact JSON array with one object per listing: [{{"i":0,"s":92}},{{"i":1,"s":15}}]. No prose."""
+
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        note_ai_call("relevance")
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=min(2000, 60 + 24 * len(jobs)),
+            messages=[{"role": "user", "content": prompt + "\n\nLISTINGS:\n" + listing}],
+        )
+        text = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if not m:
+            return {}
+        arr = json.loads(m.group())
+        out: dict[int, int] = {}
+        for item in arr:
+            i = item.get("i")
+            s = item.get("s")
+            if isinstance(i, int) and 0 <= i < len(jobs) and isinstance(s, (int, float)):
+                out[jobs[i]["id"]] = max(0, min(100, int(s)))
+        return out
+    except Exception as e:
+        logger.error(f"[AI] Batch classify failed: {e}")
+        return {}
+
+
 async def score_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     """Score a batch of jobs for relevance and trust.
     Uses AI for relevance (with fuzzy gate) but heuristic-only for trust (no API calls)."""

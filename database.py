@@ -532,16 +532,34 @@ async def update_job_status(job_id: int, status: str):
         await db.close()
 
 
-async def update_job_scores(job_id: int, relevance: int, trust: int):
+async def update_job_scores(job_id: int, relevance: int, trust: int, hide: bool = False):
     db = await get_db()
     try:
         # Stamp scored_at so this job is never re-scored through AI again.
         # This is the core cost fix — see get_unscored_jobs().
-        await db.execute(
-            "UPDATE jobs SET relevance_score = ?, trust_score = ?, "
-            "scored_at = datetime('now') WHERE id = ?",
-            (relevance, trust, job_id),
-        )
+        # hide=True: also set status='hidden' so a clearly-wrong role drops off
+        # the board (reversible — status only, not deleted). Never re-hide a job
+        # the user has already acted on (saved/applied).
+        if hide:
+            # Below the relevance cutoff → hide, unless the user already acted on it.
+            await db.execute(
+                "UPDATE jobs SET relevance_score = ?, trust_score = ?, "
+                "scored_at = datetime('now'), "
+                "status = CASE WHEN status IN ('saved','applied') THEN status ELSE 'hidden' END "
+                "WHERE id = ?",
+                (relevance, trust, job_id),
+            )
+        else:
+            # At/above cutoff → restore an auto-hidden job back to 'new' (so a
+            # re-classify that now likes a job un-hides it). No-op for jobs that
+            # aren't hidden. Never touches saved/applied/viewed.
+            await db.execute(
+                "UPDATE jobs SET relevance_score = ?, trust_score = ?, "
+                "scored_at = datetime('now'), "
+                "status = CASE WHEN status = 'hidden' THEN 'new' ELSE status END "
+                "WHERE id = ?",
+                (relevance, trust, job_id),
+            )
         await db.commit()
     finally:
         await db.close()
@@ -565,6 +583,24 @@ async def get_unscored_jobs(limit: int = 400) -> list[dict]:
             ORDER BY first_seen_at DESC
             LIMIT ?
             """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def get_jobs_for_reclassify(limit: int = 6000) -> list[dict]:
+    """All jobs eligible for re-classification — excludes user-owned states
+    (saved/applied) and archived. Includes currently-hidden jobs so a re-run can
+    restore ones that now score well."""
+    db = await get_db()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM jobs WHERE status IN ('new','viewed','hidden') "
+            "ORDER BY first_seen_at DESC LIMIT ?",
             (limit,),
         )
         rows = await cursor.fetchall()

@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.1.0"
+BUILD_VERSION = "2.2.0"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -108,6 +108,105 @@ logging.getLogger("scoutpilot").addHandler(_slh)
 logging.getLogger("scraper").addHandler(_slh)
 
 
+def _build_profile_data(profiles: list[dict]) -> list[dict]:
+    """Normalize profiles into the compact dicts the scorer/classifier use."""
+    out = []
+    for profile in profiles:
+        kws = profile.get("keywords", [])
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        excl = profile.get("excluded_keywords", [])
+        if isinstance(excl, str):
+            excl = [k.strip() for k in excl.split(",") if k.strip()]
+        out.append({
+            "id": profile.get("id"),
+            "title": profile["title"],
+            "expanded": profile.get("expanded_titles", []),
+            "keywords": kws,
+            "excluded": excl,
+            "signature": profile.get("skill_signature") or {},
+        })
+    return out
+
+
+async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tuple[int, int]:
+    """v2.2.0 relevance gate — the single scoring path for both the regular cycle
+    and the deep sweep.
+
+    Groups unscored jobs by the profile that fetched them (or best fuzzy match),
+    then classifies each batch of ~18 with ONE Haiku call (title-first, JD snippet
+    to disambiguate) and HIDES clearly-wrong roles. Bounded cost (batched +
+    once-per-job). Falls back to fuzzy per-job if AI is unavailable.
+    Returns (scored_count, hidden_count).
+    """
+    from config import settings as _cfg
+    from ai_engine import score_relevance_fuzzy, classify_jobs_batch, pop_ai_call_stats
+
+    if not new_jobs:
+        return (0, 0)
+
+    all_pd = _build_profile_data(profiles)
+    if not all_pd:
+        return (0, 0)
+    pdata_by_id = {pd["id"]: pd for pd in all_pd if pd.get("id") is not None}
+
+    HIDE_BELOW = _cfg.relevance_hide_below
+    BATCH = 18
+
+    # Assign each job to a profile (the one that fetched it, else best fuzzy).
+    groups: dict = {}
+    for job in new_jobs:
+        pd = pdata_by_id.get(job.get("search_profile_id"))
+        if pd is None:
+            best_f, pd = -1, all_pd[0]
+            for cand in all_pd:
+                f = score_relevance_fuzzy(
+                    job["title"], job.get("description", ""),
+                    cand["title"], cand["expanded"], cand["keywords"],
+                    skill_signature=cand.get("signature"),
+                )
+                if f > best_f:
+                    best_f, pd = f, cand
+        groups.setdefault(pd["title"], (pd, []))[1].append(job)
+
+    ai_scored = 0
+    hidden_count = 0
+    for _title, (pd, jobs_for_pd) in groups.items():
+        for i in range(0, len(jobs_for_pd), BATCH):
+            chunk = jobs_for_pd[i:i + BATCH]
+            scores = await classify_jobs_batch(
+                pd["title"], pd["keywords"], pd["excluded"], chunk,
+            )
+            for job in chunk:
+                if job["id"] in scores:
+                    relevance = scores[job["id"]]
+                else:
+                    relevance = score_relevance_fuzzy(
+                        job["title"], job.get("description", ""),
+                        pd["title"], pd["expanded"], pd["keywords"],
+                        skill_signature=pd.get("signature"),
+                    )
+                trust = score_trust_heuristic(
+                    job["title"], job.get("company_name", ""),
+                    job.get("description", ""), job.get("salary_min", 0),
+                    job.get("salary_max", 0), job.get("company_domain", ""),
+                    job.get("source", ""),
+                )
+                hide = relevance < HIDE_BELOW
+                await update_job_scores(job["id"], relevance, trust, hide=hide)
+                ai_scored += 1
+                if hide:
+                    hidden_count += 1
+
+    if ai_scored:
+        _stats = pop_ai_call_stats()
+        logger.info(
+            f"[Relevance] Classified {ai_scored} jobs | hid {hidden_count} off-target "
+            f"| Haiku calls: {_stats['total']}"
+        )
+    return (ai_scored, hidden_count)
+
+
 async def scheduled_scrape(cycle_number: int = 1):
     """Background scrape cycle — with overlap prevention and per-source rate limiting."""
     global last_scrape_result, _scrape_running
@@ -145,71 +244,8 @@ async def scheduled_scrape(cycle_number: int = 1):
         # up to 72h (~800x per job). scored_at makes AI scoring run once per job.
         new_jobs = await get_unscored_jobs(limit=400)
 
-        # Build combined keyword/exclusion lists across all profiles
-        all_profiles_data = []
-        for profile in profiles:
-            kws = profile.get("keywords", [])
-            if isinstance(kws, str):
-                kws = [k.strip() for k in kws.split(",") if k.strip()]
-            excl = profile.get("excluded_keywords", [])
-            if isinstance(excl, str):
-                excl = [k.strip() for k in excl.split(",") if k.strip()]
-            all_profiles_data.append({
-                "title": profile["title"],
-                "expanded": profile.get("expanded_titles", []),
-                "keywords": kws,
-                "excluded": excl,
-                "signature": profile.get("skill_signature") or {},
-            })
-
-        ai_scored = 0
-        from ai_engine import score_relevance_fuzzy
-        for job in new_jobs:
-            # STEP 1: Find best-matching profile using FREE fuzzy scoring
-            # (now with skill-signature description rescue baked in)
-            best_fuzzy = 0
-            best_profile = all_profiles_data[0] if all_profiles_data else None
-            for pd in all_profiles_data:
-                fuzzy = score_relevance_fuzzy(
-                    job["title"], job.get("description", ""),
-                    pd["title"], pd["expanded"], pd["keywords"],
-                    skill_signature=pd.get("signature"),
-                )
-                if fuzzy > best_fuzzy:
-                    best_fuzzy = fuzzy
-                    best_profile = pd
-
-            # STEP 2: Only call AI for the BEST matching profile (not all 5)
-            # Fuzzy pre-filter inside score_relevance_ai handles obvious cases
-            if best_profile:
-                relevance = await score_relevance_ai(
-                    job["title"], job.get("description", ""),
-                    best_profile["title"], best_profile["expanded"],
-                    best_profile["keywords"], best_profile["excluded"],
-                    skill_signature=best_profile.get("signature"),
-                )
-            else:
-                relevance = best_fuzzy
-
-            # v2.0.0: real trust scoring instead of hardcoded 50
-            trust = score_trust_heuristic(
-                job["title"], job.get("company_name", ""),
-                job.get("description", ""), job.get("salary_min", 0),
-                job.get("salary_max", 0), job.get("company_domain", ""),
-                job.get("source", ""),
-            )
-            await update_job_scores(job["id"], relevance, trust)
-            ai_scored += 1
-
-        if ai_scored:
-            from ai_engine import pop_ai_call_stats
-            _stats = pop_ai_call_stats()
-            logger.info(
-                f"[Scrape] Scored {ai_scored} new jobs | "
-                f"Haiku calls: {_stats['total']} "
-                f"(relevance={_stats['relevance']}, expand={_stats['expand']}, "
-                f"signature={_stats['signature']}, trust={_stats['trust']}, other={_stats['other']})"
-            )
+        # v2.2.0: AI batch relevance gate — classify + hide off-target jobs.
+        await _classify_and_store(new_jobs, profiles)
 
         # AI enhancements for new jobs (capped at 20 per cycle to keep it fast)
         # Light pass — heuristic-only quality checks (NO API calls)
@@ -320,62 +356,11 @@ async def scheduled_deep_sweep():
                     except Exception as e:
                         logger.error(f"[Deep Sweep] Error: {e}")
 
-        # Score any new finds — best-profile-only + fuzzy gate (same as regular scrape)
+        # Score any new finds — same AI batch relevance gate as the regular cycle.
         if total_new > 0:
             from database import get_unscored_jobs
-            from ai_engine import score_relevance_fuzzy
-            # v2.1.0 COST FIX: only score jobs never scored before (see update_job_scores)
             new_jobs = await get_unscored_jobs(limit=400)
-
-            # Build profile data once
-            all_pd = []
-            for profile in profiles:
-                kws = profile.get("keywords", [])
-                if isinstance(kws, str):
-                    kws = [k.strip() for k in kws.split(",") if k.strip()]
-                excl = profile.get("excluded_keywords", [])
-                if isinstance(excl, str):
-                    excl = [k.strip() for k in excl.split(",") if k.strip()]
-                all_pd.append({
-                    "title": profile["title"],
-                    "expanded": profile.get("expanded_titles", []),
-                    "keywords": kws,
-                    "excluded": excl,
-                    "signature": profile.get("skill_signature") or {},
-                })
-
-            for job in new_jobs:
-                # Find best profile with FREE fuzzy (with signature rescue), then AI only for that one
-                best_fuzzy = 0
-                best_pd = all_pd[0] if all_pd else None
-                for pd in all_pd:
-                    f = score_relevance_fuzzy(
-                        job["title"], job.get("description", ""),
-                        pd["title"], pd["expanded"], pd["keywords"],
-                        skill_signature=pd.get("signature"),
-                    )
-                    if f > best_fuzzy:
-                        best_fuzzy = f
-                        best_pd = pd
-
-                if best_pd:
-                    relevance = await score_relevance_ai(
-                        job["title"], job.get("description", ""),
-                        best_pd["title"], best_pd["expanded"],
-                        best_pd["keywords"], best_pd["excluded"],
-                        skill_signature=best_pd.get("signature"),
-                    )
-                else:
-                    relevance = best_fuzzy
-
-                # v2.0.0: real trust scoring instead of hardcoded 50
-                trust = score_trust_heuristic(
-                    job["title"], job.get("company_name", ""),
-                    job.get("description", ""), job.get("salary_min", 0),
-                    job.get("salary_max", 0), job.get("company_domain", ""),
-                    job.get("source", ""),
-                )
-                await update_job_scores(job["id"], relevance, trust)
+            await _classify_and_store(new_jobs, profiles)
 
         logger.info(f"[Deep Sweep] Complete — {total_new} new jobs discovered")
         if total_new > 0:
@@ -1424,6 +1409,26 @@ async def api_generate_signatures(force: bool = False):
         except Exception as e:
             results.append({"id": p["id"], "title": p["title"], "error": str(e)})
     return {"ok": True, "profiles": results}
+
+
+@app.post("/api/admin/reclassify")
+async def api_reclassify():
+    """Admin: re-run the v2.2.0 AI relevance gate over the whole board.
+    Classifies every active/hidden job against its profile (title + JD via
+    batched Haiku) and hides the off-target ones — cleaning the current board
+    in one pass. User-saved/applied jobs are left untouched."""
+    from database import get_jobs_for_reclassify
+    profiles = await get_profiles()
+    if not profiles:
+        return {"status": "no_profiles"}
+    jobs = await get_jobs_for_reclassify()
+    scored, hidden = await _classify_and_store(jobs, profiles)
+    return {
+        "status": "ok",
+        "classified": scored,
+        "hidden": hidden,
+        "kept": scored - hidden,
+    }
 
 
 @app.post("/api/admin/rescore-all-jobs")
