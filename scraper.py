@@ -2109,7 +2109,7 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
                 try:
                     result = await scrape_jobspy(
                         search_term=effective_term, location=loc,
-                        results_wanted=100, hours_old=72, profile_id=profile_id,
+                        results_wanted=175, hours_old=72, profile_id=profile_id,
                         sites=MAIN_SITES,
                     )
                     total_new += len(result) if isinstance(result, list) else 0
