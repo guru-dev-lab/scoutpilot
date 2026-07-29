@@ -2104,15 +2104,18 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
     return total_new
 
 
-async def scrape_ats_for_profile(profile: dict, cycle_number: int) -> int:
+async def scrape_ats_for_profile(profile: dict, cycle_number: int,
+                                 platforms: Optional[list] = None) -> int:
     """ATS (Greenhouse/Lever/Ashby/Workday/SmartRecruiters) for ONE profile.
-    Uses cycle_number for company rotation. Never raises."""
+    `platforms` restricts to specific platforms so each can run as its own
+    worker. Uses cycle_number for company rotation. Never raises."""
     title = profile["title"]
     try:
         from ats_scraper import scrape_all_ats
         terms = _build_profile_terms(profile)
         ats_results = await scrape_all_ats(
-            profile_id=profile["id"], search_terms=terms, cycle_number=cycle_number,
+            profile_id=profile["id"], search_terms=terms,
+            cycle_number=cycle_number, platforms=platforms,
         )
         ats_total = sum(ats_results.values())
         if ats_total > 0:

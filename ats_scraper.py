@@ -856,9 +856,12 @@ async def scrape_all_ats(
     profile_id: Optional[int],
     search_terms: list[str],
     cycle_number: int,
+    platforms: Optional[list[str]] = None,
 ) -> dict:
-    """Run all enabled ATS platforms for one profile, one cycle.
+    """Run ATS platforms for one profile, one cycle.
 
+    `platforms` (optional) restricts to specific platforms (e.g. ["greenhouse"]),
+    which lets each platform run as its own independent worker.
     Returns {platform: insert_count} dict. Never raises — caller can rely on
     this function being safe. Any per-company failures are swallowed and logged.
     """
@@ -870,6 +873,8 @@ async def scrape_all_ats(
         return results
 
     active_platforms = [p for p in _PLATFORM_FETCHERS.keys() if p in enabled]
+    if platforms is not None:
+        active_platforms = [p for p in active_platforms if p in platforms]
     if not active_platforms:
         return results
 

@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.4.0"
+BUILD_VERSION = "2.4.1"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -478,12 +478,18 @@ async def lifespan(app: FastAPI):
                 logger.error(f"[Worker:{name}] crashed: {e}")
             await asyncio.sleep(interval)
 
-    _ats_cycle = {"n": 0}
+    # One independent worker per ATS platform — each rotates its own companies
+    # at its own cadence, so a slow platform (Workday POST+pagination) never
+    # holds up the fast ones (Greenhouse/Ashby).
+    _ats_cycles = {}
 
-    async def _ats_body():
-        from scraper import scrape_ats_for_profile
-        _ats_cycle["n"] += 1
-        await _for_each_profile(scrape_ats_for_profile, _ats_cycle["n"])
+    def _make_ats_body(platform: str):
+        _ats_cycles[platform] = 0
+        async def _body():
+            from scraper import scrape_ats_for_profile
+            _ats_cycles[platform] += 1
+            await _for_each_profile(scrape_ats_for_profile, _ats_cycles[platform], [platform])
+        return _body
 
     async def _jobspy_body():
         from scraper import scrape_jobspy_for_profile
@@ -533,13 +539,18 @@ async def lifespan(app: FastAPI):
             sample = ", ".join(f"{c['name']}({c['ats']}:{c['jobs_seen']})" for c in found[:8])
             logger.info(f"[Discovery] +{len(found)} new companies (bot total {total}) — {sample}")
 
-    # Each source group on its own interval, all running concurrently:
-    asyncio.create_task(_worker("ATS", 120, _ats_body))       # fast public APIs; rotates companies each run
+    # One worker per ATS platform, each on its own interval:
+    asyncio.create_task(_worker("ATS-greenhouse", 90, _make_ats_body("greenhouse")))
+    asyncio.create_task(_worker("ATS-ashby", 100, _make_ats_body("ashby")))
+    asyncio.create_task(_worker("ATS-lever", 110, _make_ats_body("lever")))
+    asyncio.create_task(_worker("ATS-smartrecruiters", 130, _make_ats_body("smartrecruiters")))
+    asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))  # heavier: POST + pagination
+    # Non-ATS source groups + scoring + discovery:
     asyncio.create_task(_worker("Light", 120, _light_body))   # fast API sources (Remotive, RemoteOK, keyed…)
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
     asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
-    logger.info("[Workers] Launched — ATS(120s), Light(120s), JobSpy(420s), Scoring(30s), Discovery(900s)")
+    logger.info("[Workers] Launched 9 workers — 5 ATS platforms + Light + JobSpy + Scoring + Discovery")
 
     # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(
@@ -1657,6 +1668,30 @@ async def api_status():
         "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
         "has_password": bool(_passwords),
     }
+
+
+@app.get("/api/discovery-stats")
+async def api_discovery_stats():
+    """Roster size = static file companies + companies found by the AI bot."""
+    from collections import Counter
+    try:
+        from ats_scraper import load_companies
+        from database import get_discovered_companies
+        file_c = load_companies()
+        disc_c = await get_discovered_companies()
+        seen = {(c["slug"].lower(), c["ats"].lower()) for c in file_c}
+        disc_new = [c for c in disc_c if (c["slug"].lower(), c["ats"].lower()) not in seen]
+        by_ats = Counter(c["ats"] for c in file_c)
+        for c in disc_new:
+            by_ats[c["ats"]] += 1
+        return {
+            "total_companies": len(file_c) + len(disc_new),
+            "base_companies": len(file_c),
+            "discovered_by_ai": len(disc_new),
+            "by_ats": dict(by_ats),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/build")

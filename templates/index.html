@@ -124,6 +124,9 @@
     display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--text2);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .header-companies { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(16,185,129,.3); background: linear-gradient(135deg, rgba(16,185,129,.10), rgba(6,182,212,.08)); font-size: 0.72rem; color: #7dd3c0; white-space: nowrap; }
+  .header-companies b { color: #e2e8f0; font-weight: 700; }
+  .header-companies .ai-badge { color: #10B981; }
   .toolbar-stats .stat-num { font-weight: 700; color: var(--text); margin-right: 1px; }
   .toolbar-stats .stat-sep { color: var(--border); margin: 0 4px; }
   .toolbar-stats .stat-link { cursor: pointer; transition: color var(--transition); }
@@ -584,6 +587,7 @@
       <div class="header-status" id="scrapeStatus">
         <span class="dot gray"></span> Initializing...
       </div>
+      <div class="header-companies" id="companyStats" title="Companies tracked across all ATS platforms — grown automatically by the AI discovery bot"></div>
     </div>
     <div class="header-right">
       <button class="btn sm" onclick="exportCSV()" title="Download filtered results as CSV">Export CSV</button>
@@ -2023,6 +2027,20 @@ async function checkStatus() {
     var res = await fetch(API + '/api/status');
     var status = await res.json();
     updateScrapeStatus(status);
+  } catch (e) {}
+  loadCompanyStats();
+}
+
+async function loadCompanyStats() {
+  try {
+    var res = await fetch(API + '/api/discovery-stats');
+    if (!res.ok) return;
+    var d = await res.json();
+    var el = document.getElementById('companyStats');
+    if (!el || !d || !d.total_companies) return;
+    var ai = d.discovered_by_ai || 0;
+    el.innerHTML = '🏢 <b>' + d.total_companies.toLocaleString() + '</b> companies'
+      + (ai > 0 ? ' <span class="ai-badge">&middot; +' + ai.toLocaleString() + ' found by AI</span>' : '');
   } catch (e) {}
 }
 
