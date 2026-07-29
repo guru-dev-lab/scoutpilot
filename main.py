@@ -494,13 +494,22 @@ async def lifespan(app: FastAPI):
         await _for_each_profile(scrape_light_for_profile)
 
     async def _scoring_body():
+        global last_scrape_result
         from database import get_unscored_jobs
         profiles = await get_profiles()
         if not profiles:
             return
         jobs = await get_unscored_jobs(limit=400)
+        scored = 0
         if jobs:
-            await _classify_and_store(jobs, profiles)
+            scored, _ = await _classify_and_store(jobs, profiles)
+        # Heartbeat so /api/status reflects the live worker model.
+        last_scrape_result = {
+            "status": "running",
+            "mode": "workers",
+            "last_classified": scored,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
     # Each source group on its own interval, all running concurrently:
     asyncio.create_task(_worker("ATS", 120, _ats_body))       # fast public APIs; rotates companies each run
