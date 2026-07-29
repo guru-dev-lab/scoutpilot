@@ -2038,9 +2038,7 @@ async function loadCompanyStats() {
     var d = await res.json();
     var el = document.getElementById('companyStats');
     if (!el || !d || !d.total_companies) return;
-    var ai = d.discovered_by_ai || 0;
-    el.innerHTML = '🏢 <b>' + d.total_companies.toLocaleString() + '</b> companies'
-      + (ai > 0 ? ' <span class="ai-badge">&middot; +' + ai.toLocaleString() + ' found by AI</span>' : '');
+    el.innerHTML = '🏢 <b>' + d.total_companies.toLocaleString() + '</b> Companies Found';
   } catch (e) {}
 }
 
