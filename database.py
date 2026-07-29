@@ -95,6 +95,21 @@ async def init_db():
                 requires_key TEXT DEFAULT '',
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+
+            -- Companies found by the always-on AI discovery bot. Merged with the
+            -- static sources/ats_companies.json at scrape time so the roster grows
+            -- persistently without needing a code deploy.
+            CREATE TABLE IF NOT EXISTS discovered_companies (
+                slug TEXT NOT NULL,
+                ats TEXT NOT NULL,
+                name TEXT DEFAULT '',
+                tenant TEXT DEFAULT '',
+                wd TEXT DEFAULT '',
+                site TEXT DEFAULT '',
+                jobs_seen INTEGER DEFAULT 0,
+                added_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (slug, ats)
+            );
         """)
         await db.commit()
 
@@ -605,6 +620,53 @@ async def get_jobs_for_reclassify(limit: int = 6000) -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def get_discovered_companies() -> list[dict]:
+    """Companies found by the discovery bot, in the shape the ATS scraper expects."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT slug, ats, name, tenant, wd, site FROM discovered_companies"
+        )
+        rows = await cursor.fetchall()
+        out = []
+        for r in rows:
+            c = {"slug": r["slug"], "ats": r["ats"], "name": r["name"] or r["slug"]}
+            if r["ats"] == "workday":
+                c["tenant"] = r["tenant"]
+                c["wd"] = r["wd"]
+                c["site"] = r["site"]
+            out.append(c)
+        return out
+    finally:
+        await db.close()
+
+
+async def add_discovered_company(c: dict) -> bool:
+    """Insert a newly-verified company (idempotent on slug+ats)."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR IGNORE INTO discovered_companies "
+            "(slug, ats, name, tenant, wd, site, jobs_seen) VALUES (?,?,?,?,?,?,?)",
+            (c["slug"], c["ats"], c.get("name", ""), c.get("tenant", ""),
+             c.get("wd", ""), c.get("site", ""), int(c.get("jobs_seen", 0))),
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def count_discovered_companies() -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) AS n FROM discovered_companies")
+        row = await cursor.fetchone()
+        return int(row["n"]) if row else 0
     finally:
         await db.close()
 

@@ -172,6 +172,24 @@ def load_companies() -> list[dict]:
         return []
 
 
+async def load_companies_merged() -> list[dict]:
+    """File roster + companies found by the discovery bot (DB), de-duped by
+    (slug, ats). This is what the scraper uses so the roster grows persistently
+    without a code deploy."""
+    companies = load_companies()
+    seen = {(c["slug"].lower(), c["ats"].lower()) for c in companies}
+    try:
+        from database import get_discovered_companies
+        for c in await get_discovered_companies():
+            key = (c["slug"].lower(), c["ats"].lower())
+            if key not in seen:
+                seen.add(key)
+                companies.append(c)
+    except Exception as e:
+        logger.error(f"[ATS] Failed to merge discovered companies: {e}")
+    return companies
+
+
 def save_companies(companies: list[dict]) -> bool:
     """Persist the company list back to disk (for admin endpoint use)."""
     try:
@@ -855,7 +873,7 @@ async def scrape_all_ats(
     if not active_platforms:
         return results
 
-    companies = load_companies()
+    companies = await load_companies_merged()
     if not companies:
         logger.info(f"[ATS] No companies configured — skipping")
         return results
