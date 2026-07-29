@@ -177,6 +177,113 @@ async def _verify_name(client, sem, name, existing) -> Optional[dict]:
     return None
 
 
+# ── Workday discovery (kept GENTLE — Workday's WAF rate-limits, and we share the
+# scraper's IP, so we probe slowly/infrequently to protect the Workday scraper) ──
+_WD_HOSTS = ["wd1", "wd5", "wd3"]  # the 3 most common datacenters only
+_WD_SITES = ["External", "Careers", "careers", "Search", "External_Career_Site",
+             "ExternalCareerSite", "Global", "Professional", "jobs", "external"]
+_ENTERPRISE_SECTORS = [
+    "large US banks, insurers and financial-services firms",
+    "US hospital systems and health networks",
+    "pharmaceutical, biotech and medical-device companies",
+    "retail, grocery, apparel and restaurant chains",
+    "manufacturing and industrial conglomerates",
+    "energy, oil & gas, chemicals and utility companies",
+    "aerospace, defense and government-contracting firms",
+    "telecom, media and entertainment companies",
+    "large universities and research institutions",
+    "consulting and professional-services firms",
+    "semiconductor, hardware and enterprise-software companies",
+    "transportation, logistics and airline companies",
+    "large European enterprises",
+    "large enterprises in Canada, Australia and India",
+]
+_wd_ctx_idx = 0
+
+
+def _next_enterprise_sector() -> str:
+    global _wd_ctx_idx
+    s = _ENTERPRISE_SECTORS[_wd_ctx_idx % len(_ENTERPRISE_SECTORS)]
+    _wd_ctx_idx += 1
+    return s
+
+
+def _wd_tenant_variants(name: str) -> list[str]:
+    base = re.sub(r"[^a-z0-9 ]", " ", name.lower()).split()
+    if not base:
+        return []
+    stop = {"the", "inc", "llc", "ltd", "co", "corp", "corporation", "company",
+            "group", "holdings", "international"}
+    core = [w for w in base if w not in stop] or base
+    out = []
+    for v in ["".join(base), "".join(core), core[0]]:
+        if 2 <= len(v) <= 40 and v not in out:
+            out.append(v)
+    return out
+
+
+def _wd_sites_for(name: str) -> list[str]:
+    first = name.split()[0] if name.split() else name
+    cap = first[:1].upper() + first[1:].lower()
+    derived = [f"{cap}ExternalCareerSite", f"{cap}Careers", f"{cap}External"]
+    return _WD_SITES + derived
+
+
+async def _verify_workday(client, sem, name, existing) -> Optional[dict]:
+    for tenant in _wd_tenant_variants(name):
+        if (tenant.lower(), "workday") in existing:
+            continue
+        for site in _wd_sites_for(name):
+            for wd in _WD_HOSTS:
+                url = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+                async with sem:
+                    try:
+                        r = await client.post(url, json={
+                            "appliedFacets": {}, "limit": 1, "offset": 0, "searchText": "",
+                        })
+                        await asyncio.sleep(0.1)
+                        if r.status_code == 200:
+                            d = r.json()
+                            n = int(d.get("total", 0) or 0) or len(d.get("jobPostings", []) or [])
+                            if n > 0:
+                                return {"name": name, "slug": tenant, "ats": "workday",
+                                        "tenant": tenant, "wd": wd, "site": site, "jobs_seen": n}
+                    except Exception:
+                        pass
+    return None
+
+
+async def run_workday_discovery_round(existing_keys: set, per_round: int = 8) -> list[dict]:
+    """Gentle Workday discovery: AI names a few enterprises, brute-force a small
+    matrix per tenant with low concurrency. Returns NEW verified Workday employers."""
+    if not settings.anthropic_api_key:
+        return []
+    try:
+        sector = _next_enterprise_sector()
+        names = await generate_candidates_ai(sector, per_round)
+        if not names:
+            return []
+        sem = asyncio.Semaphore(3)  # very gentle — protect the shared IP
+        found = []
+        async with httpx.AsyncClient(timeout=8, headers={"User-Agent": "Mozilla/5.0",
+                                     "Content-Type": "application/json"}) as client:
+            results = await asyncio.gather(
+                *[_verify_workday(client, sem, nm, existing_keys) for nm in names],
+                return_exceptions=True,
+            )
+        for r in results:
+            if isinstance(r, dict):
+                key = (r["slug"].lower(), "workday")
+                if key not in existing_keys:
+                    existing_keys.add(key)
+                    found.append(r)
+        logger.info(f"[Discovery/Workday] sector='{sector}' tested={len(names)} found={len(found)}")
+        return found
+    except Exception as e:
+        logger.error(f"[Discovery/Workday] round failed: {e}")
+        return []
+
+
 async def run_discovery_round(existing_keys: set, contexts_per_round: int = 2,
                               per_context: int = 35) -> list[dict]:
     """One discovery pass. Returns NEW verified companies (also mutates

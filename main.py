@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.4.1"
+BUILD_VERSION = "2.5.0"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -520,17 +520,20 @@ async def lifespan(app: FastAPI):
     # Always-on AI discovery bot — grows the ATS roster by itself.
     _disc = {"keys": None}
 
-    async def _discovery_body():
-        from discovery import run_discovery_round
-        from ats_scraper import load_companies
-        from database import (add_discovered_company, get_discovered_companies,
-                              count_discovered_companies)
+    async def _seed_disc_keys():
         if _disc["keys"] is None:
+            from ats_scraper import load_companies
+            from database import get_discovered_companies
             keys = {(c["slug"].lower(), c["ats"].lower()) for c in load_companies()}
             for c in await get_discovered_companies():
                 keys.add((c["slug"].lower(), c["ats"].lower()))
             _disc["keys"] = keys
             logger.info(f"[Discovery] seeded with {len(keys)} known companies")
+
+    async def _discovery_body():
+        from discovery import run_discovery_round
+        from database import add_discovered_company, count_discovered_companies
+        await _seed_disc_keys()
         found = await run_discovery_round(_disc["keys"])
         for c in found:
             await add_discovered_company(c)
@@ -538,6 +541,19 @@ async def lifespan(app: FastAPI):
             total = await count_discovered_companies()
             sample = ", ".join(f"{c['name']}({c['ats']}:{c['jobs_seen']})" for c in found[:8])
             logger.info(f"[Discovery] +{len(found)} new companies (bot total {total}) — {sample}")
+
+    async def _workday_discovery_body():
+        # Gentle, infrequent Workday discovery (shared IP with the Workday scraper).
+        from discovery import run_workday_discovery_round
+        from database import add_discovered_company, count_discovered_companies
+        await _seed_disc_keys()
+        found = await run_workday_discovery_round(_disc["keys"])
+        for c in found:
+            await add_discovered_company(c)
+        if found:
+            total = await count_discovered_companies()
+            sample = ", ".join(f"{c['name']}(wd:{c['jobs_seen']})" for c in found[:6])
+            logger.info(f"[Discovery/Workday] +{len(found)} new Workday employers (bot total {total}) — {sample}")
 
     # One worker per ATS platform, each on its own interval:
     asyncio.create_task(_worker("ATS-greenhouse", 90, _make_ats_body("greenhouse")))
@@ -550,7 +566,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
     asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
-    logger.info("[Workers] Launched 9 workers — 5 ATS platforms + Light + JobSpy + Scoring + Discovery")
+    asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
+    logger.info("[Workers] Launched 10 workers — 5 ATS platforms + Light + JobSpy + Scoring + Discovery + Discovery-Workday")
 
     # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(
