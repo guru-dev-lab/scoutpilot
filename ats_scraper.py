@@ -36,11 +36,12 @@ logger = logging.getLogger("scoutpilot.ats")
 COMPANIES_FILE = Path(__file__).parent / "sources" / "ats_companies.json"
 
 # How many rotation buckets. Full company list is covered every
-# ROTATION_BUCKETS × cycle_interval minutes (default: 6 × 5min = 30min).
-ROTATION_BUCKETS = 6
+# ROTATION_BUCKETS × cycle_interval minutes (3 × 5min = full coverage ~15min).
+# Tightened from 6 for max volume across the 743-company roster.
+ROTATION_BUCKETS = 3
 
 # Max concurrent HTTP fetches per ATS platform
-PLATFORM_CONCURRENCY = 15
+PLATFORM_CONCURRENCY = 20
 
 # Hard cap on inserts per ATS platform per cycle (safety net)
 MAX_INSERTS_PER_PLATFORM_PER_CYCLE = 300

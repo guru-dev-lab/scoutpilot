@@ -348,7 +348,7 @@ async def scheduled_deep_sweep():
                         new_jobs = await scrape_jobspy(
                             search_term=term,
                             location=loc,
-                            results_wanted=50,
+                            results_wanted=150,
                             hours_old=168,  # 7 days
                             profile_id=profile_id,
                         )
