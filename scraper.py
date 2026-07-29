@@ -2004,44 +2004,24 @@ def _get_jobspy_semaphore() -> asyncio.Semaphore:
     return _jobspy_semaphore
 
 
-async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
-    """
-    Independent bot for ONE profile — ALL sources fire EVERY cycle.
-    Light sources run immediately in parallel.
-    JobSpy calls acquire the global semaphore (only 1 at a time).
-    """
+async def scrape_light_for_profile(profile: dict) -> int:
+    """All fast API / light sources for ONE profile (self-contained).
+    Used by the independent Light worker AND by _run_profile_bot. Never raises."""
     title = profile["title"]
     profile_id = profile["id"]
     locations = profile.get("locations", [])
     remote_only = profile.get("remote_only", 0)
     effective_locations = locations if locations else (["USA"] if remote_only else [""])
     terms = _build_profile_terms(profile)
-
-    total_new = 0
-    errors = []
-
-    # Fetch enabled sources once per bot run (shared across all tasks)
     enabled = await get_enabled_sources()
-    disabled_count = len([s for s in ["indeed", "linkedin", "remotive", "remoteok",
-        "weworkremotely", "jobicy", "himalayas", "arbeitnow", "themuse",
-        "usajobs", "jooble", "adzuna", "careerjet", "findwork",
-        "jobicy_rss", "himalayas_rss", "google", "jsearch"] if s not in enabled])
 
-    logger.info(f"[Bot:{title}] Starting — {len(terms)} terms, {len(enabled)} sources ON ({disabled_count} disabled)")
-
-    # ── ALL light sources: fire in parallel (fast APIs, no anti-bot) ──
     light_tasks = []
-
-    # Remotive + RemoteOK — every term
     for term in terms:
         if "remotive" in enabled:
             light_tasks.append(("Remotive", scrape_remotive(term, profile_id)))
         if "remoteok" in enabled:
             light_tasks.append(("RemoteOK", scrape_remoteok(term, profile_id)))
 
-    # WWR, Jobicy, Himalayas, Arbeitnow, TheMuse — widened to top 6 title
-    # variants (v2.2.0). The AI relevance gate drops off-target results, so we
-    # cast a wider net at fetch time to surface more real matches.
     light_terms = terms[:6]
     for lt in light_terms:
         if "weworkremotely" in enabled:
@@ -2055,20 +2035,15 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
         if "themuse" in enabled:
             light_tasks.append(("TheMuse", scrape_themuse(lt, profile_id)))
 
-    # ── API SOURCES ──
     if "usajobs" in enabled:
         for loc in effective_locations:
             light_tasks.append(("USAJobs", scrape_usajobs(title, loc, profile_id)))
-
     if "jooble" in enabled:
         light_tasks.append(("Jooble", scrape_jooble(title, effective_locations[0] if effective_locations else "USA", profile_id)))
-
     if "adzuna" in enabled:
         light_tasks.append(("Adzuna", scrape_adzuna(title, effective_locations[0] if effective_locations else "", profile_id)))
-
     if "careerjet" in enabled:
         light_tasks.append(("CareerJet", scrape_careerjet(title, effective_locations[0] if effective_locations else "USA", profile_id)))
-
     if "findwork" in enabled:
         light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 
@@ -2078,31 +2053,40 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
         if "himalayas_rss" in enabled:
             light_tasks.append(("HimalayasRSS", scrape_himalayas_rss(lt, profile_id)))
 
-    # SerpApi / JSearch if keys available AND enabled
     if settings.serpapi_key and "google" in enabled:
         light_tasks.append(("SerpApi", scrape_serpapi(title, locations[0] if locations else "", profile_id)))
     if settings.rapidapi_key and "jsearch" in enabled:
         light_tasks.append(("JSearch", scrape_jsearch(title, locations[0] if locations else "", profile_id)))
 
+    total_new = 0
     if light_tasks:
-        light_results = await asyncio.gather(*[t[1] for t in light_tasks], return_exceptions=True)
-        for (src, _), result in zip(light_tasks, light_results):
+        results = await asyncio.gather(*[t[1] for t in light_tasks], return_exceptions=True)
+        for (src, _), result in zip(light_tasks, results):
             if isinstance(result, Exception):
-                errors.append(f"{src}: {result}")
-                logger.error(f"[Bot:{title}] {src}: {result}")
+                logger.error(f"[Light:{title}] {src}: {result}")
             elif isinstance(result, list):
                 total_new += len(result)
+    logger.info(f"[Light:{title}] +{total_new} new jobs")
+    return total_new
 
-    logger.info(f"[Bot:{title}] Light sources done — {total_new} new jobs")
 
-    # ── JobSpy (Indeed+LinkedIn): acquire global semaphore (1 at a time) ──
+async def scrape_jobspy_for_profile(profile: dict) -> int:
+    """JobSpy (Indeed+LinkedIn) for ONE profile (self-contained). Anti-bot: uses
+    the global semaphore so only one JobSpy call runs at a time. Never raises."""
+    title = profile["title"]
+    profile_id = profile["id"]
+    locations = profile.get("locations", [])
+    remote_only = profile.get("remote_only", 0)
+    effective_locations = locations if locations else (["USA"] if remote_only else [""])
+    terms = _build_profile_terms(profile)
+    enabled = await get_enabled_sources()
+
     MAIN_SITES = [s for s in ["indeed", "linkedin"] if s in enabled]
-    # v2.2.0: widened from top 5 to top 8 title variants — AI gate filters noise.
+    if not MAIN_SITES:
+        return 0
     jobspy_terms = terms[:8]
-
+    total_new = 0
     for term in jobspy_terms:
-        if not MAIN_SITES:
-            break  # Both indeed and linkedin are disabled
         effective_term = f"{term} remote" if remote_only else term
         for loc in effective_locations:
             async with _get_jobspy_semaphore():
@@ -2114,29 +2098,41 @@ async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
                     )
                     total_new += len(result) if isinstance(result, list) else 0
                 except Exception as e:
-                    errors.append(f"JobSpy '{term}' @ '{loc}': {e}")
-                    logger.error(f"[Bot:{title}] JobSpy '{term}' @ '{loc}': {e}")
+                    logger.error(f"[JobSpy:{title}] '{term}' @ '{loc}': {e}")
             await asyncio.sleep(2)
+    logger.info(f"[JobSpy:{title}] +{total_new} new jobs")
+    return total_new
 
-    # ── ATS SOURCES (Greenhouse / Lever / Ashby) ──
-    # Fully isolated: any failure here cannot affect existing sources above.
+
+async def scrape_ats_for_profile(profile: dict, cycle_number: int) -> int:
+    """ATS (Greenhouse/Lever/Ashby/Workday/SmartRecruiters) for ONE profile.
+    Uses cycle_number for company rotation. Never raises."""
+    title = profile["title"]
     try:
         from ats_scraper import scrape_all_ats
+        terms = _build_profile_terms(profile)
         ats_results = await scrape_all_ats(
-            profile_id=profile_id,
-            search_terms=terms,
-            cycle_number=cycle_number,
+            profile_id=profile["id"], search_terms=terms, cycle_number=cycle_number,
         )
         ats_total = sum(ats_results.values())
         if ats_total > 0:
-            logger.info(f"[Bot:{title}] ATS: +{ats_total} new jobs {ats_results}")
-        total_new += ats_total
+            logger.info(f"[ATS:{title}] +{ats_total} new jobs {ats_results}")
+        return ats_total
     except Exception as e:
-        errors.append(f"ATS: {e}")
-        logger.error(f"[Bot:{title}] ATS block crashed: {e}")
+        logger.error(f"[ATS:{title}] block crashed: {e}")
+        return 0
 
-    logger.info(f"[Bot:{title}] DONE — {total_new} new jobs, {len(errors)} errors")
-    return {"profile": title, "new_jobs": total_new, "errors": errors}
+
+async def _run_profile_bot(profile: dict, cycle_number: int) -> dict:
+    """Run ALL sources once for one profile (manual / one-off path). The
+    continuous operation uses independent per-source workers instead."""
+    title = profile["title"]
+    total_new = 0
+    total_new += await scrape_light_for_profile(profile)
+    total_new += await scrape_jobspy_for_profile(profile)
+    total_new += await scrape_ats_for_profile(profile, cycle_number)
+    logger.info(f"[Bot:{title}] DONE — {total_new} new jobs")
+    return {"profile": title, "new_jobs": total_new, "errors": []}
 
 
 async def run_scrape_cycle(profiles: list[dict], cycle_number: int = 1) -> dict:

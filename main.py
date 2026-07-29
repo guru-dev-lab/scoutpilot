@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.2.0"
+BUILD_VERSION = "2.3.0"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -455,28 +455,59 @@ async def lifespan(app: FastAPI):
     # Fast cycles (Remotive/RemoteOK/WWR only): 30s cooldown
     # JobSpy cycles: 90s cooldown (anti-bot needs breathing room)
     # Full cycles (all sources): 120s cooldown
-    async def _continuous_scrape_loop():
-        cycle_count = 0
-        while True:
-            cycle_count += 1
-            ran_jobspy = (cycle_count % 3 == 1)
-            ran_strict = (cycle_count % 5 == 1)
-            logger.info(f"[Continuous] Starting cycle #{cycle_count}")
+    # ── v2.3.0: Independent per-source workers ──
+    # Instead of one loop where sources take turns behind a shared cooldown, each
+    # source group runs in its OWN loop at its OWN cadence, all in parallel. They
+    # all write to the shared DB (deduped on insert, WAL handles concurrent
+    # writers); a separate Scoring worker classifies unscored jobs and hides
+    # off-target ones. No source waits on any other.
+    async def _for_each_profile(fn, *args):
+        profiles = await get_profiles()
+        for p in (profiles or []):
             try:
-                await scheduled_scrape(cycle_number=cycle_count)
+                await fn(p, *args)
             except Exception as e:
-                logger.error(f"[Continuous] Cycle #{cycle_count} crashed: {e}")
-            # v2.0.0: 5-minute minimum cooldown to reduce token burn and API pressure
-            if ran_jobspy and ran_strict:
-                cooldown = 420  # Full sweep — give all APIs time to recover
-            elif ran_jobspy:
-                cooldown = 360  # JobSpy hit — Indeed/LinkedIn need space
-            else:
-                cooldown = 300  # Fast APIs only — 5 min baseline
-            logger.info(f"[Continuous] Cycle #{cycle_count} done — {cooldown}s cooldown")
-            await asyncio.sleep(cooldown)
+                logger.error(f"[Worker] {getattr(fn, '__name__', 'fn')} failed for {p.get('title')}: {e}")
 
-    asyncio.create_task(_continuous_scrape_loop())
+    async def _worker(name: str, interval: int, body):
+        await asyncio.sleep(3)  # small startup stagger
+        while True:
+            try:
+                await body()
+            except Exception as e:
+                logger.error(f"[Worker:{name}] crashed: {e}")
+            await asyncio.sleep(interval)
+
+    _ats_cycle = {"n": 0}
+
+    async def _ats_body():
+        from scraper import scrape_ats_for_profile
+        _ats_cycle["n"] += 1
+        await _for_each_profile(scrape_ats_for_profile, _ats_cycle["n"])
+
+    async def _jobspy_body():
+        from scraper import scrape_jobspy_for_profile
+        await _for_each_profile(scrape_jobspy_for_profile)
+
+    async def _light_body():
+        from scraper import scrape_light_for_profile
+        await _for_each_profile(scrape_light_for_profile)
+
+    async def _scoring_body():
+        from database import get_unscored_jobs
+        profiles = await get_profiles()
+        if not profiles:
+            return
+        jobs = await get_unscored_jobs(limit=400)
+        if jobs:
+            await _classify_and_store(jobs, profiles)
+
+    # Each source group on its own interval, all running concurrently:
+    asyncio.create_task(_worker("ATS", 120, _ats_body))       # fast public APIs; rotates companies each run
+    asyncio.create_task(_worker("Light", 120, _light_body))   # fast API sources (Remotive, RemoteOK, keyed…)
+    asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
+    asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
+    logger.info("[Workers] Independent source workers launched — ATS(120s), Light(120s), JobSpy(420s), Scoring(30s)")
 
     # Keep deep sweep and cleanup on scheduler
     scheduler.add_job(
@@ -494,7 +525,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("[Scheduler] Continuous scrape loop started. Fast cycles every ~5min, JobSpy every 3rd (~6min cooldown), full sweep every 15th (~7min). Deep sweep 12h, cleanup 3AM.")
+    logger.info("[Scheduler] Parallel source workers running. Deep sweep 12h, cleanup 3AM.")
 
     # DISABLED — was re-expanding ALL profiles on every deploy (~1 AI call per profile)
     # Titles only need re-expansion when the prompt changes. Use /api/admin/re-expand-titles manually.
