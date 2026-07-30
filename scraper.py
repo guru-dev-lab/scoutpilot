@@ -2112,10 +2112,15 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
             if do_linkedin:
                 async with _get_jobspy_semaphore():
                     try:
+                        # fetch_description OFF (no per-job extra request) lets us
+                        # pull much deeper — reaching LinkedIn jobs we don't have
+                        # yet instead of re-fetching the same shallow ~50. Title
+                        # is the AI gate's primary signal, so dropping the LinkedIn
+                        # description is an acceptable trade for the extra volume.
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
-                            results_wanted=50, hours_old=72, profile_id=profile_id,
-                            sites=["linkedin"], fetch_description=True, timeout=90,
+                            results_wanted=100, hours_old=72, profile_id=profile_id,
+                            sites=["linkedin"], fetch_description=False, timeout=120,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
                     except Exception as e:
