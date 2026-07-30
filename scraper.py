@@ -2102,7 +2102,7 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
                     try:
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
-                            results_wanted=200, hours_old=168, profile_id=profile_id,
+                            results_wanted=200, hours_old=72, profile_id=profile_id,
                             sites=["indeed"], fetch_description=True, timeout=90,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
@@ -2119,7 +2119,7 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
                         # description is an acceptable trade for the extra volume.
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
-                            results_wanted=100, hours_old=168, profile_id=profile_id,
+                            results_wanted=100, hours_old=72, profile_id=profile_id,
                             sites=["linkedin"], fetch_description=False, timeout=120,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
