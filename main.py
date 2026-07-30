@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.7.1"
+BUILD_VERSION = "2.8.0"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -491,9 +491,14 @@ async def lifespan(app: FastAPI):
             await _for_each_profile(scrape_ats_for_profile, _ats_cycles[platform], [platform])
         return _body
 
+    _jobspy_cycle = {"n": 0}
+
     async def _jobspy_body():
         from scraper import scrape_jobspy_for_profile
-        await _for_each_profile(scrape_jobspy_for_profile)
+        _jobspy_cycle["n"] += 1
+        # Pass the cycle number so the term window rotates across all
+        # profile-correct titles over time (not just the first 8 every run).
+        await _for_each_profile(scrape_jobspy_for_profile, _jobspy_cycle["n"])
 
     async def _light_body():
         from scraper import scrape_light_for_profile

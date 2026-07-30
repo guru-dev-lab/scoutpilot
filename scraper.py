@@ -2074,7 +2074,7 @@ async def scrape_light_for_profile(profile: dict) -> int:
     return total_new
 
 
-async def scrape_jobspy_for_profile(profile: dict) -> int:
+async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int:
     """JobSpy (Indeed+LinkedIn) for ONE profile (self-contained). Anti-bot: uses
     the global semaphore so only one JobSpy call runs at a time. Never raises."""
     title = profile["title"]
@@ -2092,7 +2092,18 @@ async def scrape_jobspy_for_profile(profile: dict) -> int:
     # Indeed and LinkedIn run as SEPARATE calls so a slow LinkedIn never kills
     # Indeed's results. Indeed: high volume, fast (description is inline).
     # LinkedIn: capped low + descriptions on, so it finishes without timing out.
-    jobspy_terms = terms[:8]
+    #
+    # ROTATION (v2.8.0): we can't hammer LinkedIn/Indeed faster without IP bans,
+    # so instead of searching only the first 8 correct titles every cycle (leaving
+    # the rest never searched), we rotate an 8-term window across cycles. Every
+    # profile-correct title gets covered over a few cycles at the SAME request
+    # rate — surfacing fresh jobs posted under title variants we'd otherwise miss.
+    window = 8
+    if len(terms) <= window:
+        jobspy_terms = terms
+    else:
+        start = (cycle_number * window) % len(terms)
+        jobspy_terms = [terms[(start + i) % len(terms)] for i in range(window)]
     total_new = 0
     for term in jobspy_terms:
         effective_term = f"{term} remote" if remote_only else term
