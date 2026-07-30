@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     careerjet_affid: str = ""       # https://www.careerjet.com/partners/api
     findwork_token: str = ""        # https://findwork.dev/developers/
 
+    # US-only extraction: drop jobs whose location is clearly non-US (applied to
+    # every source in insert_job). Set false to allow worldwide.
+    us_only: bool = True
+
     # Relevance: jobs the AI classifier scores below this are hidden from the
     # board (clearly-wrong roles). Reversible — they're set status='hidden', not deleted.
     relevance_hide_below: int = 40

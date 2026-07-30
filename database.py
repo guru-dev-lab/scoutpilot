@@ -240,8 +240,96 @@ def make_job_hash(company: str, title: str, location: str) -> str:
     return hashlib.md5(raw.encode()).hexdigest()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# US-only filtering (central — applied to EVERY source via insert_job)
+# ─────────────────────────────────────────────────────────────────────────────
+_US_TOKENS = [
+    " us", " us ", "u.s.", "u.s ", "usa", "united states", "america",
+    "north america", "americas", "remote - us", "remote, us", "remote (us",
+    "us-remote", "us remote", "worldwide", "anywhere", "global",
+]
+_US_STATES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+    "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "west virginia", "wisconsin", "wyoming",
+}
+_US_STATE_ABBR = {
+    " al", " ak", " az", " ar", " ca", " co", " ct", " de", " fl", " ga",
+    " hi", " id", " il", " in", " ia", " ks", " ky", " la", " me", " md",
+    " ma", " mi", " mn", " ms", " mo", " mt", " ne", " nv", " nh", " nj",
+    " nm", " ny", " nc", " nd", " oh", " ok", " or", " pa", " ri", " sc",
+    " sd", " tn", " tx", " ut", " vt", " va", " wa", " wv", " wi", " wy", " dc",
+}
+# Clearly-foreign country/region/city tokens (expanded — was missing many)
+_NON_US_TOKENS = [
+    "emea", "apac", "latam", "india", "pakistan", "bangladesh", "vietnam",
+    "philippines", "indonesia", "malaysia", "thailand", "singapore",
+    "hong kong", "taiwan", "japan", "korea", "china", "australia",
+    "new zealand", "united kingdom", "uk only", " uk", "u.k", "england", "scotland",
+    "wales", "ireland", "germany", "france", "spain", "italy", "portugal",
+    "netherlands", "belgium", "switzerland", "austria", "poland", "sweden",
+    "norway", "finland", "denmark", "greece", "turkey", "israel", "uae",
+    "saudi", "egypt", "south africa", "nigeria", "kenya", "brazil",
+    "argentina", "chile", "colombia", "mexico", "canada only", "canada,",
+    # additions:
+    "costa rica", "panama", "guatemala", "honduras", "nicaragua",
+    "el salvador", "dominican", "ecuador", "bolivia", "uruguay", "paraguay",
+    "venezuela", "peru", "ukraine", "romania", "bulgaria", "serbia",
+    "croatia", "slovenia", "slovakia", "czech", "czechia", "hungary",
+    "lithuania", "latvia", "estonia", "russia", "belarus", "armenia",
+    "kazakhstan", "morocco", "ghana", "tunisia", "algeria", "qatar",
+    "kuwait", "bahrain", "oman", "jordan", "lebanon", "sri lanka", "nepal",
+    "cambodia", "myanmar", "mongolia", "iceland", "luxembourg", "malta",
+    "cyprus", "kyiv", "lviv", "kiev", "bengaluru", "bangalore",
+    "canada", "toronto", "vancouver", "montreal", "ottawa", "calgary",
+    "edmonton", "deutschland", "österreich", "schweiz", "mumbai", "delhi",
+    "hyderabad", "pune", "chennai", "gurgaon", "noida",
+]
+
+
+def is_us_location(location: str) -> bool:
+    """US-eligibility check, biased to KEEP (drop only clearly-foreign roles).
+
+    - Empty / unknown location → keep (can't determine; don't over-drop).
+    - Any US signal (US / state / Worldwide / Anywhere) → keep.
+    - A clearly-foreign country/region/city with no US signal → DROP.
+    - Otherwise (bare 'Remote', a US city with no state, anything unrecognized)
+      → keep. This avoids wrongly dropping US jobs listed as just a city.
+    """
+    if not location:
+        return True
+    loc = f" {location.strip().lower()} "
+    # 1. Strong US signals win outright (covers "North America (US, Canada)").
+    if any(tok in loc for tok in _US_TOKENS):
+        return True
+    if any(state in loc for state in _US_STATES):
+        return True
+    # 2. Clearly foreign → drop. MUST run before the loose state-abbreviation
+    #    check below, which otherwise false-matches ' ca' in 'canada', ' in' in
+    #    'india', ' co' in 'colombia', etc.
+    if any(tok in loc for tok in _NON_US_TOKENS):
+        return False
+    # 3. Loose US state abbreviations (e.g. "Remote, CA").
+    if any(abbr in loc for abbr in _US_STATE_ABBR):
+        return True
+    # 4. No signal either way → keep (bare "Remote", lone US city, unknown).
+    return True
+
+
 async def insert_job(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist (exact hash + fuzzy title + URL check). Returns True if inserted."""
+    # US-only gate — applies to EVERY source. Skip clearly non-US locations;
+    # keep empty/unknown location (can't determine origin).
+    if getattr(settings, "us_only", True):
+        _loc = (job_data.get("location") or "").strip()
+        if _loc and not is_us_location(_loc):
+            return False
     h = make_job_hash(
         job_data.get("company_name", ""),
         job_data.get("title", ""),
