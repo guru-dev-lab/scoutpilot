@@ -1281,6 +1281,7 @@ function renderJobList(append) {
     var typeBadge = '';
     if (job.work_type === 'remote' || job.is_remote) typeBadge = '<span class="badge remote">Remote</span>';
     else if (job.work_type === 'hybrid') typeBadge = '<span class="badge hybrid">Hybrid</span>';
+    else typeBadge = '<span class="badge onsite">Onsite</span>';  // never blank — an onsite chip so work type is always explicit
 
     // Direct apply badge
     var directBadge = job.is_direct_apply ? ' <span class="badge direct">Direct</span>' : '';
@@ -1465,6 +1466,7 @@ function renderDetailPanel(job) {
     + '<div class="detail-badges">'
     + (job.work_type === 'remote' || job.is_remote ? '<span class="badge remote">Remote</span>' : '')
     + (job.work_type === 'hybrid' ? '<span class="badge hybrid">Hybrid</span>' : '')
+    + (job.work_type !== 'remote' && !job.is_remote && job.work_type !== 'hybrid' ? '<span class="badge onsite">Onsite</span>' : '')
     + (job.is_direct_apply ? '<span class="badge direct">Direct Apply</span>' : '')
     + (salaryStr ? '<span style="color:var(--cyan);font-weight:600;font-size:0.85rem;">' + salaryStr + '</span>' : '')
     + '</div>'
