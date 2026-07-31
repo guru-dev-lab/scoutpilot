@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.8.0"
+BUILD_VERSION = "2.8.1"
 BUILD_DATE = "2026-07-21"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -593,9 +593,10 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("[Scheduler] Parallel source workers running. Deep sweep 12h, cleanup 3AM.")
 
-    # DISABLED — was re-expanding ALL profiles on every deploy (~1 AI call per profile)
-    # Titles only need re-expansion when the prompt changes. Use /api/admin/re-expand-titles manually.
-    # asyncio.create_task(_re_expand_profiles())
+    # Self-healing title expansion — only re-expands profiles whose search terms
+    # look polluted (heuristic seniority junk from a past AI outage). Clean
+    # profiles are skipped, so this costs ~0 AI calls once healed.
+    asyncio.create_task(_re_expand_profiles())
 
     # Reprocess existing jobs to fix direct_apply and posted_at on startup
     asyncio.create_task(_reprocess_existing_jobs())
@@ -1353,20 +1354,47 @@ async def api_reprocess_jobs():
     return {"status": "started", "message": "Reprocessing jobs in background"}
 
 
+# Seniority / generic prefixes that a GOOD AI expansion never produces. Their
+# presence means the profile's expanded_titles came from the heuristic fallback
+# (generated during an AI outage) — junk search terms like "Head of Data Analyst"
+# that return nothing and crowd out real variants (BI Analyst, Reporting Analyst).
+_POLLUTION_PREFIXES = (
+    "senior ", "sr ", "sr. ", "junior ", "jr ", "jr. ", "lead ", "staff ",
+    "principal ", "head of ", "director ", "vp ", "chief ",
+)
+
+
+def _titles_polluted(expanded: list) -> bool:
+    """True if a profile's expanded_titles look like heuristic junk and should
+    be regenerated: too few, or containing seniority-prefixed variants."""
+    clean = [t for t in (expanded or []) if isinstance(t, str) and t.strip()]
+    if len(clean) < 4:
+        return True
+    for t in clean:
+        tl = t.strip().lower()
+        if any(tl.startswith(p) for p in _POLLUTION_PREFIXES):
+            return True
+    return False
+
+
 async def _re_expand_profiles():
-    """Re-expand all profile titles with the latest AI prompt on each deploy.
-    This ensures search terms stay up-to-date with the best role families."""
+    """Self-healing title expansion. Runs on startup but only re-expands profiles
+    whose expanded_titles look polluted (heuristic seniority junk) — so it fixes
+    bad search terms without spending an AI call on already-clean profiles."""
     try:
         await asyncio.sleep(5)  # Let the app fully start first
         profiles = await get_profiles()
         for profile in profiles:
             title = profile["title"]
-            logger.info(f"[Startup] Re-expanding titles for '{title}'...")
+            if not _titles_polluted(profile.get("expanded_titles", [])):
+                logger.info(f"[Startup] '{title}' titles already clean — skipping re-expansion")
+                continue
+            logger.info(f"[Startup] '{title}' titles polluted — re-expanding...")
             try:
                 expanded = await expand_title_ai(title)
                 if expanded and len(expanded) > 3:
                     await update_profile(profile["id"], {"expanded_titles": expanded})
-                    logger.info(f"[Startup] '{title}' expanded to {len(expanded)} distinct role names")
+                    logger.info(f"[Startup] '{title}' expanded to {len(expanded)} clean role names: {expanded}")
                 else:
                     logger.info(f"[Startup] '{title}' expansion returned too few results, keeping existing")
             except Exception as e:
