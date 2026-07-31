@@ -1602,9 +1602,18 @@ async function checkForNewJobs() {
 
     if (newOnes.length > 0) {
       _pendingNewJobs = newOnes;
-      var bar = document.getElementById('newJobsBar');
-      document.getElementById('newJobsText').textContent = newOnes.length + ' new job' + (newOnes.length > 1 ? 's' : '') + ' found';
-      bar.classList.add('visible');
+      var panel = document.getElementById('jobListPanel');
+      // Live feed: if the user is at (or near) the top of the list, stream the
+      // new jobs straight in automatically. If they've scrolled down to read,
+      // don't yank their position — surface the click-bar so they pull them in
+      // when ready. Either way, new jobs never sit hidden behind a manual step.
+      if (!panel || panel.scrollTop < 120) {
+        showNewJobs();
+      } else {
+        var bar = document.getElementById('newJobsBar');
+        document.getElementById('newJobsText').textContent = newOnes.length + ' new job' + (newOnes.length > 1 ? 's' : '') + ' found';
+        bar.classList.add('visible');
+      }
     }
 
     // Also update status
@@ -1622,6 +1631,7 @@ function showNewJobs() {
 
   _allJobs = _pendingNewJobs.concat(_allJobs);
   _pendingNewJobs = [];
+  if (_allJobs.length) _lastKnownFirstId = _allJobs[0].id;
 
   // Hide notification bar
   document.getElementById('newJobsBar').classList.remove('visible');
@@ -2305,8 +2315,10 @@ loadSkills();
 loadJobs();
 checkStatus();
 
-// Auto-refresh: check for new jobs every 60 seconds (not rebuilding the list)
-setInterval(checkForNewJobs, 60000);
+// Auto-refresh: poll for new jobs every 30s. New jobs stream in automatically
+// when the user is at the top of the list (live feed); a click-bar appears only
+// if they've scrolled down, so their reading position is never disrupted.
+setInterval(checkForNewJobs, 30000);
 setInterval(checkStatus, 15000);
 setInterval(loadSkills, 120000);
 
