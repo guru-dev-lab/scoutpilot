@@ -1621,22 +1621,26 @@ async function checkForNewJobs() {
 }
 
 function showNewJobs() {
-  // Prepend new jobs to _allJobs and re-render without losing scroll
+  // Merge new jobs, then RE-SORT by true posted time — do not blind-prepend.
+  // A job we just found may have been posted hours ago (e.g. USAJobs/Workday);
+  // prepending by discovery order would wrongly float it to the top. Sorting
+  // keeps the feed in posted-time order: genuinely-new posts rise to the top,
+  // found-late-but-older ones land where they belong.
   if (_pendingNewJobs.length === 0) return;
 
   _allJobs = _pendingNewJobs.concat(_allJobs);
   _pendingNewJobs = [];
+  _allJobs.sort(_cmpNewestFirst);
   if (_allJobs.length) _lastKnownFirstId = _allJobs[0].id;
 
   // Hide notification bar
   document.getElementById('newJobsBar').classList.remove('visible');
 
-  // Full re-render (position stays because we prepend)
+  // Full re-render; keep the reading position steady.
   var panel = document.getElementById('jobListPanel');
   var scrollPos = panel.scrollTop;
   _displayedJobIds = new Set();
   renderJobList(false);
-  // Approximate: add height of new items to scroll position
   panel.scrollTop = scrollPos;
 }
 
