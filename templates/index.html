@@ -1157,11 +1157,7 @@ async function loadJobs(append) {
 
     // Client-side sort
     if (sortVal === 'posted_at:DESC' || sortVal === 'first_seen_at:DESC') {
-      jobs.sort(function(a, b) {
-        var ta = getEffectiveTime(a) || new Date(0);
-        var tb = getEffectiveTime(b) || new Date(0);
-        return tb.getTime() - ta.getTime();
-      });
+      jobs.sort(_cmpNewestFirst);
     }
 
     // Cross-profile dedup
@@ -1176,11 +1172,7 @@ async function loadJobs(append) {
 
     // Re-sort after dedup
     if (sortVal === 'posted_at:DESC' || sortVal === 'first_seen_at:DESC') {
-      jobs.sort(function(a, b) {
-        var ta = getEffectiveTime(a) || new Date(0);
-        var tb = getEffectiveTime(b) || new Date(0);
-        return tb.getTime() - ta.getTime();
-      });
+      jobs.sort(_cmpNewestFirst);
     }
 
     if (append) {
@@ -1233,7 +1225,10 @@ function renderJobList(append) {
     _displayedJobIds.add(job.id);
 
     var effectiveDate = getEffectiveTime(job);
-    var effectiveAgo = effectiveDate ? getTimeAgoFromDate(effectiveDate) : '';
+    // Badge reflects true posted age: posted_at gives "Today"/"6h ago"/"3d ago"
+    // (date-only handled), falling back to found-time only when no posted date.
+    var effectiveAgo = job.posted_at ? getTimeAgo(job.posted_at)
+                     : (job.first_seen_at ? getTimeAgo(job.first_seen_at) : '');
     var pMs = getPostedMs(job);
 
     // Time group headers
@@ -2268,7 +2263,11 @@ function getTimeAgoFromDate(d) {
 }
 
 function getEffectiveTime(job) {
-  if (job.posted_at && !isDateOnly(job.posted_at)) {
+  // True posted time drives ordering/grouping. Use the posted date even when
+  // it's date-only (its day at 00:00) — do NOT fall back to scrape time for
+  // those, or a job posted days ago but found just now looks brand new. Only
+  // use first_seen_at when there is no posted_at at all.
+  if (job.posted_at) {
     var d = parseDate(job.posted_at);
     if (d) return d;
   }
@@ -2282,6 +2281,18 @@ function getEffectiveTime(job) {
 function getPostedMs(job) {
   var t = getEffectiveTime(job);
   return t ? Date.now() - t.getTime() : null;
+}
+
+// Newest-first by true posted time; ties (e.g. same date-only posted day) break
+// by most-recently-found so the feed still moves as we discover same-day jobs.
+function _cmpNewestFirst(a, b) {
+  var ta = getEffectiveTime(a) || new Date(0);
+  var tb = getEffectiveTime(b) || new Date(0);
+  var diff = tb.getTime() - ta.getTime();
+  if (diff !== 0) return diff;
+  var fa = parseDate(a.first_seen_at) || new Date(0);
+  var fb = parseDate(b.first_seen_at) || new Date(0);
+  return fb.getTime() - fa.getTime();
 }
 
 function fmtMs(ms) {

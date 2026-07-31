@@ -559,16 +559,24 @@ async def get_jobs(
             sort_by = "first_seen_at"
         sort_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
 
-        # For posted_at sort, use first_seen_at when posted_at is date-only
-        # (contains T00:00:00 = no real time = unreliable for ordering).
-        # This matches the UI's getPostedMs() logic so sort order and
-        # time group headers agree on what's "newest".
+        # Sort by ACTUAL POSTED time, newest first. Two things matter here:
+        #  1. Normalize with datetime() so the ordering doesn't compare mismatched
+        #     string formats — posted_at is ISO ("2026-07-31T06:00:00", 'T'
+        #     separator) while first_seen_at is SQLite's space format
+        #     ("2026-07-31 13:00:00"). Raw string ORDER BY put ' ' before 'T',
+        #     scrambling the order (a job found now sorting above one posted
+        #     hours earlier). datetime() canonicalizes both.
+        #  2. Use the posted DATE even when it's date-only — do NOT fall back to
+        #     first_seen_at (scrape time) for those. Otherwise a job posted days
+        #     ago but scraped just now looks brand new and jumps to the top. Only
+        #     when there is no posted_at at all do we use first_seen_at.
+        # first_seen_at is the secondary key so same-posted-time jobs show
+        # newest-found first.
         if sort_by == "posted_at":
             order_expr = (
-                "CASE "
-                "  WHEN posted_at != '' AND posted_at NOT LIKE '%T00:00:00%' THEN posted_at "
-                "  ELSE first_seen_at "
-                f"END {sort_dir}"
+                "CASE WHEN posted_at != '' AND posted_at IS NOT NULL "
+                f"THEN datetime(posted_at) ELSE datetime(first_seen_at) END {sort_dir}, "
+                f"datetime(first_seen_at) {sort_dir}"
             )
         else:
             order_expr = f"{sort_by} {sort_dir}"
