@@ -1225,10 +1225,9 @@ function renderJobList(append) {
     _displayedJobIds.add(job.id);
 
     var effectiveDate = getEffectiveTime(job);
-    // Badge reflects true posted age: posted_at gives "Today"/"6h ago"/"3d ago"
-    // (date-only handled), falling back to found-time only when no posted date.
-    var effectiveAgo = job.posted_at ? getTimeAgo(job.posted_at)
-                     : (job.first_seen_at ? getTimeAgo(job.first_seen_at) : '');
+    // Badge matches the sort/grouping: show the effective (capped) age, so a
+    // fresh date-only job reads "Xh ago" and an old one reads "Nd ago".
+    var effectiveAgo = effectiveDate ? getTimeAgoFromDate(effectiveDate) : '';
     var pMs = getPostedMs(job);
 
     // Time group headers
@@ -2269,19 +2268,26 @@ function getTimeAgoFromDate(d) {
 }
 
 function getEffectiveTime(job) {
-  // True posted time drives ordering/grouping. Use the posted date even when
-  // it's date-only (its day at 00:00) — do NOT fall back to scrape time for
-  // those, or a job posted days ago but found just now looks brand new. Only
-  // use first_seen_at when there is no posted_at at all.
+  // Effective time for ordering/grouping:
+  //  - precise posted_at (real clock time) -> use it.
+  //  - date-only posted_at (Indeed etc.) -> we don't know the hour, so estimate
+  //    with found-time (first_seen), but CAP at the posted day + 1. A job posted
+  //    today ranks fresh; one posted days ago but scraped now is capped to its
+  //    posted date and sinks (no more found-late-looks-new).
+  //  - no posted_at -> first_seen.
+  var seen = job.first_seen_at ? parseDate(job.first_seen_at) : null;
   if (job.posted_at) {
-    var d = parseDate(job.posted_at);
-    if (d) return d;
+    var posted = parseDate(job.posted_at);
+    if (posted) {
+      if (!isDateOnly(job.posted_at)) return posted;
+      if (seen) {
+        var cap = new Date(posted.getTime() + 86400000);
+        return new Date(Math.min(seen.getTime(), cap.getTime()));
+      }
+      return posted;
+    }
   }
-  if (job.first_seen_at) {
-    var d2 = parseDate(job.first_seen_at);
-    if (d2) return d2;
-  }
-  return null;
+  return seen;
 }
 
 function getPostedMs(job) {

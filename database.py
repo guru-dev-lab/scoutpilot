@@ -573,10 +573,23 @@ async def get_jobs(
         # first_seen_at is the secondary key so same-posted-time jobs show
         # newest-found first.
         if sort_by == "posted_at":
+            # Effective time, newest first:
+            #  - precise posted_at (has a real clock time) → use it directly.
+            #  - date-only posted_at (Indeed etc., stored as ...T00:00:00) → we
+            #    don't know the hour, so estimate with first_seen_at (when we
+            #    found it) BUT cap it at the posting day + 1. That keeps a job
+            #    posted TODAY ranked fresh (found-time), while a job posted days
+            #    ago but scraped just now is capped to its posted date and sinks.
+            #  - no posted_at at all → first_seen_at.
+            # datetime() normalizes ISO 'T' vs space formats so ordering is right.
             order_expr = (
-                "CASE WHEN posted_at != '' AND posted_at IS NOT NULL "
-                f"THEN datetime(posted_at) ELSE datetime(first_seen_at) END {sort_dir}, "
-                f"datetime(first_seen_at) {sort_dir}"
+                "CASE "
+                "WHEN posted_at != '' AND posted_at IS NOT NULL AND posted_at NOT LIKE '%T00:00:00%' "
+                "  THEN datetime(posted_at) "
+                "WHEN posted_at != '' AND posted_at IS NOT NULL "
+                "  THEN MIN(datetime(first_seen_at), datetime(posted_at, '+1 day')) "
+                "ELSE datetime(first_seen_at) "
+                f"END {sort_dir}, datetime(first_seen_at) {sort_dir}"
             )
         else:
             order_expr = f"{sort_by} {sort_dir}"
