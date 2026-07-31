@@ -2315,10 +2315,12 @@ loadSkills();
 loadJobs();
 checkStatus();
 
-// Auto-refresh: poll for new jobs every 30s. New jobs stream in automatically
-// when the user is at the top of the list (live feed); a click-bar appears only
-// if they've scrolled down, so their reading position is never disrupted.
-setInterval(checkForNewJobs, 30000);
+// Auto-refresh: poll for new jobs every 5s for a near-realtime feed. This is a
+// lightweight read against our own DB (no external scraping), so a fast interval
+// is fine. New jobs stream in automatically when the user is at the top of the
+// list; a click-bar appears only if they've scrolled down, so their reading
+// position is never disrupted.
+setInterval(checkForNewJobs, 5000);
 setInterval(checkStatus, 15000);
 setInterval(loadSkills, 120000);
 
