@@ -322,6 +322,20 @@ def _detect_work_type(row: dict) -> str:
     if source in remote_sources:
         return "remote"
 
+    # ── LAST RESORT: trust the platform's own structured remote flag ──
+    # JobSpy/LinkedIn/Indeed set is_remote from the site's Remote filter. We only
+    # reach here after no onsite-override and no hybrid signal fired, so a True
+    # flag almost always means a genuinely remote role whose title/location just
+    # didn't spell out "remote" (common on LinkedIn rows pulled without the full
+    # description). Without this, those roles wrongly default to onsite and vanish
+    # from the Remote filter — the exact silent drop we're fixing.
+    _flag = row.get("is_remote")
+    if _flag is True or str(_flag).strip().lower() in ("true", "1", "yes"):
+        # But never override an explicit onsite location like "New York, NY"
+        # with no remote hint anywhere.
+        if not re.search(r'\b[a-z]{3,}\s*,\s*[a-z]{2}\b', location) or re.search(r'\bremote\b|\banywhere\b', text):
+            return "remote"
+
     # Default to onsite
     return "onsite"
 
@@ -2123,15 +2137,17 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
             if do_linkedin:
                 async with _get_jobspy_semaphore():
                     try:
-                        # fetch_description OFF (no per-job extra request) lets us
-                        # pull much deeper — reaching LinkedIn jobs we don't have
-                        # yet instead of re-fetching the same shallow ~50. Title
-                        # is the AI gate's primary signal, so dropping the LinkedIn
-                        # description is an acceptable trade for the extra volume.
+                        # fetch_description ON: LinkedIn observed to return only
+                        # ~46-68 rows per query anyway, so turning descriptions OFF
+                        # bought almost no extra depth — but it stripped the text
+                        # that work_type detection and the AI classifier rely on,
+                        # causing remote roles to be mislabeled onsite and dropped
+                        # from the Remote filter. Descriptions back ON is the better
+                        # trade: accurate remote/onsite labels + richer classification.
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
                             results_wanted=100, hours_old=72, profile_id=profile_id,
-                            sites=["linkedin"], fetch_description=False, timeout=120,
+                            sites=["linkedin"], fetch_description=True, timeout=120,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
                     except Exception as e:
