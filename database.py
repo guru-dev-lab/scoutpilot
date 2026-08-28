@@ -294,6 +294,36 @@ _NON_US_TOKENS = [
 ]
 
 
+# Word-boundary matchers. insert_job()'s US gate used bare substring tests,
+# which both let foreign cities through and rejected real US ones.
+_DB_US_ABBR_RE = re.compile(
+    r"(?:^|[,\-/(]|\s)\s*(" + "|".join(
+        a.strip() for a in sorted(_US_STATE_ABBR)) + r")(?=$|[\s,.)/;])",
+    re.IGNORECASE,
+)
+
+_DB_NON_US_CITIES = [
+    "jakarta", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
+    "chennai", "pune", "berlin", "munich", "hamburg", "frankfurt", "chisinau",
+    "toronto", "vancouver", "montreal", "london", "manchester", "dublin",
+    "paris", "madrid", "barcelona", "lisbon", "amsterdam", "brussels",
+    "zurich", "vienna", "warsaw", "prague", "stockholm", "oslo", "helsinki",
+    "copenhagen", "athens", "istanbul", "dubai", "tel aviv", "cairo", "lagos",
+    "nairobi", "johannesburg", "cape town", "sao paulo", "buenos aires",
+    "santiago", "bogota", "lima", "mexico city", "guadalajara", "manila",
+    "bangkok", "hanoi", "kuala lumpur", "seoul", "tokyo", "osaka", "beijing",
+    "shanghai", "shenzhen", "taipei", "sydney", "melbourne", "auckland",
+    "wellington", "karachi", "lahore", "dhaka", "colombo", "gdansk", "krakow",
+]
+
+_DB_NON_US_CITY_RE = re.compile(
+    r"(?<![a-z])(" + "|".join(re.escape(c) for c in
+                              sorted(_DB_NON_US_CITIES, key=len, reverse=True))
+    + r")(?![a-z])",
+    re.IGNORECASE,
+)
+
+
 def is_us_location(location: str) -> bool:
     """US-eligibility check, biased to KEEP (drop only clearly-foreign roles).
 
@@ -316,10 +346,17 @@ def is_us_location(location: str) -> bool:
     #    'india', ' co' in 'colombia', etc.
     if any(tok in loc for tok in _NON_US_TOKENS):
         return False
-    # 3. Loose US state abbreviations (e.g. "Remote, CA").
-    if any(abbr in loc for abbr in _US_STATE_ABBR):
+    # 3. A known non-US city vetoes, and must be checked BEFORE state
+    #    abbreviations: "Jakarta, ID" and "Berlin, DE" would otherwise match
+    #    Idaho and Delaware, and "London" used to reach the lenient default
+    #    below and land on the board despite us_only being on.
+    if _DB_NON_US_CITY_RE.search(loc):
+        return False
+    # 4. US state abbreviations, word-boundary anchored. A bare substring test
+    #    matched " la" inside "Lagos, NG".
+    if _DB_US_ABBR_RE.search(loc):
         return True
-    # 4. No signal either way → keep (bare "Remote", lone US city, unknown).
+    # 5. No signal either way → keep (bare "Remote", lone US city, unknown).
     return True
 
 

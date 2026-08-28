@@ -6,7 +6,13 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.15.2"
+# Score at or below which score_relevance_fuzzy's role-family fence has
+# rejected a job outright — different discipline, and no skill-signature
+# evidence in the description to rescue it. Mirrors the cap inside
+# ai_engine.score_relevance_fuzzy.
+_FAMILY_FENCE_CAP = 22
+
+BUILD_VERSION = "2.16.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -178,14 +184,27 @@ async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tup
                 pd["title"], pd["keywords"], pd["excluded"], chunk,
             )
             for job in chunk:
+                # Always compute the fuzzy score: it carries the role-family
+                # fence, which is what keeps a different discipline out of the
+                # feed entirely.
+                fuzzy = score_relevance_fuzzy(
+                    job["title"], job.get("description", ""),
+                    pd["title"], pd["expanded"], pd["keywords"],
+                    skill_signature=pd.get("signature"),
+                )
                 if job["id"] in scores:
                     relevance = scores[job["id"]]
+                    # The classifier was rating a "Senior DevOps Engineer" above
+                    # 50 for a Data Analyst profile and putting it on the board.
+                    # A fuzzy score at or below the fence cap means two things at
+                    # once: different role family AND nothing in the description
+                    # the skill signature recognises — the disguised-role rescue
+                    # would have lifted it above the cap otherwise. That is
+                    # stronger evidence than the classifier's opinion, so it wins.
+                    if fuzzy <= _FAMILY_FENCE_CAP:
+                        relevance = min(relevance, fuzzy)
                 else:
-                    relevance = score_relevance_fuzzy(
-                        job["title"], job.get("description", ""),
-                        pd["title"], pd["expanded"], pd["keywords"],
-                        skill_signature=pd.get("signature"),
-                    )
+                    relevance = fuzzy
                 trust = score_trust_heuristic(
                     job["title"], job.get("company_name", ""),
                     job.get("description", ""), job.get("salary_min", 0),
