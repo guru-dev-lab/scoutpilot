@@ -24,6 +24,7 @@ from typing import Optional
 
 import httpx
 
+from config import settings
 from database import insert_job, get_enabled_sources
 from scraper import _is_direct_url, _is_blocked_company, _normalize_posted_at
 
@@ -50,6 +51,20 @@ _PLATFORM_BUCKETS = {
 
 # Max concurrent HTTP fetches per ATS platform
 PLATFORM_CONCURRENCY = 20
+
+# Per-platform overrides. Workable/Recruitee/Breezy sit behind Cloudflare and
+# rate-limit far more aggressively than the open Greenhouse/Lever/Ashby APIs —
+# Workable returned `retry-after: 86287` (24h) after roughly 40 quick requests.
+_PLATFORM_CONCURRENCY = {
+    "workable": 3,
+    "recruitee": 4,
+    "breezy": 4,
+}
+
+# Platforms to route through the residential proxy when one is configured, so a
+# single datacenter IP cannot be banned for a day. Their payloads are compact
+# JSON, so the bandwidth cost is negligible compared with rendered job pages.
+_PROXIED_PLATFORMS = {"workable", "recruitee", "breezy"}
 
 # Hard cap on inserts per ATS platform per cycle (safety net)
 MAX_INSERTS_PER_PLATFORM_PER_CYCLE = 300
@@ -807,12 +822,291 @@ async def fetch_smartrecruiters(
 # Platform dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def fetch_workable(
+    client: httpx.AsyncClient,
+    company: dict,
+    profile_id: Optional[int],
+    search_terms: list[str],
+) -> list[dict]:
+    """Fetch jobs from a single Workable board.
+
+    Workable is the largest ATS we were not reading (~27k companies). The v3
+    endpoint is a POST returning {total, results, nextPage}. Each row carries a
+    structured location.countryCode and a `workplace` field
+    (remote/hybrid/on_site), so the US gate and work-type come from real fields
+    instead of being guessed from free text.
+    """
+    slug = company["slug"]
+    company_name = company.get("name", slug)
+    url = f"https://apply.workable.com/api/v3/accounts/{slug}/jobs"
+
+    items: list[dict] = []
+    token = None
+    try:
+        for _ in range(5):  # page cap — these boards are small
+            payload = {"token": token} if token else {}
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 404:
+                return []
+            if resp.status_code != 200:
+                logger.warning(f"[Workable:{slug}] HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            items.extend(data.get("results") or [])
+            token = data.get("nextPage")
+            if not token:
+                break
+    except Exception as e:
+        logger.warning(f"[Workable:{slug}] fetch error: {e}")
+        return []
+
+    inserted: list[dict] = []
+    for item in items:
+        try:
+            title = (item.get("title") or "").strip()
+            if not title:
+                continue
+            if (item.get("state") or "published") != "published":
+                continue
+            if item.get("isInternal"):
+                continue
+
+            loc = item.get("location") or {}
+            locs = item.get("locations") or [loc]
+            codes = {(l.get("countryCode") or "").upper() for l in locs if l}
+            loc_str = ", ".join(
+                p for p in (loc.get("city"), loc.get("region"), loc.get("country")) if p
+            )
+            workplace = (item.get("workplace") or "").lower()
+            is_remote = bool(item.get("remote")) or workplace == "remote"
+
+            # US gate: accept if any listed location is US. A remote role with
+            # no US location is NOT assumed to be US.
+            if "US" not in codes and not (is_remote and is_us_location(loc_str)):
+                continue
+
+            if not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+
+            shortcode = item.get("shortcode")
+            if not shortcode:
+                continue
+            apply_url = f"https://apply.workable.com/{slug}/j/{shortcode}/"
+
+            work_type = ("remote" if is_remote
+                         else "hybrid" if workplace == "hybrid"
+                         else "onsite")
+
+            job = {
+                "title": title,
+                "company_name": company_name,
+                "company_domain": "",
+                "location": loc_str or ("Remote, US" if is_remote else ""),
+                "is_remote": is_remote,
+                "work_type": work_type,
+                "description": "",  # not in the list payload
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "workable",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(item.get("published") or ""),
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+            if await insert_job(job):
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[Workable:{slug}] item skip: {e}")
+            continue
+
+    if inserted:
+        logger.info(f"[Workable:{slug}] +{len(inserted)} new jobs ({len(items)} on board)")
+    return inserted
+
+
+async def fetch_recruitee(
+    client: httpx.AsyncClient,
+    company: dict,
+    profile_id: Optional[int],
+    search_terms: list[str],
+) -> list[dict]:
+    """Fetch jobs from a single Recruitee board (public offers endpoint)."""
+    slug = company["slug"]
+    company_name = company.get("name", slug)
+    url = f"https://{slug}.recruitee.com/api/offers/"
+
+    try:
+        resp = await client.get(url)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code != 200:
+            logger.warning(f"[Recruitee:{slug}] HTTP {resp.status_code}")
+            return []
+        offers = (resp.json() or {}).get("offers") or []
+    except Exception as e:
+        logger.warning(f"[Recruitee:{slug}] fetch error: {e}")
+        return []
+
+    inserted: list[dict] = []
+    for item in offers:
+        try:
+            title = (item.get("title") or "").strip()
+            if not title:
+                continue
+            if (item.get("status") or "published") != "published":
+                continue
+
+            country = (item.get("country_code") or "").upper()
+            loc_str = ", ".join(
+                p for p in (item.get("city"),
+                            item.get("state_name") or item.get("state_code"),
+                            item.get("country")) if p
+            )
+            is_remote = bool(item.get("remote")) or is_remote_string(loc_str)
+            if country != "US" and not (is_remote and is_us_location(loc_str)):
+                continue
+
+            if not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+
+            apply_url = item.get("careers_url") or item.get("careers_apply_url") or ""
+            if not apply_url:
+                continue
+
+            desc = re.sub(r"<[^>]+>", " ", str(item.get("description") or ""))
+            desc = re.sub(r"\s+", " ", desc).strip()
+
+            job = {
+                "title": title,
+                "company_name": company_name,
+                "company_domain": "",
+                "location": loc_str or ("Remote, US" if is_remote else ""),
+                "is_remote": is_remote,
+                "work_type": "remote" if is_remote else "onsite",
+                "description": desc[:4000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "recruitee",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(item.get("published_at") or ""),
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+            if await insert_job(job):
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[Recruitee:{slug}] item skip: {e}")
+            continue
+
+    if inserted:
+        logger.info(f"[Recruitee:{slug}] +{len(inserted)} new jobs ({len(offers)} on board)")
+    return inserted
+
+
+async def fetch_breezy(
+    client: httpx.AsyncClient,
+    company: dict,
+    profile_id: Optional[int],
+    search_terms: list[str],
+) -> list[dict]:
+    """Fetch jobs from a single Breezy HR board (public /json endpoint)."""
+    slug = company["slug"]
+    company_name = company.get("name", slug)
+    url = f"https://{slug}.breezy.hr/json"
+
+    try:
+        resp = await client.get(url)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code != 200:
+            logger.warning(f"[Breezy:{slug}] HTTP {resp.status_code}")
+            return []
+        items = resp.json()
+    except Exception as e:
+        logger.warning(f"[Breezy:{slug}] fetch error: {e}")
+        return []
+
+    if not isinstance(items, list):
+        return []
+
+    inserted: list[dict] = []
+    for item in items:
+        try:
+            title = (item.get("name") or "").strip()
+            if not title:
+                continue
+
+            loc = item.get("location") or {}
+            country_obj = loc.get("country") or {}
+            country = str(country_obj.get("id") or country_obj.get("name") or "")
+            state = (loc.get("state") or {}).get("name") or ""
+            loc_str = ", ".join(
+                p for p in ((loc.get("city") or "").strip(), state, country) if p
+            )
+            is_remote = bool(loc.get("is_remote")) or is_remote_string(loc_str)
+
+            us_country = country.upper() in ("US", "USA", "UNITED STATES")
+            if not us_country and not is_us_location(loc_str):
+                continue
+
+            if not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+
+            apply_url = item.get("url") or ""
+            if not apply_url:
+                friendly = item.get("friendly_id") or item.get("id")
+                if not friendly:
+                    continue
+                apply_url = f"https://{slug}.breezy.hr/p/{friendly}"
+
+            desc = re.sub(r"<[^>]+>", " ", str(item.get("description") or ""))
+            desc = re.sub(r"\s+", " ", desc).strip()
+
+            job = {
+                "title": title,
+                "company_name": company_name,
+                "company_domain": "",
+                "location": loc_str or ("Remote, US" if is_remote else ""),
+                "is_remote": is_remote,
+                "work_type": "remote" if is_remote else "onsite",
+                "description": desc[:4000],
+                "salary_min": 0,
+                "salary_max": 0,
+                "source": "breezy",
+                "source_url": apply_url,
+                "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(item.get("published_date") or ""),
+                "is_direct_apply": True,
+                "search_profile_id": profile_id,
+            }
+            if await insert_job(job):
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[Breezy:{slug}] item skip: {e}")
+            continue
+
+    if inserted:
+        logger.info(f"[Breezy:{slug}] +{len(inserted)} new jobs ({len(items)} on board)")
+    return inserted
+
+
 _PLATFORM_FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "lever": fetch_lever,
     "ashby": fetch_ashby,
     "workday": fetch_workday,
     "smartrecruiters": fetch_smartrecruiters,
+    "workable": fetch_workable,
+    "recruitee": fetch_recruitee,
+    "breezy": fetch_breezy,
 }
 
 
@@ -830,14 +1124,25 @@ async def _fetch_platform(
     if not fetcher:
         return 0
 
-    sem = asyncio.Semaphore(PLATFORM_CONCURRENCY)
+    sem = asyncio.Semaphore(_PLATFORM_CONCURRENCY.get(platform, PLATFORM_CONCURRENCY))
     total_inserted = 0
 
-    async with httpx.AsyncClient(
-        timeout=HTTP_TIMEOUT,
-        headers=HTTP_HEADERS,
-        follow_redirects=True,
-    ) as client:
+    # Cloudflare-fronted platforms ban a single IP hard: Workable answered ~40
+    # probe requests with HTTP 429 and `retry-after: 86287` — a 24-hour block.
+    # One datacenter IP cannot sweep them. Their payloads are small JSON (a few
+    # KB per board, not rendered pages), so routing them through the rotating
+    # residential proxy costs almost no bandwidth and avoids the ban entirely.
+    # Without a proxy configured they still run, just slowly and few at a time.
+    client_kwargs: dict = {
+        "timeout": HTTP_TIMEOUT,
+        "headers": HTTP_HEADERS,
+        "follow_redirects": True,
+    }
+    if platform in _PROXIED_PLATFORMS and settings.proxy_url:
+        client_kwargs["proxy"] = settings.proxy_url
+        logger.info(f"[{platform}] routing via residential proxy")
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
 
         async def _one(company):
             async with sem:

@@ -15,7 +15,7 @@ from jobspy import scrape_jobs
 
 from config import settings
 from database import get_enabled_sources
-from database import insert_job
+from database import insert_job, is_us_location
 
 logger = logging.getLogger("scoutpilot.scraper")
 
@@ -912,6 +912,152 @@ async def scrape_themuse(
         logger.error(f"[TheMuse] Error: {e}")
 
     return jobs
+
+
+_LI_GUEST = ("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/"
+             "search")
+_LI_CARD_RE = re.compile(r"<li>(.*?)</li>", re.S)
+_LI_FIELDS = {
+    "title": re.compile(r'base-search-card__title[^"]*"[^>]*>(.*?)<', re.S),
+    "company": re.compile(r'base-search-card__subtitle[^"]*"[^>]*>\s*<a[^>]*>(.*?)<', re.S),
+    "location": re.compile(r'job-search-card__location[^"]*"[^>]*>(.*?)<', re.S),
+    "url": re.compile(r'href="(https://www\.linkedin\.com/jobs/view/[^"?]+)'),
+    "posted": re.compile(r'datetime="([^"]+)"'),
+}
+
+
+def _li_text(pat: re.Pattern, card: str) -> str:
+    m = pat.search(card)
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
+
+
+async def scrape_linkedin_guest(
+    search_term: str,
+    location: str = "United States",
+    profile_id: Optional[int] = None,
+    pages: int = 3,
+    days: int = 7,
+) -> list[dict]:
+    """Read LinkedIn's public guest job feed directly — no JobSpy, no login.
+
+    Why this exists: JobSpy fetches a full description page per job (~200KB
+    each), which drained residential-proxy bandwidth in days. This endpoint
+    returns ~10 job cards per request in ~29KB — roughly 2.9KB per job, about
+    70x cheaper — and carries everything the feed needs: title, company,
+    location and posted date.
+
+    LinkedIn job pages expose NO external apply link (checked on a live page:
+    244 URLs, every one linkedin.com or its CDN), so rows are marked
+    is_direct_apply=False and stay out of the direct-apply feed. Their real
+    value is the company names, which the ATS discovery bot fuzzes into
+    Greenhouse/Lever/Workable slugs — turning "who is hiring" into jobs that
+    DO have a direct apply link.
+    """
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    params_base = {
+        "keywords": search_term,
+        "location": location or "United States",
+        "f_TPR": f"r{max(days, 1) * 86400}",   # posted within N days
+    }
+
+    client_kwargs: dict = {"timeout": 30, "headers": headers,
+                           "follow_redirects": True}
+    if settings.proxy_url:
+        client_kwargs["proxy"] = settings.proxy_url
+
+    jobs: list[dict] = []
+    seen_urls: set[str] = set()
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            for page in range(pages):
+                params = dict(params_base, start=page * 10)
+                try:
+                    resp = await client.get(_LI_GUEST, params=params)
+                except Exception as e:
+                    logger.warning(f"[LinkedInGuest] page {page} error: {e}")
+                    break
+                if resp.status_code == 429:
+                    logger.warning("[LinkedInGuest] 429 — backing off")
+                    break
+                if resp.status_code != 200:
+                    logger.warning(f"[LinkedInGuest] HTTP {resp.status_code}")
+                    break
+
+                cards = _LI_CARD_RE.findall(resp.text)
+                if not cards:
+                    break
+
+                for card in cards:
+                    try:
+                        title = _li_text(_LI_FIELDS["title"], card)
+                        company = _li_text(_LI_FIELDS["company"], card)
+                        loc = _li_text(_LI_FIELDS["location"], card)
+                        m = _LI_FIELDS["url"].search(card)
+                        url = m.group(1) if m else ""
+                        if not (title and url) or url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+
+                        # USA only — the feed honours the location parameter but
+                        # still returns the occasional non-US row.
+                        if not is_us_location(loc):
+                            continue  # noqa: imported from database below
+                        if _is_blocked_company(company):
+                            continue
+
+                        pm = _LI_FIELDS["posted"].search(card)
+                        posted_at = _normalize_posted_at(pm.group(1) if pm else "")
+
+                        is_remote = "remote" in loc.lower()
+                        jobs.append({
+                            "title": title,
+                            "company_name": company,
+                            "company_domain": "",
+                            "location": loc,
+                            "is_remote": is_remote,
+                            "work_type": "remote" if is_remote else _detect_work_type(
+                                {"title": title, "location": loc, "description": ""}),
+                            "description": "",
+                            "salary_min": 0,
+                            "salary_max": 0,
+                            "source": "linkedin",
+                            "source_url": url,
+                            # No external apply link is reachable without login.
+                            "direct_apply_url": "",
+                            "posted_at": posted_at,
+                            "is_direct_apply": False,
+                            "search_profile_id": profile_id,
+                        })
+                    except Exception as e:
+                        logger.debug(f"[LinkedInGuest] card skip: {e}")
+                        continue
+
+                await asyncio.sleep(1.0)  # be polite between pages
+    except Exception as e:
+        logger.error(f"[LinkedInGuest] '{search_term}': {e}")
+        return []
+
+    inserted = []
+    for job in jobs:
+        try:
+            if await insert_job(job):
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[LinkedInGuest] insert skip: {e}")
+
+    logger.info(
+        f"[LinkedInGuest] '{search_term}': {len(jobs)} US cards, "
+        f"+{len(inserted)} new"
+    )
+    return inserted
 
 
 async def scrape_remoteok(
@@ -2152,7 +2298,11 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
     enabled = await get_enabled_sources()
 
     do_indeed = "indeed" in enabled
-    do_linkedin = "linkedin" in enabled
+    # LinkedIn is served by scrape_linkedin_guest() now: the public guest feed
+    # costs ~2.9KB/job versus JobSpy's ~200KB (it fetches a description page per
+    # job), which is what drained the residential-proxy allowance. Running both
+    # would double-scrape the same postings at 70x the bandwidth.
+    do_linkedin = False
     if not (do_indeed or do_linkedin):
         return 0
     # Indeed and LinkedIn run as SEPARATE calls so a slow LinkedIn never kills

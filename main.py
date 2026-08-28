@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.10.1"
+BUILD_VERSION = "2.11.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -529,6 +529,34 @@ async def lifespan(app: FastAPI):
         from scraper import scrape_light_for_profile
         await _for_each_profile(scrape_light_for_profile)
 
+    async def _linkedin_body():
+        """LinkedIn via its public guest feed — ~2.9KB/job instead of JobSpy's
+        ~200KB, so it can run continuously without draining proxy bandwidth.
+        Rotates a small term window per cycle to widen coverage over time."""
+        from scraper import scrape_linkedin_guest, _build_profile_terms
+        from database import get_enabled_sources
+        if "linkedin" not in await get_enabled_sources():
+            return
+        profiles = await get_profiles()
+        if not profiles:
+            return
+        cycle = _linkedin_state["cycle"] = _linkedin_state["cycle"] + 1
+        total = 0
+        for profile in profiles:
+            terms = _build_profile_terms(profile) or [profile["title"]]
+            window = 4
+            start = (cycle * window) % max(len(terms), 1)
+            picked = [terms[(start + i) % len(terms)] for i in range(min(window, len(terms)))]
+            for term in picked:
+                try:
+                    r = await scrape_linkedin_guest(
+                        term, "United States", profile["id"], pages=3, days=7)
+                    total += len(r)
+                except Exception as e:
+                    logger.error(f"[LinkedInGuest] '{term}': {e}")
+                await asyncio.sleep(2.0)
+        logger.info(f"[LinkedInGuest] cycle {cycle}: +{total} new jobs")
+
     async def _scoring_body():
         global last_scrape_result
         from database import get_unscored_jobs
@@ -546,6 +574,9 @@ async def lifespan(app: FastAPI):
             "last_classified": scored,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    # Rotates the LinkedIn guest-feed search-term window across cycles.
+    _linkedin_state = {"cycle": 0}
 
     # Always-on AI discovery bot — grows the ATS roster by itself.
     _disc = {"keys": None}
@@ -616,9 +647,16 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("ATS-lever", 130, _make_ats_body("lever")))               # ~200
     asyncio.create_task(_worker("ATS-smartrecruiters", 150, _make_ats_body("smartrecruiters")))  # ~145
     asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
+    # Cloudflare-fronted platforms: low concurrency + long intervals. Workable
+    # answered ~40 quick probes with a 24-hour 429 ban, so these are swept
+    # gently (and via the residential proxy when one is configured).
+    asyncio.create_task(_worker("ATS-workable", 600, _make_ats_body("workable")))
+    asyncio.create_task(_worker("ATS-recruitee", 600, _make_ats_body("recruitee")))
+    asyncio.create_task(_worker("ATS-breezy", 600, _make_ats_body("breezy")))
     # Non-ATS source groups + scoring + discovery:
     asyncio.create_task(_worker("Light", 120, _light_body))   # fast API sources (Remotive, RemoteOK, keyed…)
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
+    asyncio.create_task(_worker("LinkedIn-Guest", 900, _linkedin_body))  # cheap public feed, USA only
     asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min

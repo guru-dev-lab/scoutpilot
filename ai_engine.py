@@ -378,6 +378,13 @@ def _detect_family(text: str) -> Optional[str]:
     return None
 
 
+# Minimum score_signature_match() result that lets a job's DESCRIPTION override
+# a title-based rejection. 60 is the value that function documents, and is only
+# reachable with both a foundation hit (e.g. SQL) and a toolkit hit (e.g.
+# Tableau) — one foundation hit alone tops out at 40 even with every bonus.
+_SIGNATURE_RESCUE_MIN = 60
+
+
 def score_relevance_fuzzy(
     job_title: str,
     job_description: str,
@@ -455,6 +462,14 @@ def score_relevance_fuzzy(
         target_family = _detect_family(exp.lower())
     job_family = _detect_family(job_lower)
 
+    # Jobs whose family we cannot identify used to skip the fence entirely and
+    # keep whatever fuzzy noise gave them — "Registered Nurse" scored 40 against
+    # a Data Analyst profile, ABOVE a genuinely-matching disguised role. If the
+    # title is unrecognisable AND the description shows no signature evidence,
+    # it is not this role. Only applied when there IS a description to judge, so
+    # ATS sources that ship without one (Workable) are never penalised.
+    unknown_family_suspect = bool(target_family) and not job_family
+
     fence_capped = False
     if target_family and job_family and job_family != target_family:
         allowed = _FAMILY_ADJACENCY.get(target_family, {target_family})
@@ -482,11 +497,22 @@ def score_relevance_fuzzy(
             sig = _get_fallback_signature(target_title)
         if sig:
             sig_score, _ = score_signature_match(job_title, job_description, sig)
-            if sig_score >= 75:
+            # 60 is the threshold score_signature_match itself documents, and
+            # 60 is only reachable with BOTH a foundation hit and a toolkit hit
+            # (1 foundation alone caps at 25 + 15 bonus = 40). v2.0.0 raised
+            # this to 75, which silently disabled the v1.9.6 rescue it was
+            # written for: a "Solutions Engineer" whose JD has SQL + Tableau +
+            # dashboards + KPIs + reporting scores 66 — real evidence of the
+            # role — and was still capped at 22 and dropped.
+            if sig_score >= _SIGNATURE_RESCUE_MIN:
                 # Description clearly identifies this as the role —
                 # override whatever the title-based scoring said.
-                # v2.0.0: raised from 60 to 75 to reduce false rescues
                 best_score = max(best_score, sig_score)
+                base_title_score = best_score
+                unknown_family_suspect = False
+            elif unknown_family_suspect and sig_score < 25:
+                # Unrecognisable title AND no signal in the description.
+                best_score = min(best_score, 22)
                 base_title_score = best_score
 
     # ── Keyword boost — only when title is ALREADY a reasonable match ────

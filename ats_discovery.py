@@ -255,6 +255,53 @@ def extract_smartrecruiters(url: str) -> Optional[str]:
 # Slug extraction across all ATS — returns list of (ats, candidate_dict)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_WORKABLE_PATTERNS = [
+    re.compile(r"https?://apply\.workable\.com/([a-z0-9][a-z0-9_-]+)", re.I),
+    re.compile(r"https?://([a-z0-9][a-z0-9_-]+)\.workable\.com", re.I),
+]
+_WORKABLE_IGNORE = {"www", "api", "apply", "jobs", "help", "account"}
+
+
+def extract_workable(url: str) -> Optional[str]:
+    """Pull a Workable account slug out of a job URL."""
+    for pat in _WORKABLE_PATTERNS:
+        m = pat.search(url or "")
+        if m:
+            slug = m.group(1).lower()
+            if slug not in _WORKABLE_IGNORE:
+                return slug
+    return None
+
+
+_RECRUITEE_PAT = re.compile(
+    r"https?://([a-z0-9][a-z0-9_-]+)\.recruitee\.com", re.I)
+_RECRUITEE_IGNORE = {"www", "api", "jobs"}
+
+
+def extract_recruitee(url: str) -> Optional[str]:
+    """Pull a Recruitee company slug out of a job URL."""
+    m = _RECRUITEE_PAT.search(url or "")
+    if m:
+        slug = m.group(1).lower()
+        if slug not in _RECRUITEE_IGNORE:
+            return slug
+    return None
+
+
+_BREEZY_PAT = re.compile(r"https?://([a-z0-9][a-z0-9_-]+)\.breezy\.hr", re.I)
+_BREEZY_IGNORE = {"www", "api", "app"}
+
+
+def extract_breezy(url: str) -> Optional[str]:
+    """Pull a Breezy HR company slug out of a job URL."""
+    m = _BREEZY_PAT.search(url or "")
+    if m:
+        slug = m.group(1).lower()
+        if slug not in _BREEZY_IGNORE:
+            return slug
+    return None
+
+
 def extract_candidates_from_url(url: str) -> list[tuple[str, dict]]:
     """Given a job URL, return [(ats, candidate)] for any matches."""
     if not url:
@@ -271,6 +318,12 @@ def extract_candidates_from_url(url: str) -> list[tuple[str, dict]]:
         out.append(("workday", wd))
     if (s := extract_smartrecruiters(url)):
         out.append(("smartrecruiters", {"slug": s}))
+    if (s := extract_workable(url)):
+        out.append(("workable", {"slug": s}))
+    if (s := extract_recruitee(url)):
+        out.append(("recruitee", {"slug": s}))
+    if (s := extract_breezy(url)):
+        out.append(("breezy", {"slug": s}))
 
     return out
 
@@ -340,6 +393,47 @@ async def _verify_workday(client: httpx.AsyncClient, cand: dict) -> Optional[dic
         except Exception:
             continue
     return None
+
+
+async def _verify_workable(client: httpx.AsyncClient, slug: str) -> bool:
+    """A Workable board exists if the v3 POST returns a jobs envelope.
+
+    429 is treated as 'unknown, do not blacklist' — Workable rate-limits hard
+    (observed retry-after of 24h), and a throttled probe says nothing about
+    whether the board is real.
+    """
+    try:
+        r = await client.post(
+            f"https://apply.workable.com/api/v3/accounts/{slug}/jobs", json={})
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        return isinstance(data, dict) and "results" in data and bool(data.get("total"))
+    except Exception:
+        return False
+
+
+async def _verify_recruitee(client: httpx.AsyncClient, slug: str) -> bool:
+    """A Recruitee board exists if the public offers endpoint returns offers."""
+    try:
+        r = await client.get(f"https://{slug}.recruitee.com/api/offers/")
+        if r.status_code != 200:
+            return False
+        return bool((r.json() or {}).get("offers"))
+    except Exception:
+        return False
+
+
+async def _verify_breezy(client: httpx.AsyncClient, slug: str) -> bool:
+    """A Breezy board exists if the public /json endpoint returns a job list."""
+    try:
+        r = await client.get(f"https://{slug}.breezy.hr/json")
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        return isinstance(data, list) and len(data) > 0
+    except Exception:
+        return False
 
 
 async def _verify_smartrecruiters(client: httpx.AsyncClient, slug: str) -> bool:
@@ -614,6 +708,21 @@ async def _verify_candidate(
                 return {"name": expected_name, "slug": slug, "ats": "smartrecruiters"}
             if await _verify_smartrecruiters(client, slug):
                 return {"name": expected_name or slug, "slug": slug, "ats": "smartrecruiters"}
+
+        elif ats == "workable":
+            slug = cand["slug"]
+            if await _verify_workable(client, slug):
+                return {"name": expected_name or slug, "slug": slug, "ats": "workable"}
+
+        elif ats == "recruitee":
+            slug = cand["slug"]
+            if await _verify_recruitee(client, slug):
+                return {"name": expected_name or slug, "slug": slug, "ats": "recruitee"}
+
+        elif ats == "breezy":
+            slug = cand["slug"]
+            if await _verify_breezy(client, slug):
+                return {"name": expected_name or slug, "slug": slug, "ats": "breezy"}
 
     except Exception as e:
         logger.debug(f"[Discovery] verify {ats} failed: {e}")

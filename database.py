@@ -1395,6 +1395,9 @@ ATS_SOURCES = [
     {"source_key": "ashby",           "display_name": "Ashby (ATS)",           "category": "ats", "requires_key": ""},
     {"source_key": "workday",         "display_name": "Workday (ATS)",         "category": "ats", "requires_key": ""},
     {"source_key": "smartrecruiters", "display_name": "SmartRecruiters (ATS)", "category": "ats", "requires_key": ""},
+    {"source_key": "workable",        "display_name": "Workable (ATS)",        "category": "ats", "requires_key": ""},
+    {"source_key": "recruitee",       "display_name": "Recruitee (ATS)",       "category": "ats", "requires_key": ""},
+    {"source_key": "breezy",          "display_name": "Breezy HR (ATS)",       "category": "ats", "requires_key": ""},
 ]
 
 
