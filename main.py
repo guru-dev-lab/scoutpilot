@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.21.0"
+BUILD_VERSION = "2.21.1"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1840,6 +1840,20 @@ async def api_debug_pipeline():
             out["unscored_visible"] = await rows(
                 "SELECT COUNT(*) AS n FROM jobs "
                 "WHERE status != 'hidden' AND (scored_at IS NULL OR scored_at='')")
+            # P2: is trust actually discriminating, or stuck at the default 50?
+            out["trust_distribution"] = await rows(
+                "SELECT CASE WHEN trust_score >= 80 THEN '80-100' "
+                "            WHEN trust_score >= 60 THEN '60-79' "
+                "            WHEN trust_score = 50 THEN 'exactly-50' "
+                "            WHEN trust_score >= 40 THEN '40-49' "
+                "            ELSE 'under40' END AS band, COUNT(*) AS n "
+                "FROM jobs WHERE status != 'hidden' GROUP BY band ORDER BY n DESC")
+            # P5: are the profiles' expanded titles wide enough?
+            out["profiles"] = await rows(
+                "SELECT id, title, "
+                "  LENGTH(expanded_titles) AS expanded_len, "
+                "  expanded_titles, keywords "
+                "FROM search_profiles WHERE is_active = 1")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
