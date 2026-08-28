@@ -381,6 +381,15 @@ async def scheduled_cleanup():
     """Daily cleanup: archive old jobs and purge ancient archives."""
     try:
         result = await cleanup_old_jobs()
+        # Deleting rows does not shrink a SQLite file — without this the DB
+        # only ever grows and eventually fills the volume.
+        try:
+            from database import reclaim_space
+            rec = await reclaim_space()
+            logger.info(f"[Retention] reclaim: {rec.get('steps')} "
+                        f"freed={rec.get('freed_mb')}MB")
+        except Exception as e:
+            logger.error(f"[Retention] reclaim_space failed: {e}")
         logger.info(
             f"[Retention] Archived {result['archived']} jobs, "
             f"purged {result['purged']}. "
@@ -732,7 +741,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/status"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/status"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -1503,6 +1512,30 @@ async def _reprocess_existing_jobs():
 # ──────────────────────────────────────────────
 # Data Retention API
 # ──────────────────────────────────────────────
+
+@app.get("/api/debug/storage")
+async def api_debug_storage():
+    """Disk/SQLite space accounting. Open (like the other /api/debug routes) so
+    volume pressure can be diagnosed without a login — it exposes sizes and row
+    counts only, never job or user data."""
+    try:
+        from database import storage_stats
+        return await storage_stats()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/admin/reclaim-space")
+async def api_reclaim_space(force: str = ""):
+    """Return dead SQLite pages to the filesystem (WAL truncate, then VACUUM
+    when there is enough headroom)."""
+    try:
+        from database import reclaim_space
+        return await reclaim_space(force_vacuum=force in ("1", "true", "yes"))
+    except Exception as e:
+        logger.exception("[Admin] reclaim-space failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.get("/api/retention")
 async def api_retention_stats():

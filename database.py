@@ -899,7 +899,7 @@ async def delete_profile(profile_id: int):
 # --- Data Retention / Cleanup ---
 
 ARCHIVE_AFTER_DAYS = 3    # Move jobs older than 3 days to archive (matches UI default)
-PURGE_AFTER_DAYS = 30     # Delete archived jobs older than this
+PURGE_AFTER_DAYS = 10     # Delete archived jobs older than this (hot board, not a backlog)
 
 
 async def init_archive_table():
@@ -1007,6 +1007,142 @@ async def cleanup_old_jobs() -> dict:
         }
     finally:
         await db.close()
+
+
+async def storage_stats() -> dict:
+    """Disk + SQLite space accounting for the volume the DB lives on."""
+    import shutil
+    out: dict = {}
+    try:
+        d = os.path.dirname(DB_PATH) or "."
+        total, used, free = shutil.disk_usage(d)
+        out["disk"] = {
+            "mount": d,
+            "total_mb": round(total / 1e6, 1),
+            "used_mb": round(used / 1e6, 1),
+            "free_mb": round(free / 1e6, 1),
+            "pct_used": round(used / total * 100, 1) if total else None,
+        }
+    except Exception as e:
+        out["disk"] = {"error": str(e)}
+
+    files = {}
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            files[os.path.basename(DB_PATH) + suffix] = round(
+                os.path.getsize(DB_PATH + suffix) / 1e6, 1)
+        except OSError:
+            pass
+    out["files_mb"] = files
+
+    db = await get_db()
+    try:
+        async def one(sql):
+            return (await (await db.execute(sql)).fetchone())[0]
+        page_size = await one("PRAGMA page_size")
+        page_count = await one("PRAGMA page_count")
+        freelist = await one("PRAGMA freelist_count")
+        out["sqlite"] = {
+            "page_size": page_size,
+            "page_count": page_count,
+            "freelist_pages": freelist,
+            "logical_mb": round(page_size * page_count / 1e6, 1),
+            # Space already deleted but never returned to the filesystem.
+            "reclaimable_mb": round(page_size * freelist / 1e6, 1),
+            "auto_vacuum": await one("PRAGMA auto_vacuum"),
+        }
+        counts = {}
+        for t in ("jobs", "jobs_archive", "discovered_companies"):
+            try:
+                counts[t] = await one(f"SELECT COUNT(*) FROM {t}")
+            except Exception:
+                counts[t] = None
+        out["rows"] = counts
+        try:
+            out["description_mb"] = round(
+                (await one("SELECT COALESCE(SUM(LENGTH(description)),0) FROM jobs")
+                 + await one("SELECT COALESCE(SUM(LENGTH(description)),0) FROM jobs_archive")
+                 ) / 1e6, 1)
+        except Exception:
+            pass
+        out["retention"] = {
+            "archive_after_days": ARCHIVE_AFTER_DAYS,
+            "purge_after_days": PURGE_AFTER_DAYS,
+        }
+    finally:
+        await db.close()
+    return out
+
+
+async def reclaim_space(force_vacuum: bool = False) -> dict:
+    """Return dead space to the filesystem, cheapest step first.
+
+    A full VACUUM rebuilds the database and needs free disk roughly equal to
+    the DB size. On a volume that is already nearly full that would fail, so it
+    only runs when there is comfortable headroom (or force_vacuum=True).
+    """
+    import shutil
+    result: dict = {"steps": [], "errors": []}
+    before = {}
+    try:
+        before = {k: os.path.getsize(DB_PATH + k) for k in ("", "-wal")
+                  if os.path.exists(DB_PATH + k)}
+    except OSError:
+        pass
+
+    db = await get_db()
+    try:
+        # 1. Checkpoint + truncate the WAL. Cheap, no extra space needed.
+        try:
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            await db.commit()
+            result["steps"].append("wal_checkpoint(TRUNCATE)")
+        except Exception as e:
+            result["errors"].append(f"wal_checkpoint: {e}")
+
+        # 2. Incremental vacuum, only meaningful when auto_vacuum=INCREMENTAL.
+        try:
+            av = (await (await db.execute("PRAGMA auto_vacuum")).fetchone())[0]
+            if av == 2:
+                await db.execute("PRAGMA incremental_vacuum")
+                await db.commit()
+                result["steps"].append("incremental_vacuum")
+            result["auto_vacuum"] = av
+        except Exception as e:
+            result["errors"].append(f"incremental_vacuum: {e}")
+    finally:
+        await db.close()
+
+    # 3. Full VACUUM only with headroom — it needs ~1x the DB size free.
+    try:
+        d = os.path.dirname(DB_PATH) or "."
+        free = shutil.disk_usage(d).free
+        db_size = os.path.getsize(DB_PATH)
+        result["free_mb"] = round(free / 1e6, 1)
+        result["db_mb"] = round(db_size / 1e6, 1)
+        if force_vacuum or free > db_size * 1.2:
+            vdb = await aiosqlite.connect(DB_PATH)
+            try:
+                await vdb.execute("VACUUM")
+                await vdb.commit()
+                result["steps"].append("VACUUM")
+            finally:
+                await vdb.close()
+        else:
+            result["steps"].append(
+                f"VACUUM SKIPPED — needs ~{round(db_size*1.2/1e6)}MB free, "
+                f"only {round(free/1e6)}MB available")
+    except Exception as e:
+        result["errors"].append(f"vacuum: {e}")
+
+    try:
+        after = {k: os.path.getsize(DB_PATH + k) for k in ("", "-wal")
+                 if os.path.exists(DB_PATH + k)}
+        result["freed_mb"] = round(
+            (sum(before.values()) - sum(after.values())) / 1e6, 1)
+    except OSError:
+        pass
+    return result
 
 
 # --- Source Settings ---
