@@ -12,7 +12,7 @@ FastAPI app with background scheduler.
 # ai_engine.score_relevance_fuzzy.
 _FAMILY_FENCE_CAP = 22
 
-BUILD_VERSION = "2.16.2"
+BUILD_VERSION = "2.16.3"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1679,6 +1679,31 @@ async def api_debug_pipeline():
                 "  SUM(CASE WHEN posted_at LIKE '%T00:00:00%' THEN 1 ELSE 0 END) AS date_only, "
                 "  SUM(CASE WHEN posted_at IS NULL OR posted_at='' THEN 1 ELSE 0 END) AS no_posted "
                 "FROM jobs WHERE status != 'hidden' GROUP BY source ORDER BY source")
+            # The question that matters: how many jobs actually survive the
+            # filters the user browses with (work type + relevance), per
+            # profile. Totals hide this — a big board can still show an empty
+            # page if the relevance gate is eating everything.
+            out["remote_by_relevance"] = await rows(
+                "SELECT CASE WHEN relevance_score >= 70 THEN 'rel_70+' "
+                "            WHEN relevance_score >= 50 THEN 'rel_50-69' "
+                "            WHEN relevance_score >= 25 THEN 'rel_25-49' "
+                "            ELSE 'rel_under25' END AS band, "
+                "       work_type, COUNT(*) AS n "
+                "FROM jobs WHERE status != 'hidden' "
+                "GROUP BY band, work_type ORDER BY band, n DESC")
+            out["visible_by_profile"] = await rows(
+                "SELECT COALESCE(p.title,'(unassigned)') AS profile, j.work_type, "
+                "       SUM(CASE WHEN j.relevance_score >= 50 THEN 1 ELSE 0 END) AS rel50plus, "
+                "       COUNT(*) AS visible "
+                "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
+                "WHERE j.status != 'hidden' "
+                "GROUP BY profile, j.work_type ORDER BY visible DESC LIMIT 24")
+            # Data-integrity checks: work_type must agree with is_remote, and
+            # nothing non-US should have reached the table.
+            out["work_type_mismatch"] = await rows(
+                "SELECT work_type, is_remote, COUNT(*) AS n FROM jobs "
+                "WHERE (work_type='remote') != (is_remote=1) "
+                "GROUP BY work_type, is_remote ORDER BY n DESC")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
