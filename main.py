@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.9.0"
+BUILD_VERSION = "2.9.2"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -406,6 +406,22 @@ async def lifespan(app: FastAPI):
     await init_source_settings()
     logger.info("Database initialized (with archive table + source settings)")
 
+    # Self-heal a full volume BEFORE anything tries to write. Once SQLite is
+    # raising "database or disk is full" every scraper insert fails silently,
+    # so this has to happen ahead of the workers, not on a daily timer.
+    try:
+        from database import emergency_reclaim, CRITICAL_FREE_MB
+        er = await emergency_reclaim()
+        if er.get("freed_mb"):
+            logger.warning(
+                f"[Storage] EMERGENCY RECLAIM: {er['start_free_mb']}MB -> "
+                f"{er['end_free_mb']}MB free, db {er.get('start_db_mb')}MB -> "
+                f"{er.get('end_db_mb')}MB. Steps: {er['steps']}")
+        else:
+            logger.info(f"[Storage] {er['steps']}")
+    except Exception as e:
+        logger.error(f"[Storage] emergency_reclaim failed: {e}")
+
     # Run cleanup on startup to archive stale jobs immediately
     try:
         result = await cleanup_old_jobs()
@@ -741,7 +757,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/status"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/status"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -1522,6 +1538,27 @@ async def api_debug_storage():
         from database import storage_stats
         return await storage_stats()
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/debug/storage-reclaim")
+async def api_debug_storage_reclaim():
+    """Report what an emergency reclaim WOULD do (dry run, no writes)."""
+    try:
+        from database import emergency_reclaim
+        return await emergency_reclaim(dry_run=True)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/admin/emergency-reclaim")
+async def api_emergency_reclaim():
+    """Force the staged volume recovery immediately."""
+    try:
+        from database import emergency_reclaim
+        return await emergency_reclaim()
+    except Exception as e:
+        logger.exception("[Admin] emergency-reclaim failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

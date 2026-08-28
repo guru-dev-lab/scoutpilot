@@ -418,7 +418,7 @@ async def insert_job(job_data: dict) -> bool:
                 job_data.get("location", ""),
                 1 if job_data.get("is_remote") else 0,
                 job_data.get("work_type", "onsite"),
-                job_data.get("description", ""),
+                (job_data.get("description") or "")[:MAX_DESCRIPTION_CHARS],
                 job_data.get("salary_min", 0),
                 job_data.get("salary_max", 0),
                 salary_period,
@@ -1007,6 +1007,144 @@ async def cleanup_old_jobs() -> dict:
         }
     finally:
         await db.close()
+
+
+# Below this much free space the volume is effectively full: SQLite starts
+# raising "database or disk is full" and inserts begin failing.
+CRITICAL_FREE_MB = 60
+# Descriptions dominate row size. The scorer only ever reads the first ~3k
+# chars, so anything beyond this is stored for nothing.
+MAX_DESCRIPTION_CHARS = 4000
+
+
+async def emergency_reclaim(dry_run: bool = False) -> dict:
+    """Recover a volume that is too full for a normal VACUUM to even run.
+
+    Ordered cheapest-and-safest first, re-checking free space after each step
+    and stopping as soon as the volume is healthy again:
+
+      1. Truncate the WAL.
+      2. Purge archived jobs past the retention window.
+      3. Trim over-long descriptions (the bulk of row size).
+      4. Purge the archive entirely.
+      5. VACUUM, which needs roughly the compacted size free — which is why it
+         has to come last, after the earlier steps have made room.
+    """
+    import shutil
+    d = os.path.dirname(DB_PATH) or "."
+
+    def free_mb() -> float:
+        return shutil.disk_usage(d).free / 1e6
+
+    log: list[str] = []
+    start_free = free_mb()
+    start_size = os.path.getsize(DB_PATH) / 1e6 if os.path.exists(DB_PATH) else 0
+    result = {"start_free_mb": round(start_free, 1),
+              "start_db_mb": round(start_size, 1),
+              "steps": log, "dry_run": dry_run}
+
+    if start_free >= CRITICAL_FREE_MB:
+        log.append(f"healthy — {start_free:.1f}MB free, nothing to do")
+        result["end_free_mb"] = round(start_free, 1)
+        return result
+
+    if dry_run:
+        log.append("dry run — would purge archive, trim descriptions, vacuum")
+        return result
+
+    db = await get_db()
+    try:
+        async def scalar(sql, args=()):
+            return (await (await db.execute(sql, args)).fetchone())[0]
+
+        # 1. WAL truncate — frees whatever the write-ahead log is holding.
+        try:
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            await db.commit()
+            log.append(f"wal_checkpoint(TRUNCATE) -> {free_mb():.1f}MB free")
+        except Exception as e:
+            log.append(f"wal_checkpoint failed: {e}")
+
+        # 2. Purge archive past the retention window.
+        try:
+            n = await scalar(
+                "SELECT COUNT(*) FROM jobs_archive WHERE archived_at < datetime('now', ?)",
+                (f"-{PURGE_AFTER_DAYS} days",))
+            if n:
+                await db.execute(
+                    "DELETE FROM jobs_archive WHERE archived_at < datetime('now', ?)",
+                    (f"-{PURGE_AFTER_DAYS} days",))
+                await db.commit()
+                log.append(f"purged {n} archived jobs older than {PURGE_AFTER_DAYS}d")
+        except Exception as e:
+            log.append(f"retention purge failed: {e}")
+
+        # 3. Trim over-long descriptions in both tables.
+        try:
+            for table in ("jobs", "jobs_archive"):
+                try:
+                    n = await scalar(
+                        f"SELECT COUNT(*) FROM {table} WHERE LENGTH(description) > ?",
+                        (MAX_DESCRIPTION_CHARS,))
+                    if n:
+                        await db.execute(
+                            f"UPDATE {table} SET description = substr(description, 1, ?) "
+                            f"WHERE LENGTH(description) > ?",
+                            (MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_CHARS))
+                        await db.commit()
+                        log.append(f"trimmed {n} {table} descriptions to {MAX_DESCRIPTION_CHARS} chars")
+                except Exception as e:
+                    log.append(f"trim {table} failed: {e}")
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            await db.commit()
+        except Exception as e:
+            log.append(f"trim phase failed: {e}")
+
+        # 4. Still critical -> drop the archive entirely. Archived rows are
+        #    stale listings on a hot board; live `jobs` is never touched.
+        try:
+            if free_mb() < CRITICAL_FREE_MB:
+                n = await scalar("SELECT COUNT(*) FROM jobs_archive")
+                if n:
+                    await db.execute("DELETE FROM jobs_archive")
+                    await db.commit()
+                    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    await db.commit()
+                    log.append(f"emergency: dropped all {n} archived jobs")
+        except Exception as e:
+            log.append(f"archive drop failed: {e}")
+    finally:
+        await db.close()
+
+    # 5. VACUUM last — the steps above are what make room for it.
+    try:
+        db_size = os.path.getsize(DB_PATH)
+        # Freed pages are reused by the rebuild, so the compacted file is much
+        # smaller than the current one; require headroom against live content.
+        vdb = await aiosqlite.connect(DB_PATH)
+        try:
+            page_size = (await (await vdb.execute("PRAGMA page_size")).fetchone())[0]
+            page_count = (await (await vdb.execute("PRAGMA page_count")).fetchone())[0]
+            freelist = (await (await vdb.execute("PRAGMA freelist_count")).fetchone())[0]
+            live_bytes = page_size * max(page_count - freelist, 0)
+            need = live_bytes * 1.1
+            if free_mb() * 1e6 > need:
+                await vdb.execute("VACUUM")
+                await vdb.commit()
+                log.append(f"VACUUM ok (needed ~{need/1e6:.0f}MB)")
+            else:
+                log.append(f"VACUUM skipped — needs ~{need/1e6:.0f}MB, "
+                           f"{free_mb():.0f}MB free")
+        finally:
+            await vdb.close()
+        result["end_db_mb"] = round(os.path.getsize(DB_PATH) / 1e6, 1)
+        result["shrunk_mb"] = round(start_size - result["end_db_mb"], 1)
+    except Exception as e:
+        log.append(f"vacuum phase failed: {e}")
+
+    result["end_free_mb"] = round(free_mb(), 1)
+    result["freed_mb"] = round(result["end_free_mb"] - start_free, 1)
+    return result
 
 
 async def storage_stats() -> dict:
