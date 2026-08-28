@@ -473,11 +473,11 @@ async def get_jobs(
     source: str = "",
     status: str = "",
     work_type: str = "",
-    # Default to posted time, not scrape time: the board's promise is "newest
-    # POSTED job first, falling back to when we found it when the source gives
-    # no post time". The posted_at branch below implements exactly that, so it
-    # has to be the default for callers that do not pass a sort explicitly.
-    sort_by: str = "posted_at",
+    # Default: newest FOUND first. A job we just discovered is new information
+    # even if it was posted a while ago, and burying fresh discoveries under
+    # posted-time ordering is what made the board look stale. "posted_at" stays
+    # available and applies the true-posted-time ordering below.
+    sort_by: str = "first_seen_at",
     sort_dir: str = "DESC",
     limit: int = 200,
     offset: int = 0,
@@ -619,6 +619,12 @@ async def get_jobs(
                 "ELSE datetime(first_seen_at) "
                 f"END {sort_dir}, datetime(first_seen_at) {sort_dir}"
             )
+        elif sort_by == "first_seen_at":
+            # "Newest found" — nothing we just discovered gets buried. A job
+            # posted a while ago but found seconds ago is new information to the
+            # user, so fetch time leads and posted time only breaks ties.
+            order_expr = (f"datetime(first_seen_at) {sort_dir}, "
+                          f"datetime(NULLIF(posted_at,'')) {sort_dir}")
         else:
             order_expr = f"{sort_by} {sort_dir}"
 
