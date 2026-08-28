@@ -12,7 +12,14 @@ FastAPI app with background scheduler.
 # ai_engine.score_relevance_fuzzy.
 _FAMILY_FENCE_CAP = 22
 
-BUILD_VERSION = "2.19.1"
+# Only jobs whose fuzzy score lands between these bounds are worth an AI call.
+# Outside the band the answer is already settled: below the low bound the
+# role-family fence has rejected it, above the high bound the title is an
+# unambiguous match. Mirrors the same gate score_relevance_ai() applies.
+_AI_BAND_LOW = 25
+_AI_BAND_HIGH = 75
+
+BUILD_VERSION = "2.20.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -180,18 +187,34 @@ async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tup
     for _title, (pd, jobs_for_pd) in groups.items():
         for i in range(0, len(jobs_for_pd), BATCH):
             chunk = jobs_for_pd[i:i + BATCH]
-            scores = await classify_jobs_batch(
-                pd["title"], pd["keywords"], pd["excluded"], chunk,
-            )
+
+            # Score with fuzzy FIRST, then send only the genuinely ambiguous
+            # band to the classifier. Previously every job went to the AI, so a
+            # pass cost one Haiku call per 18 jobs no matter how obvious they
+            # were — which is why 12,352 of 30,977 jobs sat unscored, showing
+            # the schema's DEFAULT 50 as if it were a real judgement and
+            # sailing straight through a "relevance 50+" filter.
+            # Below _AI_BAND_LOW the family fence has already rejected it;
+            # above _AI_BAND_HIGH the title is an unambiguous match. The AI adds
+            # nothing at either extreme, so skipping them cuts token spend and
+            # lets the worker actually clear its backlog.
+            fuzzy_by_id = {}
             for job in chunk:
-                # Always compute the fuzzy score: it carries the role-family
-                # fence, which is what keeps a different discipline out of the
-                # feed entirely.
-                fuzzy = score_relevance_fuzzy(
+                fuzzy_by_id[job["id"]] = score_relevance_fuzzy(
                     job["title"], job.get("description", ""),
                     pd["title"], pd["expanded"], pd["keywords"],
                     skill_signature=pd.get("signature"),
                 )
+            ambiguous = [j for j in chunk
+                         if _AI_BAND_LOW <= fuzzy_by_id[j["id"]] <= _AI_BAND_HIGH]
+            scores = {}
+            if ambiguous:
+                scores = await classify_jobs_batch(
+                    pd["title"], pd["keywords"], pd["excluded"], ambiguous,
+                )
+
+            for job in chunk:
+                fuzzy = fuzzy_by_id[job["id"]]
                 if job["id"] in scores:
                     relevance = scores[job["id"]]
                     # The classifier was rating a "Senior DevOps Engineer" above
@@ -700,7 +723,10 @@ async def lifespan(app: FastAPI):
         profiles = await get_profiles()
         if not profiles:
             return
-        jobs = await get_unscored_jobs(limit=400)
+        # 1500, was 400. Most jobs now resolve on fuzzy alone (no network call),
+        # so a pass is far cheaper and the 12k unscored backlog can drain
+        # instead of growing behind the ATS intake.
+        jobs = await get_unscored_jobs(limit=1500)
         scored = 0
         if jobs:
             scored, _ = await _classify_and_store(jobs, profiles)
