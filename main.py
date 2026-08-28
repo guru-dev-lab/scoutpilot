@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.13.0"
+BUILD_VERSION = "2.13.1"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1636,6 +1636,27 @@ async def api_debug_pipeline():
             out["visible_last_24h"] = await rows(
                 "SELECT COUNT(*) AS n FROM jobs "
                 "WHERE status != 'hidden' AND first_seen_at > datetime('now','-1 day')")
+            # What the PAGE actually shows: the first 50 rows in default sort.
+            # "Only Workday shows up" is a sort-order question, not a fetching
+            # one, so measure the head of the feed rather than raw totals.
+            out["feed_top50_by_source"] = await rows(
+                "SELECT source, COUNT(*) AS n FROM ("
+                "  SELECT source FROM jobs WHERE status != 'hidden' "
+                "  ORDER BY CASE "
+                "    WHEN posted_at != '' AND posted_at IS NOT NULL AND posted_at NOT LIKE '%T00:00:00%' "
+                "      THEN datetime(posted_at) "
+                "    WHEN posted_at != '' AND posted_at IS NOT NULL "
+                "      THEN MIN(datetime(first_seen_at), datetime(posted_at, '+1 day')) "
+                "    ELSE datetime(first_seen_at) END DESC, datetime(first_seen_at) DESC "
+                "  LIMIT 50) GROUP BY source ORDER BY n DESC")
+            # Posted-time quality per source decides who wins that ordering.
+            out["posted_quality"] = await rows(
+                "SELECT source, "
+                "  SUM(CASE WHEN posted_at != '' AND posted_at IS NOT NULL "
+                "       AND posted_at NOT LIKE '%T00:00:00%' THEN 1 ELSE 0 END) AS precise_time, "
+                "  SUM(CASE WHEN posted_at LIKE '%T00:00:00%' THEN 1 ELSE 0 END) AS date_only, "
+                "  SUM(CASE WHEN posted_at IS NULL OR posted_at='' THEN 1 ELSE 0 END) AS no_posted "
+                "FROM jobs WHERE status != 'hidden' GROUP BY source ORDER BY source")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
