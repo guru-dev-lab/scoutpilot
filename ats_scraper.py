@@ -123,6 +123,46 @@ _NON_US_TOKENS = [
 ]
 
 
+# State abbreviation as a standalone token, in the position a US state is
+# actually written: "Austin, TX", "Remote - CA", "Boise ID". A two-letter
+# country code that collides with a state (ID/IN/DE/MD/LA/OR/OK/PA/MS/AL) is
+# still ambiguous from the string alone, which is why every fetcher that has a
+# structured country field must trust that field instead of calling this.
+_US_ABBR_RE = re.compile(
+    r"(?:^|[,\-/(]|\s)\s*(" + "|".join(
+        a.strip() for a in sorted(_US_STATE_ABBR)) + r")(?=$|[\s,.)/;])",
+    re.IGNORECASE,
+)
+
+
+# Major non-US cities. Needed because a "City, XX" string is ambiguous whenever
+# the country code collides with a state abbreviation — Jakarta/ID reads as
+# Idaho, Bangalore/IN as Indiana, Berlin/DE as Delaware. Fetchers with a real
+# country field must trust that field; this only backstops the plain-string path.
+_NON_US_CITIES = [
+    "jakarta", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
+    "chennai", "pune", "berlin", "munich", "hamburg", "frankfurt", "chisinau",
+    "toronto", "vancouver", "montreal", "london", "manchester", "dublin",
+    "paris", "madrid", "barcelona", "lisbon", "amsterdam", "brussels",
+    "zurich", "vienna", "warsaw", "prague", "stockholm", "oslo", "helsinki",
+    "copenhagen", "athens", "istanbul", "dubai", "tel aviv", "cairo", "lagos",
+    "nairobi", "johannesburg", "cape town", "sao paulo", "buenos aires",
+    "santiago", "bogota", "lima", "mexico city", "guadalajara", "manila",
+    "bangkok", "hanoi", "kuala lumpur", "jakarta", "seoul", "tokyo", "osaka",
+    "beijing", "shanghai", "shenzhen", "taipei", "sydney", "melbourne",
+    "auckland", "wellington", "karachi", "lahore", "dhaka", "colombo",
+]
+
+_NON_US_RE = re.compile(
+    r"(?<![a-z])(" + "|".join(
+        re.escape(t.strip()) for t in
+        sorted(set(x.strip() for x in _NON_US_TOKENS) | set(_NON_US_CITIES),
+               key=len, reverse=True) if t.strip()
+    ) + r")(?![a-z])",
+    re.IGNORECASE,
+)
+
+
 def is_us_location(location: str) -> bool:
     """Heuristic: does this location string indicate a US-eligible role?
 
@@ -146,8 +186,10 @@ def is_us_location(location: str) -> bool:
         if tok in loc:
             return True
 
-    # Fast reject: clearly non-US with no US mention
-    non_us_hit = any(tok in loc for tok in _NON_US_TOKENS)
+    # Fast reject: clearly non-US with no US mention.
+    # Word-boundary matched — a bare substring test made "india" fire inside
+    # "Indianapolis, IN" and threw away a real US city.
+    non_us_hit = bool(_NON_US_RE.search(loc))
     us_hit = any(tok in loc for tok in _US_TOKENS)
     if non_us_hit and not us_hit:
         return False
@@ -159,8 +201,13 @@ def is_us_location(location: str) -> bool:
     if any(state in loc for state in _US_STATES):
         return True
 
-    # Check US state abbreviations (requires space-bounded match)
-    if any(abbr in loc for abbr in _US_STATE_ABBR):
+    # Check US state abbreviations. This used to be a bare substring test, which
+    # matched " la" inside "Lagos, NG" and " id" inside "Jakarta, ID" — letting
+    # Nigeria and Indonesia through as Louisiana and Idaho — while a genuine
+    # "Indianapolis, IN" was rejected. Require a real word boundary, and only
+    # accept the abbreviation where a state actually appears: after a comma or
+    # at the end of the string.
+    if _US_ABBR_RE.search(loc):
         return True
 
     return False
@@ -177,6 +224,32 @@ def is_remote_string(s: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Company list loader
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _derive_work_type(platform_field: str, location: str, title: str = "") -> tuple[str, bool]:
+    """Return (work_type, is_remote) for an ATS row.
+
+    Every ATS fetcher used to hardcode work_type="remote" because they only
+    ever kept remote jobs. Now that onsite and hybrid rows are kept too, the
+    label has to come from real data. Lever/Ashby/Workable publish an explicit
+    workplace field; the rest only give a location string, so fall back to
+    reading that. Never guess "remote" from silence — an unlabelled row with a
+    city in it is onsite.
+    """
+    f = (platform_field or "").strip().lower().replace("_", "").replace("-", "")
+    if f in ("remote", "fullyremote", "remotefirst"):
+        return "remote", True
+    if f in ("hybrid", "flexible"):
+        return "hybrid", False
+    if f in ("onsite", "inoffice", "office", "inperson"):
+        return "onsite", False
+
+    blob = f"{location} {title}".lower()
+    if "hybrid" in blob:
+        return "hybrid", False
+    if is_remote_string(blob):
+        return "remote", True
+    return "onsite", False
+
 
 def load_companies() -> list[dict]:
     """Load the ATS company list from disk. Returns empty list on any failure."""
@@ -297,8 +370,8 @@ async def fetch_greenhouse(
             loc_name = ((item.get("location") or {}).get("name") or "").strip()
 
             # Remote + US filter
-            if not is_remote_string(loc_name):
-                continue
+            # Keep onsite and hybrid too — the remote-only gate here was
+            # discarding most of every company board.
             if not is_us_location(loc_name):
                 continue
 
@@ -319,13 +392,19 @@ async def fetch_greenhouse(
             clean_desc = re.sub(r"<[^>]+>", " ", content_html)
             clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
+            # Greenhouse publishes no workplace field, so classify from the
+            # location string and title. The description is deliberately not
+            # used: it is full of boilerplate like "remote-friendly culture"
+            # that would mislabel plenty of onsite roles as remote.
+            _gh_wt, _gh_remote = _derive_work_type("", loc_name, title)
+
             job = {
                 "title": title,
                 "company_name": company_name,
                 "company_domain": "",
                 "location": loc_name,
-                "is_remote": True,
-                "work_type": "remote",
+                "is_remote": _gh_remote,
+                "work_type": _gh_wt,
                 "description": clean_desc[:10000],
                 "salary_min": 0,
                 "salary_max": 0,
@@ -392,10 +471,9 @@ async def fetch_lever(
             loc = (categories.get("location") or "").strip()
             all_locations = categories.get("allLocations") or []
 
-            # Remote: workplaceType == 'remote' OR location contains 'remote'
-            is_remote = workplace_type == "remote" or is_remote_string(loc)
-            if not is_remote:
-                continue
+            # Lever publishes workplaceType (remote / hybrid / on-site) — use it
+            # instead of dropping everything that is not remote.
+            work_type, is_remote = _derive_work_type(workplace_type, loc, title)
 
             # US filter: check primary location and all secondary locations
             all_loc_str = " | ".join([loc] + list(all_locations))
@@ -427,8 +505,8 @@ async def fetch_lever(
                 "company_name": company_name,
                 "company_domain": "",
                 "location": loc or "Remote",
-                "is_remote": True,
-                "work_type": "remote",
+                "is_remote": is_remote,
+                "work_type": work_type,
                 "description": full_desc[:10000],
                 "salary_min": 0,
                 "salary_max": 0,
@@ -501,11 +579,9 @@ async def fetch_ashby(
                 elif isinstance(s, str):
                     sec_locs.append(s)
 
-            # Strict remote: workplaceType must be 'remote' (Ashby's isRemote flag
-            # is too loose — includes hybrids that can be done remotely)
-            is_remote = workplace_type == "remote"
-            if not is_remote:
-                continue
+            # Ashby publishes workplaceType (remote / hybrid / onsite). It used
+            # to be used only to reject non-remote rows; now it labels them.
+            work_type, is_remote = _derive_work_type(workplace_type, loc, title)
 
             all_loc_str = " | ".join([loc] + sec_locs)
             if not is_us_location(all_loc_str):
@@ -547,8 +623,8 @@ async def fetch_ashby(
                 "company_name": company_name,
                 "company_domain": "",
                 "location": loc or "Remote",
-                "is_remote": True,
-                "work_type": "remote",
+                "is_remote": is_remote,
+                "work_type": work_type,
                 "description": desc[:10000],
                 "salary_min": salary_min,
                 "salary_max": salary_max,
@@ -589,7 +665,7 @@ async def fetch_workday(
       - OR the three parts ``tenant``, ``wd``, ``site``.
 
     The public list endpoint returns 'postings' with title, locationsText,
-    externalPath, postedOn. We search with ``searchText='Remote'`` to narrow
+    externalPath, postedOn. We pull the whole board (no searchText) and
     results to remote-eligible roles, then filter locationsText for US markers.
     """
     slug = company.get("slug") or company.get("tenant") or ""
@@ -627,7 +703,10 @@ async def fetch_workday(
                     "appliedFacets": {},
                     "limit": 20,
                     "offset": offset,
-                    "searchText": "Remote",
+                    # Was "Remote", which filtered the feed at the API and
+                    # made this a remote-only source. Empty returns the whole
+                    # board; the US gate and _derive_work_type sort it out.
+                    "searchText": "",
                 },
             )
             if resp.status_code != 200:
@@ -659,9 +738,9 @@ async def fetch_workday(
             # customers include US as one of the locations, since we already
             # searchText='Remote' filtered).
             is_multi_loc = "location" in loc_low and any(ch.isdigit() for ch in loc_low)
-            has_remote = "remote" in loc_low or is_multi_loc
-            if not has_remote:
-                continue
+            # Onsite and hybrid roles are kept now; the label comes from the
+            # location text rather than this having been a remote-only feed.
+            _wd_wt, _wd_remote = _derive_work_type("", loc_text, title)
             if not (is_multi_loc or is_us_location(loc_text)):
                 continue
 
@@ -687,9 +766,9 @@ async def fetch_workday(
                 "title": title,
                 "company_name": company_name,
                 "company_domain": "",
-                "location": loc_text or "Remote",
-                "is_remote": True,
-                "work_type": "remote",
+                "location": loc_text or "",
+                "is_remote": _wd_remote,
+                "work_type": _wd_wt,
                 "description": desc,
                 "salary_min": 0,
                 "salary_max": 0,
@@ -762,8 +841,7 @@ async def fetch_smartrecruiters(
                 continue
 
             loc = item.get("location") or {}
-            if not loc.get("remote"):
-                continue
+            _sr_remote_flag = bool(loc.get("remote"))
 
             country = (loc.get("country") or "").lower()
             full_loc = loc.get("fullLocation") or f"{loc.get('city','')}, {loc.get('region','')}"
@@ -786,15 +864,17 @@ async def fetch_smartrecruiters(
                 continue
             apply_url = f"https://jobs.smartrecruiters.com/{company_identifier}/{posting_id}"
 
-            desc = f"{title} at {company_name}. Remote role in {full_loc}."
+            _sr_wt, _sr_remote = _derive_work_type(
+                "remote" if _sr_remote_flag else "", full_loc, title)
+            desc = f"{title} at {company_name}. {_sr_wt.title()} role in {full_loc}."
 
             job = {
                 "title": title,
                 "company_name": company_name,
                 "company_domain": "",
-                "location": full_loc or "Remote, US",
-                "is_remote": True,
-                "work_type": "remote",
+                "location": full_loc or "",
+                "is_remote": _sr_remote,
+                "work_type": _sr_wt,
                 "description": desc,
                 "salary_min": 0,
                 "salary_max": 0,
@@ -965,7 +1045,8 @@ async def fetch_recruitee(
                             item.get("state_name") or item.get("state_code"),
                             item.get("country")) if p
             )
-            is_remote = bool(item.get("remote")) or is_remote_string(loc_str)
+            _rc_wt, is_remote = _derive_work_type(
+                "remote" if item.get("remote") else "", loc_str, title)
             if country != "US" and not (is_remote and is_us_location(loc_str)):
                 continue
 
@@ -987,7 +1068,7 @@ async def fetch_recruitee(
                 "company_domain": "",
                 "location": loc_str or ("Remote, US" if is_remote else ""),
                 "is_remote": is_remote,
-                "work_type": "remote" if is_remote else "onsite",
+                "work_type": _rc_wt,
                 "description": desc[:4000],
                 "salary_min": 0,
                 "salary_max": 0,
@@ -1049,7 +1130,8 @@ async def fetch_breezy(
             loc_str = ", ".join(
                 p for p in ((loc.get("city") or "").strip(), state, country) if p
             )
-            is_remote = bool(loc.get("is_remote")) or is_remote_string(loc_str)
+            _bz_wt, is_remote = _derive_work_type(
+                "remote" if loc.get("is_remote") else "", loc_str, title)
 
             us_country = country.upper() in ("US", "USA", "UNITED STATES")
             if not us_country and not is_us_location(loc_str):
@@ -1076,7 +1158,7 @@ async def fetch_breezy(
                 "company_domain": "",
                 "location": loc_str or ("Remote, US" if is_remote else ""),
                 "is_remote": is_remote,
-                "work_type": "remote" if is_remote else "onsite",
+                "work_type": _bz_wt,
                 "description": desc[:4000],
                 "salary_min": 0,
                 "salary_max": 0,
