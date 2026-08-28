@@ -933,12 +933,20 @@ def _li_text(pat: re.Pattern, card: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
 
 
+# LinkedIn's guest feed exposes a workplace-type filter. Querying each type
+# separately is the only reliable way to label them: the cards carry no remote
+# hint (location is just "Austin, TX") and no description, so _detect_work_type
+# fell through to its "onsite" default and EVERY LinkedIn row came out onsite.
+_LI_WORK_TYPES = {"onsite": "1", "remote": "2", "hybrid": "3"}
+
+
 async def scrape_linkedin_guest(
     search_term: str,
     location: str = "United States",
     profile_id: Optional[int] = None,
     pages: int = 3,
     days: int = 7,
+    work_type: Optional[str] = None,
 ) -> list[dict]:
     """Read LinkedIn's public guest job feed directly — no JobSpy, no login.
 
@@ -967,6 +975,8 @@ async def scrape_linkedin_guest(
         "location": location or "United States",
         "f_TPR": f"r{max(days, 1) * 86400}",   # posted within N days
     }
+    if work_type and work_type in _LI_WORK_TYPES:
+        params_base["f_WT"] = _LI_WORK_TYPES[work_type]
 
     client_kwargs: dict = {"timeout": 30, "headers": headers,
                            "follow_redirects": True}
@@ -1016,15 +1026,23 @@ async def scrape_linkedin_guest(
                         pm = _LI_FIELDS["posted"].search(card)
                         posted_at = _normalize_posted_at(pm.group(1) if pm else "")
 
-                        is_remote = "remote" in loc.lower()
+                        # When we asked LinkedIn for a specific workplace type,
+                        # believe it — that is authoritative and the card text is
+                        # not. Only fall back to guessing on an untyped query.
+                        if work_type:
+                            wt = work_type
+                            is_remote = work_type == "remote"
+                        else:
+                            is_remote = "remote" in loc.lower()
+                            wt = "remote" if is_remote else _detect_work_type(
+                                {"title": title, "location": loc, "description": ""})
                         jobs.append({
                             "title": title,
                             "company_name": company,
                             "company_domain": "",
                             "location": loc,
                             "is_remote": is_remote,
-                            "work_type": "remote" if is_remote else _detect_work_type(
-                                {"title": title, "location": loc, "description": ""}),
+                            "work_type": wt,
                             "description": "",
                             "salary_min": 0,
                             "salary_max": 0,
@@ -1054,7 +1072,8 @@ async def scrape_linkedin_guest(
             logger.debug(f"[LinkedInGuest] insert skip: {e}")
 
     logger.info(
-        f"[LinkedInGuest] '{search_term}': {len(jobs)} US cards, "
+        f"[LinkedInGuest] '{search_term}'"
+        f"{'/' + work_type if work_type else ''}: {len(jobs)} US cards, "
         f"+{len(inserted)} new"
     )
     return inserted
