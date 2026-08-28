@@ -710,6 +710,12 @@ async def get_job_count(hours: int = 24) -> dict:
 
 
 async def update_job_status(job_id: int, status: str):
+    """Serialised against the other writers — see _write_lock()."""
+    async with _write_lock():
+        return await _update_job_status_unlocked(job_id, status)
+
+
+async def _update_job_status_unlocked(job_id: int, status: str):
     db = await get_db()
     try:
         if status == "applied":
@@ -728,6 +734,12 @@ async def update_job_status(job_id: int, status: str):
 
 
 async def update_job_scores(job_id: int, relevance: int, trust: int, hide: bool = False):
+    """Serialised against the other writers — see _write_lock()."""
+    async with _write_lock():
+        return await _update_job_scores_unlocked(job_id, relevance, trust, hide)
+
+
+async def _update_job_scores_unlocked(job_id: int, relevance: int, trust: int, hide: bool = False):
     db = await get_db()
     try:
         # Stamp scored_at so this job is never re-scored through AI again.
@@ -826,6 +838,12 @@ async def get_discovered_companies() -> list[dict]:
 
 
 async def add_discovered_company(c: dict) -> bool:
+    """Serialised against the other writers — see _write_lock()."""
+    async with _write_lock():
+        return await _add_discovered_company_unlocked(c)
+
+
+async def _add_discovered_company_unlocked(c: dict) -> bool:
     """Insert a newly-verified company (idempotent on slug+ats)."""
     db = await get_db()
     try:
