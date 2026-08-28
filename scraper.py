@@ -1098,6 +1098,117 @@ async def scrape_linkedin_guest(
     return inserted
 
 
+_LI_DESC_RE = re.compile(
+    r'class="[^"]*show-more-less-html__markup[^"]*"[^>]*>(.*?)</div>', re.S)
+_LI_DESC_FALLBACK_RE = re.compile(
+    r'class="[^"]*description__text[^"]*"[^>]*>(.*?)</section>', re.S)
+
+
+async def enrich_missing_descriptions(limit: int = 12) -> int:
+    """Backfill descriptions for rows that arrived without one.
+
+    LinkedIn's guest feed gives title/company/location but no description, and
+    without a description the skill-signature rescue cannot fire — that rescue
+    is the whole mechanism for catching a role whose TITLE hides it
+    ("Solutions Engineer" that is really a data analyst). 552 LinkedIn rows had
+    an empty description.
+
+    Deliberately narrow, because a LinkedIn job page is ~300KB and this runs
+    through the metered residential proxy:
+      - only rows still visible (a hidden job is not worth 300KB),
+      - only rows whose score sits in the ambiguous band, where a description
+        can actually change the verdict; an 80+ title match needs no help,
+      - a hard per-pass cap.
+    Clearing scored_at re-queues the row so the Scoring worker re-judges it
+    WITH the description.
+    """
+    from database import get_db
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, source_url FROM jobs "
+            "WHERE (description IS NULL OR description = '') "
+            "  AND source = 'linkedin' "
+            "  AND status NOT IN ('hidden') "
+            "  AND relevance_score BETWEEN 25 AND 79 "
+            "ORDER BY first_seen_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+    if not rows:
+        return 0
+
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    client_kwargs: dict = {"timeout": 30, "headers": headers,
+                           "follow_redirects": True}
+    if settings.proxy_url:
+        client_kwargs["proxy"] = settings.proxy_url
+
+    updated = 0
+    expired = 0
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        for row in rows:
+            url = row.get("source_url") or ""
+            if not url:
+                continue
+            try:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    logger.debug(f"[Enrich] HTTP {resp.status_code} for job {row['id']}")
+                    continue
+
+                # An expired posting does not 404 — LinkedIn silently redirects
+                # to an unrelated search page tagged expired_jd_redirect. Those
+                # rows are dead links sitting in the feed, so hide them rather
+                # than scraping a search page into the description field.
+                final_url = str(resp.url)
+                if "expired_jd_redirect" in final_url or "/jobs/view/" not in final_url:
+                    from database import update_job_status
+                    await update_job_status(row["id"], "hidden")
+                    expired += 1
+                    await asyncio.sleep(1.2)
+                    continue
+
+                m = _LI_DESC_RE.search(resp.text) or _LI_DESC_FALLBACK_RE.search(resp.text)
+                if not m:
+                    continue
+                text = re.sub(r"<[^>]+>", " ", m.group(1))
+                text = re.sub(r"\s+", " ", text).strip()
+                if len(text) < 80:
+                    continue
+
+                from database import MAX_DESCRIPTION_CHARS, _write_lock
+                async with _write_lock():
+                    db = await get_db()
+                    try:
+                        await db.execute(
+                            "UPDATE jobs SET description = ?, scored_at = NULL "
+                            "WHERE id = ?",
+                            (text[:MAX_DESCRIPTION_CHARS], row["id"]),
+                        )
+                        await db.commit()
+                    finally:
+                        await db.close()
+                updated += 1
+            except Exception as e:
+                logger.debug(f"[Enrich] job {row['id']}: {e}")
+            await asyncio.sleep(1.2)   # polite, and keeps bandwidth flat
+
+    if updated or expired:
+        logger.info(f"[Enrich] {updated}/{len(rows)} descriptions added "
+                    f"(re-queued for scoring), {expired} expired postings hidden")
+    return updated
+
+
 async def scrape_remoteok(
     search_term: str,
     profile_id: Optional[int] = None,
