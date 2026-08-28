@@ -473,7 +473,11 @@ async def get_jobs(
     source: str = "",
     status: str = "",
     work_type: str = "",
-    sort_by: str = "first_seen_at",
+    # Default to posted time, not scrape time: the board's promise is "newest
+    # POSTED job first, falling back to when we found it when the source gives
+    # no post time". The posted_at branch below implements exactly that, so it
+    # has to be the default for callers that do not pass a sort explicitly.
+    sort_by: str = "posted_at",
     sort_dir: str = "DESC",
     limit: int = 200,
     offset: int = 0,

@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.11.1"
+BUILD_VERSION = "2.12.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1082,12 +1082,12 @@ async def api_get_jobs(
     source: str = "",
     status: str = "",
     work_type: str = "",
-    sort_by: str = "first_seen_at",
+    sort_by: str = "posted_at",   # newest POSTED first; falls back to fetched time
     sort_dir: str = "DESC",
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: str = "",
-    direct_only: str = "1",
+    direct_only: str = "",
     location: str = "",
     skill: str = "",
     profile: str = "",
@@ -1102,10 +1102,11 @@ async def api_get_jobs(
 
         # When searching, expand time window to search ALL jobs (not just last 24h)
         effective_hours = 720 if search.strip() else hours
-        # Direct-apply is the DEFAULT view: only jobs whose link lands on the
-        # employer's own application form. Aggregators and sign-up walls are
-        # excluded unless the caller explicitly opts out with direct_only=0.
-        is_direct = direct_only not in ("0", "false", "no", "all")
+        # Opt-IN filter. Job boards (LinkedIn, Indeed, Glassdoor) are wanted as
+        # sources — what is not wanted is being forced to apply INSIDE them. So
+        # they stay visible by default and carry a "Direct Apply" badge when the
+        # link lands on the employer's own posting; the toggle narrows to those.
+        is_direct = direct_only in ("1", "true", "yes")
         jobs = await get_jobs(
             hours=effective_hours, posted_hours=posted_hours,
             min_relevance=min_relevance, min_trust=min_trust,
@@ -1321,12 +1322,12 @@ async def api_export_csv(
     work_type: str = "",
     source: str = "",
     location: str = "",
-    direct_only: str = "1",
+    direct_only: str = "",
     skill: str = "",
 ):
     """Export current filtered jobs as CSV."""
     effective_hours = 720 if search.strip() else hours
-    is_direct = direct_only not in ("0", "false", "no", "all")
+    is_direct = direct_only in ("1", "true", "yes")
     jobs = await get_jobs(
         hours=effective_hours, search=search, status=status,
         work_type=work_type, source=source, location=location,

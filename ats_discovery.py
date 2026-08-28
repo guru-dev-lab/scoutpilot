@@ -25,6 +25,7 @@ from typing import Optional
 import httpx
 
 from database import get_db
+from config import settings
 from ats_scraper import (COMPANIES_FILE, load_companies, load_companies_merged,
                           save_companies, HTTP_HEADERS)
 
@@ -254,6 +255,9 @@ def extract_smartrecruiters(url: str) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Slug extraction across all ATS — returns list of (ats, candidate_dict)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Platforms fronted by Cloudflare: probe them slowly and through the proxy.
+_CLOUDFLARE_ATS = {"workable", "recruitee", "breezy"}
 
 _WORKABLE_PATTERNS = [
     re.compile(r"https?://apply\.workable\.com/([a-z0-9][a-z0-9_-]+)", re.I),
@@ -865,7 +869,12 @@ async def discover_new_ats_companies() -> dict:
         # Build name-based candidates. For each company, pick its top-1
         # slug variant per ATS. Cache checked (ats, normname) so we don't
         # waste calls next pass.
-        name_platforms = ("greenhouse", "lever", "ashby", "smartrecruiters")
+        # Every company name we have ever seen gets probed against each of
+        # these. This is what populates the newer platforms: their rosters
+        # started empty, and LinkedIn/Indeed give us thousands of employer
+        # names that never appear as an ATS URL anywhere in our data.
+        name_platforms = ("greenhouse", "lever", "ashby", "smartrecruiters",
+                          "workable", "recruitee", "breezy")
         name_candidates_added = 0
         for cn in ordered_names:
             variants = slug_variants_from_name(cn)
@@ -908,12 +917,27 @@ async def discover_new_ats_companies() -> dict:
         )
 
         # ── Verification ──
+        # Two clients on purpose. Greenhouse/Lever/Ashby/SmartRecruiters are
+        # open APIs and tolerate parallel probing. Workable/Recruitee/Breezy sit
+        # behind Cloudflare — Workable answered ~40 quick probes with
+        # `retry-after: 86287` (a 24-hour IP ban) — so they get the rotating
+        # residential proxy (when configured) and a much tighter semaphore.
         sem = asyncio.Semaphore(15)
+        cf_sem = asyncio.Semaphore(3)
+
+        cf_kwargs: dict = {"timeout": 20, "headers": HTTP_HEADERS,
+                           "follow_redirects": True}
+        if settings.proxy_url:
+            cf_kwargs["proxy"] = settings.proxy_url
+
         async with httpx.AsyncClient(
             timeout=15, headers=HTTP_HEADERS, follow_redirects=True
-        ) as client:
+        ) as client, httpx.AsyncClient(**cf_kwargs) as cf_client:
 
             async def one(cand):
+                if cand.get("ats") in _CLOUDFLARE_ATS:
+                    async with cf_sem:
+                        return await _verify_candidate(cf_client, cand)
                 async with sem:
                     return await _verify_candidate(client, cand)
 

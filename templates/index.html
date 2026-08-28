@@ -1113,10 +1113,10 @@ async function loadJobs(append) {
   var effectiveHours = (status === 'saved' || status === 'applied') ? 720 : hours;
   var profileId = _selectedProfiles.join(',');
 
-  // Direct-apply only is the default: every job in the feed must link straight
-  // to the employer's own application form. No aggregator sign-up walls.
-  // window.SP_SHOW_ALL = true in the console to temporarily see everything.
-  var directOnly = window.SP_SHOW_ALL ? '0' : '1';
+  // Show every board by default — LinkedIn, Indeed and Glassdoor are wanted as
+  // sources. The "Direct Apply" badge marks jobs whose link goes to the real
+  // posting; the Direct Apply filter narrows to those when you want it.
+  var directOnly = window.SP_DIRECT_ONLY ? '1' : '';
 
   var searchInfo = search ? expandSearchQuery(search) : null;
 
