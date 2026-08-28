@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.15.0"
+BUILD_VERSION = "2.15.1"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -703,15 +703,18 @@ async def lifespan(app: FastAPI):
         id="deep_sweep",
         replace_existing=True,
     )
+    # Hourly, not once at 3AM. Retention is 3 days with no archive step, and the
+    # ATS layer now ingests onsite/hybrid too, so waiting a full day between
+    # sweeps lets the volume pile up on a 454MB disk.
     scheduler.add_job(
         scheduled_cleanup,
-        "cron",
-        hour=3, minute=0,
-        id="daily_cleanup",
+        "interval",
+        hours=1,
+        id="hourly_cleanup",
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("[Scheduler] Parallel source workers running. Deep sweep 12h, cleanup 3AM.")
+    logger.info("[Scheduler] Parallel source workers running. Deep sweep 12h, cleanup hourly.")
 
     # Self-healing title expansion — only re-expands profiles whose search terms
     # look polluted (heuristic seniority junk from a past AI outage). Clean

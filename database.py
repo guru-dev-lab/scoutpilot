@@ -932,8 +932,13 @@ async def delete_profile(profile_id: int):
 
 # --- Data Retention / Cleanup ---
 
-ARCHIVE_AFTER_DAYS = 3    # Move jobs older than 3 days to archive (matches UI default)
-PURGE_AFTER_DAYS = 10     # Delete archived jobs older than this (hot board, not a backlog)
+# Hot board, not a backlog: anything older than this is deleted outright. There
+# is no archive step any more — copying rows to jobs_archive only moved the disk
+# cost instead of releasing it.
+RETENTION_DAYS = 3
+# Kept as aliases so any older caller/import keeps working.
+ARCHIVE_AFTER_DAYS = RETENTION_DAYS
+PURGE_AFTER_DAYS = RETENTION_DAYS
 
 
 async def init_archive_table():
@@ -982,420 +987,58 @@ async def init_archive_table():
 
 
 async def cleanup_old_jobs() -> dict:
-    """Move stale jobs to archive and purge ancient archived jobs.
-    Returns stats on what was moved/deleted."""
+    """Delete jobs older than RETENTION_DAYS. No archive step.
+
+    Jobs the user has SAVED or APPLIED to are never deleted — losing an
+    application history to a disk cleanup would be far worse than the few KB it
+    costs to keep. Everything else is a stale listing on a hot board.
+    """
     db = await get_db()
     try:
-        # 1. Count what we're about to archive
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE first_seen_at < datetime('now', ?)",
-            (f"-{ARCHIVE_AFTER_DAYS} days",),
+        cutoff = f"-{RETENTION_DAYS} days"
+        keep = ("saved", "applied")
+
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE first_seen_at < datetime('now', ?) "
+            "AND status NOT IN (?, ?)",
+            (cutoff, *keep),
         )
-        archive_count = (await cursor.fetchone())[0]
+        stale = (await cur.fetchone())[0]
 
-        # 2. Move old jobs to archive (INSERT OR IGNORE to skip dupes)
-        if archive_count > 0:
+        if stale:
             await db.execute(
-                """INSERT OR IGNORE INTO jobs_archive
-                   (id, hash, title, company_name, company_domain, location,
-                    is_remote, work_type, description, salary_min, salary_max,
-                    source, source_url, direct_apply_url, posted_at, first_seen_at,
-                    relevance_score, trust_score, is_direct_apply, status, search_profile_id)
-                   SELECT id, hash, title, company_name, company_domain, location,
-                          is_remote, work_type, description, salary_min, salary_max,
-                          source, source_url, direct_apply_url, posted_at, first_seen_at,
-                          relevance_score, trust_score, is_direct_apply, status, search_profile_id
-                   FROM jobs WHERE first_seen_at < datetime('now', ?)""",
-                (f"-{ARCHIVE_AFTER_DAYS} days",),
-            )
-            # 3. Delete them from active table
-            await db.execute(
-                "DELETE FROM jobs WHERE first_seen_at < datetime('now', ?)",
-                (f"-{ARCHIVE_AFTER_DAYS} days",),
+                "DELETE FROM jobs WHERE first_seen_at < datetime('now', ?) "
+                "AND status NOT IN (?, ?)",
+                (cutoff, *keep),
             )
 
-        # 4. Purge ancient archives
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM jobs_archive WHERE archived_at < datetime('now', ?)",
-            (f"-{PURGE_AFTER_DAYS} days",),
-        )
-        purge_count = (await cursor.fetchone())[0]
-
-        if purge_count > 0:
-            await db.execute(
-                "DELETE FROM jobs_archive WHERE archived_at < datetime('now', ?)",
-                (f"-{PURGE_AFTER_DAYS} days",),
-            )
+        # Drain anything the old archive-then-purge flow left behind.
+        leftover = 0
+        try:
+            cur = await db.execute("SELECT COUNT(*) FROM jobs_archive")
+            leftover = (await cur.fetchone())[0]
+            if leftover:
+                await db.execute("DELETE FROM jobs_archive")
+        except Exception:
+            leftover = 0
 
         await db.commit()
 
-        # 5. Get current table sizes
         active = (await (await db.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
-        archived = (await (await db.execute("SELECT COUNT(*) FROM jobs_archive")).fetchone())[0]
+        kept = (await (await db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN (?, ?)", keep)).fetchone())[0]
 
         return {
-            "archived": archive_count,
-            "purged": purge_count,
+            "archived": 0,          # kept for the existing log line
+            "purged": stale + leftover,
+            "deleted": stale,
+            "archive_drained": leftover,
+            "protected_saved_applied": kept,
             "active_jobs": active,
-            "archived_jobs": archived,
+            "archived_jobs": 0,
         }
     finally:
         await db.close()
-
-
-# Below this much free space the volume is effectively full: SQLite starts
-# raising "database or disk is full" and inserts begin failing.
-CRITICAL_FREE_MB = 60
-# Descriptions dominate row size. The scorer only ever reads the first ~3k
-# chars, so anything beyond this is stored for nothing.
-MAX_DESCRIPTION_CHARS = 4000
-
-
-async def _compact_via_tmp(log: list) -> bool:
-    """Last resort when the volume has no room for an in-place VACUUM.
-
-    VACUUM INTO writes a compacted copy to the container's own disk (/tmp is a
-    different filesystem from the mounted volume). The copy is verified, and
-    only then is the bloated original replaced — nothing is removed until the
-    replacement passes an integrity check AND a row-count match.
-    """
-    import shutil, tempfile
-    tmp_dir = tempfile.gettempdir()
-    tmp_path = os.path.join(tmp_dir, "scoutpilot_compact.db")
-    for leftover in (tmp_path, tmp_path + "-wal", tmp_path + "-shm"):
-        try:
-            os.remove(leftover)
-        except OSError:
-            pass
-
-    # 1. Size the job; make sure the scratch filesystem can actually hold it.
-    src = await aiosqlite.connect(DB_PATH)
-    try:
-        page_size = (await (await src.execute("PRAGMA page_size")).fetchone())[0]
-        page_count = (await (await src.execute("PRAGMA page_count")).fetchone())[0]
-        freelist = (await (await src.execute("PRAGMA freelist_count")).fetchone())[0]
-        live_bytes = page_size * max(page_count - freelist, 0)
-        expected_jobs = (await (await src.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
-
-        tmp_free = shutil.disk_usage(tmp_dir).free
-        if tmp_free < live_bytes * 1.3:
-            log.append(f"compact-via-tmp skipped — {tmp_dir} has "
-                       f"{tmp_free/1e6:.0f}MB, needs ~{live_bytes*1.3/1e6:.0f}MB")
-            return False
-
-        log.append(f"compacting {live_bytes/1e6:.0f}MB of live data into {tmp_dir}")
-        await src.execute("VACUUM INTO ?", (tmp_path,))
-        await src.commit()
-    finally:
-        await src.close()
-
-    # 2. Verify the copy BEFORE touching the original.
-    chk = await aiosqlite.connect(tmp_path)
-    try:
-        integrity = (await (await chk.execute("PRAGMA integrity_check")).fetchone())[0]
-        copy_jobs = (await (await chk.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
-    finally:
-        await chk.close()
-
-    if integrity != "ok" or copy_jobs != expected_jobs:
-        log.append(f"compact ABORTED — integrity={integrity}, "
-                   f"jobs {copy_jobs} != {expected_jobs}; original untouched")
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        return False
-
-    log.append(f"verified copy: integrity=ok, jobs={copy_jobs}, "
-               f"{os.path.getsize(tmp_path)/1e6:.0f}MB")
-
-    # 3. Free the volume, then move the verified copy into place.
-    for suffix in ("-wal", "-shm", ""):
-        try:
-            os.remove(DB_PATH + suffix)
-        except OSError:
-            pass
-    shutil.move(tmp_path, DB_PATH)
-    log.append(f"replaced database — now {os.path.getsize(DB_PATH)/1e6:.0f}MB")
-    return True
-
-
-async def emergency_reclaim(dry_run: bool = False) -> dict:
-    """Recover a volume that is too full for a normal VACUUM to even run.
-
-    Ordered cheapest-and-safest first, re-checking free space after each step
-    and stopping as soon as the volume is healthy again:
-
-      1. Truncate the WAL.
-      2. Purge archived jobs past the retention window.
-      3. Trim over-long descriptions (the bulk of row size).
-      4. Purge the archive entirely.
-      5. VACUUM, which needs roughly the compacted size free — which is why it
-         has to come last, after the earlier steps have made room.
-    """
-    import shutil
-    d = os.path.dirname(DB_PATH) or "."
-
-    def free_mb() -> float:
-        return shutil.disk_usage(d).free / 1e6
-
-    log: list[str] = []
-    start_free = free_mb()
-    start_size = os.path.getsize(DB_PATH) / 1e6 if os.path.exists(DB_PATH) else 0
-    result = {"start_free_mb": round(start_free, 1),
-              "start_db_mb": round(start_size, 1),
-              "steps": log, "dry_run": dry_run}
-
-    if start_free >= CRITICAL_FREE_MB:
-        log.append(f"healthy — {start_free:.1f}MB free, nothing to do")
-        result["end_free_mb"] = round(start_free, 1)
-        return result
-
-    if dry_run:
-        log.append("dry run — would purge archive, trim descriptions, vacuum")
-        return result
-
-    db = await get_db()
-    try:
-        async def scalar(sql, args=()):
-            return (await (await db.execute(sql, args)).fetchone())[0]
-
-        # 1. WAL truncate — frees whatever the write-ahead log is holding.
-        try:
-            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            await db.commit()
-            log.append(f"wal_checkpoint(TRUNCATE) -> {free_mb():.1f}MB free")
-            # TRUNCATE silently no-ops while another connection holds a read
-            # lock, and this app runs ~10 concurrent workers. Cycling the
-            # journal mode removes the WAL file outright; WAL is restored after.
-            if free_mb() < CRITICAL_FREE_MB:
-                await db.execute("PRAGMA journal_mode=DELETE")
-                await db.commit()
-                await db.execute("PRAGMA journal_mode=WAL")
-                await db.commit()
-                log.append(f"journal_mode cycle -> {free_mb():.1f}MB free")
-        except Exception as e:
-            log.append(f"wal_checkpoint failed: {e}")
-
-        # 2. Purge archive past the retention window.
-        try:
-            n = await scalar(
-                "SELECT COUNT(*) FROM jobs_archive WHERE archived_at < datetime('now', ?)",
-                (f"-{PURGE_AFTER_DAYS} days",))
-            if n:
-                await db.execute(
-                    "DELETE FROM jobs_archive WHERE archived_at < datetime('now', ?)",
-                    (f"-{PURGE_AFTER_DAYS} days",))
-                await db.commit()
-                log.append(f"purged {n} archived jobs older than {PURGE_AFTER_DAYS}d")
-        except Exception as e:
-            log.append(f"retention purge failed: {e}")
-
-        # 3. Trim over-long descriptions in both tables.
-        try:
-            for table in ("jobs", "jobs_archive"):
-                try:
-                    n = await scalar(
-                        f"SELECT COUNT(*) FROM {table} WHERE LENGTH(description) > ?",
-                        (MAX_DESCRIPTION_CHARS,))
-                    if n:
-                        await db.execute(
-                            f"UPDATE {table} SET description = substr(description, 1, ?) "
-                            f"WHERE LENGTH(description) > ?",
-                            (MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_CHARS))
-                        await db.commit()
-                        log.append(f"trimmed {n} {table} descriptions to {MAX_DESCRIPTION_CHARS} chars")
-                except Exception as e:
-                    log.append(f"trim {table} failed: {e}")
-            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            await db.commit()
-        except Exception as e:
-            log.append(f"trim phase failed: {e}")
-
-        # 4. Still critical -> drop the archive entirely. Archived rows are
-        #    stale listings on a hot board; live `jobs` is never touched.
-        try:
-            if free_mb() < CRITICAL_FREE_MB:
-                n = await scalar("SELECT COUNT(*) FROM jobs_archive")
-                if n:
-                    await db.execute("DELETE FROM jobs_archive")
-                    await db.commit()
-                    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    await db.commit()
-                    log.append(f"emergency: dropped all {n} archived jobs")
-        except Exception as e:
-            log.append(f"archive drop failed: {e}")
-    finally:
-        await db.close()
-
-    # 5. VACUUM last — the steps above are what make room for it.
-    try:
-        db_size = os.path.getsize(DB_PATH)
-        # Freed pages are reused by the rebuild, so the compacted file is much
-        # smaller than the current one; require headroom against live content.
-        vdb = await aiosqlite.connect(DB_PATH)
-        try:
-            page_size = (await (await vdb.execute("PRAGMA page_size")).fetchone())[0]
-            page_count = (await (await vdb.execute("PRAGMA page_count")).fetchone())[0]
-            freelist = (await (await vdb.execute("PRAGMA freelist_count")).fetchone())[0]
-            live_bytes = page_size * max(page_count - freelist, 0)
-            need = live_bytes * 1.1
-            if free_mb() * 1e6 > need:
-                await vdb.execute("VACUUM")
-                await vdb.commit()
-                log.append(f"VACUUM ok (needed ~{need/1e6:.0f}MB)")
-            else:
-                log.append(f"in-place VACUUM needs ~{need/1e6:.0f}MB but only "
-                           f"{free_mb():.0f}MB free — compacting via temp disk")
-                await vdb.close()
-                await _compact_via_tmp(log)
-                vdb = await aiosqlite.connect(DB_PATH)
-        finally:
-            await vdb.close()
-        result["end_db_mb"] = round(os.path.getsize(DB_PATH) / 1e6, 1)
-        result["shrunk_mb"] = round(start_size - result["end_db_mb"], 1)
-    except Exception as e:
-        log.append(f"vacuum phase failed: {e}")
-
-    result["end_free_mb"] = round(free_mb(), 1)
-    result["freed_mb"] = round(result["end_free_mb"] - start_free, 1)
-    return result
-
-
-async def storage_stats() -> dict:
-    """Disk + SQLite space accounting for the volume the DB lives on."""
-    import shutil
-    out: dict = {}
-    try:
-        d = os.path.dirname(DB_PATH) or "."
-        total, used, free = shutil.disk_usage(d)
-        out["disk"] = {
-            "mount": d,
-            "total_mb": round(total / 1e6, 1),
-            "used_mb": round(used / 1e6, 1),
-            "free_mb": round(free / 1e6, 1),
-            "pct_used": round(used / total * 100, 1) if total else None,
-        }
-    except Exception as e:
-        out["disk"] = {"error": str(e)}
-
-    files = {}
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            files[os.path.basename(DB_PATH) + suffix] = round(
-                os.path.getsize(DB_PATH + suffix) / 1e6, 1)
-        except OSError:
-            pass
-    out["files_mb"] = files
-
-    db = await get_db()
-    try:
-        async def one(sql):
-            return (await (await db.execute(sql)).fetchone())[0]
-        page_size = await one("PRAGMA page_size")
-        page_count = await one("PRAGMA page_count")
-        freelist = await one("PRAGMA freelist_count")
-        out["sqlite"] = {
-            "page_size": page_size,
-            "page_count": page_count,
-            "freelist_pages": freelist,
-            "logical_mb": round(page_size * page_count / 1e6, 1),
-            # Space already deleted but never returned to the filesystem.
-            "reclaimable_mb": round(page_size * freelist / 1e6, 1),
-            "auto_vacuum": await one("PRAGMA auto_vacuum"),
-        }
-        counts = {}
-        for t in ("jobs", "jobs_archive", "discovered_companies"):
-            try:
-                counts[t] = await one(f"SELECT COUNT(*) FROM {t}")
-            except Exception:
-                counts[t] = None
-        out["rows"] = counts
-        try:
-            out["description_mb"] = round(
-                (await one("SELECT COALESCE(SUM(LENGTH(description)),0) FROM jobs")
-                 + await one("SELECT COALESCE(SUM(LENGTH(description)),0) FROM jobs_archive")
-                 ) / 1e6, 1)
-        except Exception:
-            pass
-        out["retention"] = {
-            "archive_after_days": ARCHIVE_AFTER_DAYS,
-            "purge_after_days": PURGE_AFTER_DAYS,
-        }
-    finally:
-        await db.close()
-    return out
-
-
-async def reclaim_space(force_vacuum: bool = False) -> dict:
-    """Return dead space to the filesystem, cheapest step first.
-
-    A full VACUUM rebuilds the database and needs free disk roughly equal to
-    the DB size. On a volume that is already nearly full that would fail, so it
-    only runs when there is comfortable headroom (or force_vacuum=True).
-    """
-    import shutil
-    result: dict = {"steps": [], "errors": []}
-    before = {}
-    try:
-        before = {k: os.path.getsize(DB_PATH + k) for k in ("", "-wal")
-                  if os.path.exists(DB_PATH + k)}
-    except OSError:
-        pass
-
-    db = await get_db()
-    try:
-        # 1. Checkpoint + truncate the WAL. Cheap, no extra space needed.
-        try:
-            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            await db.commit()
-            result["steps"].append("wal_checkpoint(TRUNCATE)")
-        except Exception as e:
-            result["errors"].append(f"wal_checkpoint: {e}")
-
-        # 2. Incremental vacuum, only meaningful when auto_vacuum=INCREMENTAL.
-        try:
-            av = (await (await db.execute("PRAGMA auto_vacuum")).fetchone())[0]
-            if av == 2:
-                await db.execute("PRAGMA incremental_vacuum")
-                await db.commit()
-                result["steps"].append("incremental_vacuum")
-            result["auto_vacuum"] = av
-        except Exception as e:
-            result["errors"].append(f"incremental_vacuum: {e}")
-    finally:
-        await db.close()
-
-    # 3. Full VACUUM only with headroom — it needs ~1x the DB size free.
-    try:
-        d = os.path.dirname(DB_PATH) or "."
-        free = shutil.disk_usage(d).free
-        db_size = os.path.getsize(DB_PATH)
-        result["free_mb"] = round(free / 1e6, 1)
-        result["db_mb"] = round(db_size / 1e6, 1)
-        if force_vacuum or free > db_size * 1.2:
-            vdb = await aiosqlite.connect(DB_PATH)
-            try:
-                await vdb.execute("VACUUM")
-                await vdb.commit()
-                result["steps"].append("VACUUM")
-            finally:
-                await vdb.close()
-        else:
-            result["steps"].append(
-                f"VACUUM SKIPPED — needs ~{round(db_size*1.2/1e6)}MB free, "
-                f"only {round(free/1e6)}MB available")
-    except Exception as e:
-        result["errors"].append(f"vacuum: {e}")
-
-    try:
-        after = {k: os.path.getsize(DB_PATH + k) for k in ("", "-wal")
-                 if os.path.exists(DB_PATH + k)}
-        result["freed_mb"] = round(
-            (sum(before.values()) - sum(after.values())) / 1e6, 1)
-    except OSError:
-        pass
-    return result
 
 
 # --- Source Settings ---
