@@ -1144,6 +1144,9 @@ async function loadJobs(append) {
           hours: 720, min_relevance: 50, min_trust: 0,
           source: source, work_type: workType, status: status, direct_only: directOnly,
           sort_by: sort_by, sort_dir: sort_dir, search: syn, limit: 50, offset: 0,
+          // Was omitted, so a search pulled synonym matches from EVERY profile
+          // — jobs that do not belong to the profiles you have selected.
+          profile: profileId,
         });
         if (location) p2.set('location', location);
         return fetch(API + '/api/jobs?' + p2).then(function(r) { return r.json(); }).catch(function() { return {jobs:[]}; });
@@ -1630,6 +1633,26 @@ function showNewJobs() {
   // keeps the feed in posted-time order: genuinely-new posts rise to the top,
   // found-late-but-older ones land where they belong.
   if (_pendingNewJobs.length === 0) return;
+
+  // Re-check the live-streamed jobs against the filters that are active RIGHT
+  // NOW. The poll captures its parameters when it fires, so if the filters
+  // changed while it was in flight, its results can be for the previous filter
+  // and get merged in anyway — which is how onsite rows appeared under a
+  // Remote filter. Cheap client-side guard; the server query is unchanged.
+  var _wt = document.getElementById('filterWorkType').value;
+  var _minRel = parseInt(document.getElementById('filterRelevance').value || '0', 10);
+  _pendingNewJobs = _pendingNewJobs.filter(function(j) {
+    if (_wt) {
+      var jt = j.work_type || (j.is_remote ? 'remote' : 'onsite');
+      if (jt !== _wt) return false;
+    }
+    if (_minRel && (j.relevance_score || 0) < _minRel) return false;
+    return true;
+  });
+  if (_pendingNewJobs.length === 0) {
+    document.getElementById('newJobsBar').classList.remove('visible');
+    return;
+  }
 
   _allJobs = _pendingNewJobs.concat(_allJobs);
   _pendingNewJobs = [];
