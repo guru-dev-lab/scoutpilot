@@ -45,7 +45,12 @@ class Settings(BaseSettings):
 
     # Relevance: jobs the AI classifier scores below this are hidden from the
     # board (clearly-wrong roles). Reversible — they're set status='hidden', not deleted.
-    relevance_hide_below: int = 40
+    # Jobs scoring below this are marked hidden and vanish from the feed.
+    # 40 was hiding 7,580 of 9,417 rows (80%). The role-family fence already
+    # hard-caps genuine mismatches at 22, so anything scoring 25+ has ALREADY
+    # passed that fence and is a plausible match - hiding it was throwing away
+    # ~1,400 real jobs. Below 25 stays hidden: that band is the fence's rejects.
+    relevance_hide_below: int = 25
 
     # Scraping
     scrape_interval_minutes: int = 5

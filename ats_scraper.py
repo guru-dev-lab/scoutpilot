@@ -67,7 +67,7 @@ _PLATFORM_CONCURRENCY = {
 _PROXIED_PLATFORMS = {"workable", "recruitee", "breezy"}
 
 # Hard cap on inserts per ATS platform per cycle (safety net)
-MAX_INSERTS_PER_PLATFORM_PER_CYCLE = 300
+MAX_INSERTS_PER_PLATFORM_PER_CYCLE = 1200
 
 # Per-request timeout (seconds)
 HTTP_TIMEOUT = 25

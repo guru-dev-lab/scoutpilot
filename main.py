@@ -6,7 +6,7 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.12.2"
+BUILD_VERSION = "2.13.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -421,6 +421,32 @@ async def lifespan(app: FastAPI):
             logger.info(f"[Storage] {er['steps']}")
     except Exception as e:
         logger.error(f"[Storage] emergency_reclaim failed: {e}")
+
+    # Re-show jobs that only became hidden because the old threshold was
+    # stricter. update_job_scores() writes status='hidden' at scrape time, so
+    # lowering relevance_hide_below alone would apply to NEW jobs only and the
+    # existing backlog would stay invisible.
+    try:
+        from config import settings as _s
+        from database import get_db as _gdb
+        _db = await _gdb()
+        try:
+            _cur = await _db.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status='hidden' "
+                "AND relevance_score >= ?", (_s.relevance_hide_below,))
+            _n = (await _cur.fetchone())[0]
+            if _n:
+                await _db.execute(
+                    "UPDATE jobs SET status='new' WHERE status='hidden' "
+                    "AND relevance_score >= ?", (_s.relevance_hide_below,))
+                await _db.commit()
+                logger.warning(
+                    f"[Retention] un-hid {_n} jobs now at/above the "
+                    f"relevance threshold ({_s.relevance_hide_below})")
+        finally:
+            await _db.close()
+    except Exception as e:
+        logger.error(f"[Retention] unhide backfill failed: {e}")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:
