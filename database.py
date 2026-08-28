@@ -1017,6 +1017,75 @@ CRITICAL_FREE_MB = 60
 MAX_DESCRIPTION_CHARS = 4000
 
 
+async def _compact_via_tmp(log: list) -> bool:
+    """Last resort when the volume has no room for an in-place VACUUM.
+
+    VACUUM INTO writes a compacted copy to the container's own disk (/tmp is a
+    different filesystem from the mounted volume). The copy is verified, and
+    only then is the bloated original replaced — nothing is removed until the
+    replacement passes an integrity check AND a row-count match.
+    """
+    import shutil, tempfile
+    tmp_dir = tempfile.gettempdir()
+    tmp_path = os.path.join(tmp_dir, "scoutpilot_compact.db")
+    for leftover in (tmp_path, tmp_path + "-wal", tmp_path + "-shm"):
+        try:
+            os.remove(leftover)
+        except OSError:
+            pass
+
+    # 1. Size the job; make sure the scratch filesystem can actually hold it.
+    src = await aiosqlite.connect(DB_PATH)
+    try:
+        page_size = (await (await src.execute("PRAGMA page_size")).fetchone())[0]
+        page_count = (await (await src.execute("PRAGMA page_count")).fetchone())[0]
+        freelist = (await (await src.execute("PRAGMA freelist_count")).fetchone())[0]
+        live_bytes = page_size * max(page_count - freelist, 0)
+        expected_jobs = (await (await src.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
+
+        tmp_free = shutil.disk_usage(tmp_dir).free
+        if tmp_free < live_bytes * 1.3:
+            log.append(f"compact-via-tmp skipped — {tmp_dir} has "
+                       f"{tmp_free/1e6:.0f}MB, needs ~{live_bytes*1.3/1e6:.0f}MB")
+            return False
+
+        log.append(f"compacting {live_bytes/1e6:.0f}MB of live data into {tmp_dir}")
+        await src.execute("VACUUM INTO ?", (tmp_path,))
+        await src.commit()
+    finally:
+        await src.close()
+
+    # 2. Verify the copy BEFORE touching the original.
+    chk = await aiosqlite.connect(tmp_path)
+    try:
+        integrity = (await (await chk.execute("PRAGMA integrity_check")).fetchone())[0]
+        copy_jobs = (await (await chk.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
+    finally:
+        await chk.close()
+
+    if integrity != "ok" or copy_jobs != expected_jobs:
+        log.append(f"compact ABORTED — integrity={integrity}, "
+                   f"jobs {copy_jobs} != {expected_jobs}; original untouched")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return False
+
+    log.append(f"verified copy: integrity=ok, jobs={copy_jobs}, "
+               f"{os.path.getsize(tmp_path)/1e6:.0f}MB")
+
+    # 3. Free the volume, then move the verified copy into place.
+    for suffix in ("-wal", "-shm", ""):
+        try:
+            os.remove(DB_PATH + suffix)
+        except OSError:
+            pass
+    shutil.move(tmp_path, DB_PATH)
+    log.append(f"replaced database — now {os.path.getsize(DB_PATH)/1e6:.0f}MB")
+    return True
+
+
 async def emergency_reclaim(dry_run: bool = False) -> dict:
     """Recover a volume that is too full for a normal VACUUM to even run.
 
@@ -1062,6 +1131,15 @@ async def emergency_reclaim(dry_run: bool = False) -> dict:
             await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             await db.commit()
             log.append(f"wal_checkpoint(TRUNCATE) -> {free_mb():.1f}MB free")
+            # TRUNCATE silently no-ops while another connection holds a read
+            # lock, and this app runs ~10 concurrent workers. Cycling the
+            # journal mode removes the WAL file outright; WAL is restored after.
+            if free_mb() < CRITICAL_FREE_MB:
+                await db.execute("PRAGMA journal_mode=DELETE")
+                await db.commit()
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.commit()
+                log.append(f"journal_mode cycle -> {free_mb():.1f}MB free")
         except Exception as e:
             log.append(f"wal_checkpoint failed: {e}")
 
@@ -1133,8 +1211,11 @@ async def emergency_reclaim(dry_run: bool = False) -> dict:
                 await vdb.commit()
                 log.append(f"VACUUM ok (needed ~{need/1e6:.0f}MB)")
             else:
-                log.append(f"VACUUM skipped — needs ~{need/1e6:.0f}MB, "
-                           f"{free_mb():.0f}MB free")
+                log.append(f"in-place VACUUM needs ~{need/1e6:.0f}MB but only "
+                           f"{free_mb():.0f}MB free — compacting via temp disk")
+                await vdb.close()
+                await _compact_via_tmp(log)
+                vdb = await aiosqlite.connect(DB_PATH)
         finally:
             await vdb.close()
         result["end_db_mb"] = round(os.path.getsize(DB_PATH) / 1e6, 1)
