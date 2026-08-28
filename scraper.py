@@ -28,6 +28,25 @@ def _normalize_posted_at(raw: str) -> str:
         return ""
     raw = str(raw).strip()
 
+    # Unix epoch (Arbeitnow sends created_at as an integer). Without this the
+    # value fell through to "" and every Arbeitnow row claimed "posted now".
+    if re.fullmatch(r"\d{9,13}", raw):
+        try:
+            ts = int(raw)
+            if ts > 10_000_000_000:      # milliseconds
+                ts //= 1000
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return ""
+
+    # Workday phrases its dates as "Posted 2 Days Ago" / "Posted Today" /
+    # "Posted 30+ Days Ago". The relative-time branch below is anchored, so the
+    # leading "Posted " made every Workday row unparseable — they fell back to
+    # scrape time, permanently claimed to be brand new, and buried sources that
+    # report honest timestamps. Strip the prefix and the "+" before matching.
+    raw = re.sub(r"^posted\s+", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"(\d+)\+", r"\1", raw)
+
     # Already ISO datetime (e.g. 2026-03-27T12:00:00Z or 2026-03-27T12:00:00+00:00)
     if re.match(r"^\d{4}-\d{2}-\d{2}T", raw):
         return raw
