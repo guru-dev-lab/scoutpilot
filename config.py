@@ -19,6 +19,17 @@ class Settings(BaseSettings):
     serpapi_key: str = ""
     rapidapi_key: str = ""
 
+    # Residential rotating proxy, e.g.
+    #   http://USER__cr.us:PASS@gw.dataimpulse.com:823
+    # Railway runs on datacenter IPs, which LinkedIn blocks outright — measured
+    # 1 LinkedIn job ever. Through a US residential IP the same guest endpoint
+    # returns 70 cards per request. Empty = no proxy, direct connection.
+    #
+    # Deliberately NOT applied to every source: Indeed already works direct
+    # (JobSpy uses its internal API) and returns 403 + CAPTCHA through the
+    # proxy, and DataImpulse blocks all .gov domains, which would kill USAJobs.
+    proxy_url: str = ""
+
     # Job source API keys (register for free at each provider)
     usajobs_api_key: str = ""       # https://developer.usajobs.gov/APIRequest/Index
     usajobs_email: str = ""         # Email used when registering at USAJobs

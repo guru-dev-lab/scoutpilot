@@ -449,6 +449,7 @@ async def scrape_jobspy(
     sites: Optional[list[str]] = None,
     fetch_description: bool = True,
     timeout: int = 120,
+    use_proxy: bool = False,
 ) -> list[dict]:
     """
     Scrape jobs using JobSpy (LinkedIn, Indeed, Glassdoor, Google, ZipRecruiter).
@@ -477,6 +478,15 @@ async def scrape_jobspy(
             }
             if location:
                 kwargs["location"] = location
+
+            # Route through the residential proxy only where it actually helps.
+            # LinkedIn blocks Railway's datacenter IP outright; through a US
+            # residential IP the same query returns results. Indeed is left
+            # direct on purpose — it works today via JobSpy's internal API and
+            # returns 403 + CAPTCHA through the proxy.
+            if use_proxy and settings.proxy_url:
+                kwargs["proxies"] = [settings.proxy_url]
+                logger.info(f"[JobSpy] using residential proxy for {sites}")
 
             logger.info(f"[JobSpy] Starting: term='{search_term}' loc='{location}' sites={sites}")
             results = scrape_jobs(**kwargs)
@@ -2190,6 +2200,7 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
                             search_term=effective_term, location=loc,
                             results_wanted=100, hours_old=72, profile_id=profile_id,
                             sites=["linkedin"], fetch_description=True, timeout=120,
+                            use_proxy=True,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
                     except Exception as e:
