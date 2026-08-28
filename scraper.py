@@ -1155,14 +1155,20 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
 
     updated = 0
     expired = 0
+    # Reason counters. Without these a pass that processes rows and updates
+    # none is indistinguishable from a worker that never ran — the exact
+    # failure mode that hid fetch_greenhouse returning 0 for every board.
+    reasons = {"http": 0, "no_match": 0, "too_short": 0, "error": 0, "no_url": 0}
     async with httpx.AsyncClient(**client_kwargs) as client:
         for row in rows:
             url = row.get("source_url") or ""
             if not url:
+                reasons["no_url"] += 1
                 continue
             try:
                 resp = await client.get(url)
                 if resp.status_code != 200:
+                    reasons["http"] += 1
                     logger.debug(f"[Enrich] HTTP {resp.status_code} for job {row['id']}")
                     continue
 
@@ -1180,10 +1186,19 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
 
                 m = _LI_DESC_RE.search(resp.text) or _LI_DESC_FALLBACK_RE.search(resp.text)
                 if not m:
+                    reasons["no_match"] += 1
+                    if reasons["no_match"] == 1:
+                        # Log the shape of the page once so a markup change or
+                        # an auth wall is diagnosable without a local repro.
+                        snippet = re.sub(r"\s+", " ", resp.text[:300])
+                        logger.warning(
+                            f"[Enrich] no description matched for job {row['id']} "
+                            f"({len(resp.text)}b, url={str(resp.url)[:90]}) :: {snippet[:160]}")
                     continue
                 text = re.sub(r"<[^>]+>", " ", m.group(1))
                 text = re.sub(r"\s+", " ", text).strip()
                 if len(text) < 80:
+                    reasons["too_short"] += 1
                     continue
 
                 from database import MAX_DESCRIPTION_CHARS, _write_lock
@@ -1200,12 +1215,16 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
                         await db.close()
                 updated += 1
             except Exception as e:
+                reasons["error"] += 1
                 logger.debug(f"[Enrich] job {row['id']}: {e}")
             await asyncio.sleep(1.2)   # polite, and keeps bandwidth flat
 
     if updated or expired:
         logger.info(f"[Enrich] {updated}/{len(rows)} descriptions added "
                     f"(re-queued for scoring), {expired} expired postings hidden")
+    elif rows:
+        logger.warning(
+            f"[Enrich] processed {len(rows)} rows and updated NONE — {reasons}")
     return updated
 
 
