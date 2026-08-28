@@ -2198,8 +2198,15 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
                         # trade: accurate remote/onsite labels + richer classification.
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
-                            results_wanted=100, hours_old=72, profile_id=profile_id,
-                            sites=["linkedin"], fetch_description=True, timeout=120,
+                            # Through the residential proxy LinkedIn works but is
+                            # slower: fetch_description costs one extra request
+                            # PER JOB, so 100 jobs = 100 proxied round-trips. At
+                            # timeout=120 the call was cancelled at 2 minutes and
+                            # the results landed 32s later — 100 rows fetched and
+                            # thrown away every cycle. Fewer results, longer
+                            # window, so the work actually completes.
+                            results_wanted=50, hours_old=72, profile_id=profile_id,
+                            sites=["linkedin"], fetch_description=True, timeout=300,
                             use_proxy=True,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
