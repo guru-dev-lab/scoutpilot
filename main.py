@@ -12,7 +12,7 @@ FastAPI app with background scheduler.
 # ai_engine.score_relevance_fuzzy.
 _FAMILY_FENCE_CAP = 22
 
-BUILD_VERSION = "2.18.0"
+BUILD_VERSION = "2.19.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -508,6 +508,50 @@ async def lifespan(app: FastAPI):
             await _db3.close()
     except Exception as e:
         logger.error(f"[Sources] re-enable failed: {e}")
+
+    # Re-apply the role-family fence to rows already scored. Scores are written
+    # once (scored_at is set, so the Scoring worker skips them), which means a
+    # scorer change only affects NEW jobs and the backlog keeps whatever the old
+    # logic decided — that is why "Senior Software Engineer" was still sitting
+    # in a Data Analyst feed after the fence was fixed. Fuzzy-only, so this
+    # costs no API calls.
+    try:
+        from database import get_db as _gdb4, get_profiles as _gp4
+        from ai_engine import score_relevance_fuzzy as _fz, _get_fallback_signature as _sig4
+        _profs = await _gp4()
+        if _profs:
+            _pd = _build_profile_data(_profs)
+            _by_id = {p["id"]: p for p in _pd if p.get("id") is not None}
+            _db4 = await _gdb4()
+            try:
+                _cur4 = await _db4.execute(
+                    "SELECT id, title, description, search_profile_id, relevance_score "
+                    "FROM jobs WHERE status NOT IN ('saved','applied')")
+                _rows = await _cur4.fetchall()
+                _fixed = 0
+                for _r in _rows:
+                    _p = _by_id.get(_r["search_profile_id"]) or (_pd[0] if _pd else None)
+                    if not _p:
+                        continue
+                    _f = _fz(_r["title"] or "", (_r["description"] or "")[:3000],
+                             _p["title"], _p["expanded"], _p["keywords"],
+                             skill_signature=_p.get("signature"))
+                    # Only ever demote here: this pass exists to remove roles the
+                    # fence now rejects, not to promote anything the AI scored low.
+                    if _f <= _FAMILY_FENCE_CAP and (_r["relevance_score"] or 0) > _f:
+                        await _db4.execute(
+                            "UPDATE jobs SET relevance_score = ?, status = "
+                            "CASE WHEN status IN ('saved','applied') THEN status "
+                            "ELSE 'hidden' END WHERE id = ?", (_f, _r["id"]))
+                        _fixed += 1
+                if _fixed:
+                    await _db4.commit()
+                    logger.warning(
+                        f"[Rescore] fence re-applied to {_fixed} previously-scored jobs")
+            finally:
+                await _db4.close()
+    except Exception as e:
+        logger.error(f"[Rescore] fence backfill failed: {e}")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:

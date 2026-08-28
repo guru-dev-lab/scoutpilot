@@ -360,8 +360,81 @@ _FAMILY_ADJACENCY: dict[str, set[str]] = {
 }
 
 
+# "Analyst" alone means nothing — O*NET maps that one word to nine different
+# occupations. A Process Analyst is manufacturing, a Fundamentals Analyst is
+# equity research, a Credit Analyst is finance. Treating the bare head noun as
+# a data role is why "Process Analyst for Plant Applications" scored 82 against
+# a Data Analyst profile. Industry practice is to disambiguate with the
+# modifier, and to ABSTAIN when there is no domain signal rather than guess.
+_ANALYST_DOMAIN_QUALIFIERS: dict[str, str] = {
+    # finance / accounting
+    "financial": "finance", "finance": "finance", "credit": "finance",
+    "fundamentals": "finance", "equity": "finance", "investment": "finance",
+    "treasury": "finance", "actuarial": "finance", "underwriting": "finance",
+    "securitization": "finance", "portfolio": "finance", "risk": "finance",
+    "budget": "finance", "revenue": "finance", "pricing": "finance",
+    "billing": "finance", "payroll": "finance", "audit": "finance",
+    "tax": "finance", "accounting": "finance", "collections": "finance",
+    # manufacturing / operations / supply chain
+    "process": "ops_pm", "plant": "ops_pm", "manufacturing": "ops_pm",
+    "production": "ops_pm", "supply chain": "ops_pm", "logistics": "ops_pm",
+    "procurement": "ops_pm", "inventory": "ops_pm", "warehouse": "ops_pm",
+    "materials": "ops_pm", "planning": "ops_pm", "scheduling": "ops_pm",
+    # quality / compliance / legal
+    "quality": "qa", "qa": "qa", "compliance": "finance", "regulatory": "finance",
+    "policy": "ops_pm", "legal": "ops_pm", "contract": "ops_pm",
+    "claims": "finance", "fraud": "security",
+    # people
+    "hr": "hr", "human resources": "hr", "people": "hr", "talent": "hr",
+    "compensation": "hr", "benefits": "hr", "recruiting": "hr",
+    # technical (non-analytics)
+    "security": "security", "soc": "security", "network": "devops_platform",
+    "systems": "devops_platform", "infrastructure": "devops_platform",
+    "cyber": "security", "threat": "security",
+    "qc": "qa", "test": "qa", "validation": "qa",
+    # clinical / lab / scientific
+    "clinical": "ops_pm", "laboratory": "ops_pm", "lab": "ops_pm",
+    "chemical": "ops_pm", "environmental": "ops_pm", "safety": "ops_pm",
+    "pharmacovigilance": "ops_pm",
+}
+
+# Unambiguous data signals. Any of these in the title means data_analytics
+# regardless of what else the title says.
+_DATA_STRONG_MARKERS = (
+    "data analyst", "data analytics", "business intelligence", "bi analyst",
+    "bi developer", "bi engineer", "reporting analyst", "analytics analyst",
+    "insights analyst", "analytics engineer", "reporting specialist",
+    "tableau", "power bi", "powerbi", "looker", "data visualization",
+    "dashboard", "sql analyst", "quantitative analyst", "product analyst",
+    "marketing analyst", "growth analyst", "web analytics", "data reporting",
+)
+
+_ANALYST_HEAD_RE = re.compile(r"\b(analyst|analysis|analytics|insights?)\b")
+
+
+def _disambiguate_analyst(text: str) -> Optional[str]:
+    """For a title whose only data signal is a generic 'analyst'-type word,
+    return the family its domain qualifier implies, else None to abstain."""
+    if any(m in text for m in _DATA_STRONG_MARKERS):
+        return None  # genuinely a data role — let the normal path claim it
+    for qualifier, fam in _ANALYST_DOMAIN_QUALIFIERS.items():
+        # qualifier must sit next to the analyst word, e.g. "process analyst",
+        # "analyst, credit risk" — not merely appear somewhere in a long title.
+        if re.search(rf"\b{re.escape(qualifier)}\b[\w\s&/,-]{{0,24}}?\b(analyst|analysis|analytics)\b", text) \
+           or re.search(rf"\b(analyst|analysis|analytics)\b[\w\s&/,-]{{0,24}}?\b{re.escape(qualifier)}\b", text):
+            return fam
+    return None
+
+
 def _detect_family(text: str) -> Optional[str]:
     """Return the first role family that appears in `text` (already lowercased)."""
+    # Disambiguate a generic "analyst" before the marker sweep, otherwise the
+    # bare word claims the title for data_analytics.
+    if _ANALYST_HEAD_RE.search(text):
+        domain = _disambiguate_analyst(text)
+        if domain:
+            return domain
+
     # Order matters — check most-specific signals first.
     priority = [
         "data_engineering", "data_science", "data_analytics",
