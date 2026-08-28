@@ -477,7 +477,12 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
                 job_data.get("company_name", ""),
                 job_data.get("company_domain", ""),
                 job_data.get("location", ""),
-                1 if job_data.get("is_remote") else 0,
+                # is_remote must agree with work_type. The card badge reads
+                # `work_type === 'remote' || is_remote`, so a hybrid row that
+                # also carried is_remote=1 rendered as "Remote". work_type is
+                # the authoritative label (it comes from the platform's own
+                # workplace field where one exists), so derive the flag from it.
+                1 if (job_data.get("work_type") or "").lower() == "remote" else 0,
                 job_data.get("work_type", "onsite"),
                 (job_data.get("description") or "")[:MAX_DESCRIPTION_CHARS],
                 job_data.get("salary_min", 0),
