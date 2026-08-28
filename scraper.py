@@ -1139,7 +1139,12 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
         await db.close()
 
     if not rows:
+        # Say so explicitly. Returning 0 silently here is why this worker looked
+        # dead while /api/debug/pipeline reported 207 in-band rows waiting.
+        logger.info("[Enrich] no candidate rows matched "
+                    "(linkedin + no description + visible + relevance 25-79)")
         return 0
+    logger.info(f"[Enrich] {len(rows)} candidates this pass")
 
     headers = {
         "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
