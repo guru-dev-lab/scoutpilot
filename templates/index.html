@@ -1113,8 +1113,10 @@ async function loadJobs(append) {
   var effectiveHours = (status === 'saved' || status === 'applied') ? 720 : hours;
   var profileId = _selectedProfiles.join(',');
 
-  // BUG FIX: directOnly was undefined - use empty string
-  var directOnly = '';
+  // Direct-apply only is the default: every job in the feed must link straight
+  // to the employer's own application form. No aggregator sign-up walls.
+  // window.SP_SHOW_ALL = true in the console to temporarily see everything.
+  var directOnly = window.SP_SHOW_ALL ? '0' : '1';
 
   var searchInfo = search ? expandSearchQuery(search) : null;
 

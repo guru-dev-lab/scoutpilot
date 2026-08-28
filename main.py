@@ -6,8 +6,8 @@ FastAPI app with background scheduler.
 # ──────────────────────────────────────────────
 # Build Info — update with each deploy
 # ──────────────────────────────────────────────
-BUILD_VERSION = "2.8.8"
-BUILD_DATE = "2026-07-21"
+BUILD_VERSION = "2.9.0"
+BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
@@ -547,6 +547,30 @@ async def lifespan(app: FastAPI):
             sample = ", ".join(f"{c['name']}({c['ats']}:{c['jobs_seen']})" for c in found[:8])
             logger.info(f"[Discovery] +{len(found)} new companies (bot total {total}) — {sample}")
 
+    async def _ats_harvest_body():
+        """URL-harvest discovery: pull real ATS slugs out of jobs we already
+        scraped. Free (no LLM), far higher yield than name-guessing. This was
+        only reachable from the legacy run_scrape_cycle path, so in workers
+        mode it never ran — that is why the roster grew so slowly."""
+        from ats_discovery import discover_new_ats_companies
+        stats = await discover_new_ats_companies()
+        n = stats.get("verified_new", 0)
+        if n:
+            from database import count_discovered_companies
+            total = await count_discovered_companies()
+            sample = ", ".join(
+                f"{a['ats']}:{a['name']}" for a in stats.get("added", [])[:8]
+            )
+            logger.info(
+                f"[Discovery/Harvest] +{n} companies (bot total {total}) — {sample}"
+            )
+        else:
+            logger.info(
+                f"[Discovery/Harvest] 0 new "
+                f"(scanned {stats.get('jobs_scanned',0)} jobs, "
+                f"{stats.get('failed_verify',0)} failed verify)"
+            )
+
     async def _workday_discovery_body():
         # Gentle, infrequent Workday discovery (shared IP with the Workday scraper).
         from discovery import run_workday_discovery_round
@@ -573,6 +597,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
+    asyncio.create_task(_worker("Discovery-Harvest", 600, _ats_harvest_body))  # URL-harvest: free, high-yield roster growth
     logger.info("[Workers] Launched 10 workers — 5 ATS platforms + Light + JobSpy + Scoring + Discovery + Discovery-Workday")
 
     # Keep deep sweep and cleanup on scheduler
@@ -999,7 +1024,7 @@ async def api_get_jobs(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: str = "",
-    direct_only: str = "",
+    direct_only: str = "1",
     location: str = "",
     skill: str = "",
     profile: str = "",
@@ -1014,7 +1039,10 @@ async def api_get_jobs(
 
         # When searching, expand time window to search ALL jobs (not just last 24h)
         effective_hours = 720 if search.strip() else hours
-        is_direct = direct_only in ("1", "true", "yes")
+        # Direct-apply is the DEFAULT view: only jobs whose link lands on the
+        # employer's own application form. Aggregators and sign-up walls are
+        # excluded unless the caller explicitly opts out with direct_only=0.
+        is_direct = direct_only not in ("0", "false", "no", "all")
         jobs = await get_jobs(
             hours=effective_hours, posted_hours=posted_hours,
             min_relevance=min_relevance, min_trust=min_trust,
@@ -1230,12 +1258,12 @@ async def api_export_csv(
     work_type: str = "",
     source: str = "",
     location: str = "",
-    direct_only: str = "",
+    direct_only: str = "1",
     skill: str = "",
 ):
     """Export current filtered jobs as CSV."""
     effective_hours = 720 if search.strip() else hours
-    is_direct = direct_only in ("1", "true", "yes")
+    is_direct = direct_only not in ("0", "false", "no", "all")
     jobs = await get_jobs(
         hours=effective_hours, search=search, status=status,
         work_type=work_type, source=source, location=location,

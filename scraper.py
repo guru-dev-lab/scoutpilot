@@ -3,6 +3,7 @@ Job scraper engine — pulls from multiple sources and normalizes into a common 
 Aggressively finds direct company application URLs.
 """
 import asyncio
+import time
 import logging
 import re
 from datetime import datetime, timezone
@@ -976,6 +977,63 @@ async def scrape_remoteok(
     return jobs
 
 
+# ── Arbeitnow shared feed ───────────────────────────────────────────────────
+# Arbeitnow's endpoint takes only `page` — there is NO search parameter. It is a
+# single global feed that we filter client-side. Fetching it once per search
+# term meant N identical round-trips per cycle, which is what was producing the
+# constant HTTP 429s. Fetch once, share across every term in the cycle.
+_ARBEITNOW_TTL = 600  # seconds
+_arbeitnow_cache: dict = {"at": 0.0, "items": []}
+_arbeitnow_lock: Optional[asyncio.Lock] = None
+
+
+async def _arbeitnow_feed() -> list[dict]:
+    """Return the Arbeitnow global feed, cached for _ARBEITNOW_TTL seconds."""
+    global _arbeitnow_lock
+    if _arbeitnow_lock is None:
+        _arbeitnow_lock = asyncio.Lock()
+
+    now = time.monotonic()
+    if _arbeitnow_cache["items"] and (now - _arbeitnow_cache["at"]) < _ARBEITNOW_TTL:
+        return _arbeitnow_cache["items"]
+
+    async with _arbeitnow_lock:
+        # Re-check: another coroutine may have refreshed while we waited.
+        now = time.monotonic()
+        if _arbeitnow_cache["items"] and (now - _arbeitnow_cache["at"]) < _ARBEITNOW_TTL:
+            return _arbeitnow_cache["items"]
+
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        all_items: list[dict] = []
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            for page_num in range(1, 4):
+                try:
+                    resp = await client.get(
+                        "https://www.arbeitnow.com/api/job-board-api",
+                        params={"page": page_num},
+                    )
+                    if resp.status_code == 429:
+                        logger.warning("[Arbeitnow] 429 — backing off, serving stale feed")
+                        break
+                    if resp.status_code != 200:
+                        logger.error(f"[Arbeitnow] HTTP {resp.status_code} on page {page_num}")
+                        break
+                    page_items = resp.json().get("data", [])
+                    if not page_items:
+                        break
+                    all_items.extend(page_items)
+                    await asyncio.sleep(0.4)  # be polite between pages
+                except Exception as e:
+                    logger.warning(f"[Arbeitnow] Page {page_num} error: {e}")
+                    break
+
+        if all_items:
+            _arbeitnow_cache["items"] = all_items
+            _arbeitnow_cache["at"] = time.monotonic()
+            logger.info(f"[Arbeitnow] feed refreshed: {len(all_items)} items")
+        return _arbeitnow_cache["items"]
+
+
 async def scrape_arbeitnow(
     search_term: str,
     profile_id: Optional[int] = None,
@@ -985,27 +1043,7 @@ async def scrape_arbeitnow(
 
     jobs = []
     try:
-        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        all_items = []
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            # Paginate up to 3 pages
-            for page_num in range(1, 4):
-                try:
-                    resp = await client.get(
-                        "https://www.arbeitnow.com/api/job-board-api",
-                        params={"page": page_num},
-                    )
-                    if resp.status_code != 200:
-                        logger.error(f"[Arbeitnow] HTTP {resp.status_code} on page {page_num}")
-                        break
-                    data = resp.json()
-                    page_items = data.get("data", [])
-                    if not page_items:
-                        break
-                    all_items.extend(page_items)
-                except Exception as e:
-                    logger.warning(f"[Arbeitnow] Page {page_num} error: {e}")
-                    break
+        all_items = await _arbeitnow_feed()
 
         search_lower = search_term.lower().replace(" remote", "").strip()
         search_words = search_lower.split()
@@ -1762,21 +1800,25 @@ async def scrape_findwork(
             data = resp.json()
 
         for item in data.get("results", []):
-            title = item.get("role", "")
-            company = item.get("company_name", "")
+            # FindWork returns explicit JSON nulls for optional fields, so
+            # .get(k, "") still yields None. Coerce with `or ""` everywhere.
+            title = item.get("role") or ""
+            company = item.get("company_name") or ""
+            if not title:
+                continue
             if _is_blocked_company(company):
                 continue
 
             location_str = item.get("location") or ""
-            description = item.get("text", "") or item.get("description", "")
+            description = item.get("text") or item.get("description") or ""
             clean_desc = re.sub(r"<[^>]+>", " ", str(description))
             clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
-            apply_url = item.get("url", "")
+            apply_url = item.get("url") or ""
             is_direct = _is_direct_url(apply_url)
-            posted_at = _normalize_posted_at(item.get("date_posted", ""))
+            posted_at = _normalize_posted_at(item.get("date_posted") or "")
 
-            is_remote = item.get("remote", False)
+            is_remote = bool(item.get("remote") or False)
             work_type = "remote" if is_remote else _detect_work_type({
                 "title": title,
                 "location": location_str,

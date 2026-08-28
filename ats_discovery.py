@@ -25,7 +25,8 @@ from typing import Optional
 import httpx
 
 from database import get_db
-from ats_scraper import COMPANIES_FILE, load_companies, save_companies, HTTP_HEADERS
+from ats_scraper import (COMPANIES_FILE, load_companies, load_companies_merged,
+                          save_companies, HTTP_HEADERS)
 
 logger = logging.getLogger("scoutpilot.ats.discovery")
 
@@ -416,7 +417,7 @@ async def _verify_smartrecruiters_with_name(
 JOBS_SCAN_LIMIT = 3000
 
 # Hard cap on new companies added in a single pass (safety net)
-MAX_NEW_PER_PASS = 50
+MAX_NEW_PER_PASS = 250
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -653,7 +654,9 @@ async def discover_new_ats_companies() -> dict:
         if not jobs:
             return stats
 
-        existing = load_companies()
+        # Merged (file + DB) so we never re-verify a company the bot already
+        # found on a previous pass — those live in the DB, not the file.
+        existing = await load_companies_merged()
         existing_keys: set[tuple[str, str]] = {_dedupe_key(e) for e in existing}
         check_cache = _load_check_cache()
 
@@ -837,19 +840,37 @@ async def discover_new_ats_companies() -> dict:
                     unique.append(e)
             unique.sort(key=lambda x: (x.get("ats", ""), x.get("name", "")))
 
-            if save_companies(unique):
-                stats["verified_new"] = len(verified_new)
-                stats["added"] = [
-                    {"name": v["name"], "slug": v.get("slug"), "ats": v["ats"]}
-                    for v in verified_new
-                ]
-                logger.info(
-                    f"[Discovery] +{len(verified_new)} new ATS companies: "
-                    + ", ".join(f"{v['ats']}:{v['name']}" for v in verified_new[:10])
-                    + (" ..." if len(verified_new) > 10 else "")
-                )
-            else:
-                stats["errors"].append("save_companies returned False")
+            # Persist to the DB first — that lives on the Railway volume and
+            # survives redeploys. The JSON file is inside the app directory and
+            # is wiped on every deploy, so it can only ever be a local cache.
+            saved = 0
+            try:
+                from database import add_discovered_company
+                for v in verified_new:
+                    try:
+                        await add_discovered_company(v)
+                        saved += 1
+                    except Exception as e:
+                        stats["errors"].append(f"db persist {v.get('slug')}: {e}")
+            except Exception as e:
+                stats["errors"].append(f"db persist unavailable: {e}")
+
+            # Best-effort local cache refresh; never fatal.
+            try:
+                save_companies(unique)
+            except Exception as e:
+                stats["errors"].append(f"file cache: {e}")
+
+            stats["verified_new"] = saved
+            stats["added"] = [
+                {"name": v["name"], "slug": v.get("slug"), "ats": v["ats"]}
+                for v in verified_new
+            ]
+            logger.info(
+                f"[Discovery] +{saved} new ATS companies persisted: "
+                + ", ".join(f"{v['ats']}:{v['name']}" for v in verified_new[:10])
+                + (" ..." if len(verified_new) > 10 else "")
+            )
         else:
             logger.info(f"[Discovery] 0 verified out of {len(candidates)} candidates")
 
