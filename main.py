@@ -12,7 +12,7 @@ FastAPI app with background scheduler.
 # ai_engine.score_relevance_fuzzy.
 _FAMILY_FENCE_CAP = 22
 
-BUILD_VERSION = "2.17.0"
+BUILD_VERSION = "2.18.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -488,6 +488,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Integrity] is_remote realign failed: {e}")
 
+    # Three free, working sources were sitting disabled and had produced zero
+    # jobs ever: himalayas, jobicy_rss, himalayas_rss. Run directly they return
+    # 11, 31 and 8 jobs. Named explicitly rather than "enable everything
+    # keyless" so the aggregators deliberately kept dark (Adzuna, Jooble,
+    # CareerJet) are never silently switched back on.
+    try:
+        from database import get_db as _gdb3
+        _db3 = await _gdb3()
+        try:
+            _cur3 = await _db3.execute(
+                "UPDATE source_settings SET enabled = 1 "
+                "WHERE source_key IN ('himalayas','jobicy_rss','himalayas_rss') "
+                "AND enabled = 0")
+            if _cur3.rowcount:
+                await _db3.commit()
+                logger.warning(f"[Sources] re-enabled {_cur3.rowcount} dormant free sources")
+        finally:
+            await _db3.close()
+    except Exception as e:
+        logger.error(f"[Sources] re-enable failed: {e}")
+
     # Run cleanup on startup to archive stale jobs immediately
     try:
         result = await cleanup_old_jobs()
@@ -726,7 +747,11 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("ATS-recruitee", 600, _make_ats_body("recruitee")))
     asyncio.create_task(_worker("ATS-breezy", 600, _make_ats_body("breezy")))
     # Non-ATS source groups + scoring + discovery:
-    asyncio.create_task(_worker("Light", 120, _light_body))   # fast API sources (Remotive, RemoteOK, keyed…)
+    # 300s, was 120s. Every remote board in this group reports "inserted 0 new"
+    # cycle after cycle (Remotive 19 found -> 0 new, TheMuse 100 -> 0) because
+    # cross-source dedup already has those jobs. Polling them 3x/hour instead of
+    # 30x frees request budget for the ATS sweep that is actually producing.
+    asyncio.create_task(_worker("Light", 300, _light_body))
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
     asyncio.create_task(_worker("LinkedIn-Guest", 900, _linkedin_body))  # cheap public feed, USA only
     asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow

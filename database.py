@@ -316,6 +316,14 @@ _DB_NON_US_CITIES = [
     "wellington", "karachi", "lahore", "dhaka", "colombo", "gdansk", "krakow",
 ]
 
+_DB_NON_US_TOKEN_RE = re.compile(
+    r"(?<![a-z])(" + "|".join(
+        re.escape(t.strip()) for t in
+        sorted(_NON_US_TOKENS, key=len, reverse=True) if t.strip())
+    + r")(?![a-z])",
+    re.IGNORECASE,
+)
+
 _DB_NON_US_CITY_RE = re.compile(
     r"(?<![a-z])(" + "|".join(re.escape(c) for c in
                               sorted(_DB_NON_US_CITIES, key=len, reverse=True))
@@ -324,7 +332,7 @@ _DB_NON_US_CITY_RE = re.compile(
 )
 
 
-def is_us_location(location: str) -> bool:
+def is_us_location(location: str, strict: bool = False) -> bool:
     """US-eligibility check, biased to KEEP (drop only clearly-foreign roles).
 
     - Empty / unknown location → keep (can't determine; don't over-drop).
@@ -335,7 +343,14 @@ def is_us_location(location: str) -> bool:
     """
     if not location:
         return True
-    loc = f" {location.strip().lower()} "
+    stripped = location.strip().lower()
+    # 0. Bare "Remote" with no country qualifier — treat as US-eligible even in
+    #    strict mode. ATS boards routinely list a US remote role as just
+    #    "Remote", and dropping those would discard real jobs.
+    if stripped in ("remote", "remote - us", "remote - usa", "remote, usa",
+                    "remote, us", "remote (us)", "anywhere", "us", "usa"):
+        return True
+    loc = f" {stripped} "
     # 1. Strong US signals win outright (covers "North America (US, Canada)").
     if any(tok in loc for tok in _US_TOKENS):
         return True
@@ -344,7 +359,9 @@ def is_us_location(location: str) -> bool:
     # 2. Clearly foreign → drop. MUST run before the loose state-abbreviation
     #    check below, which otherwise false-matches ' ca' in 'canada', ' in' in
     #    'india', ' co' in 'colombia', etc.
-    if any(tok in loc for tok in _NON_US_TOKENS):
+    # Word-boundary anchored: a bare substring test matched "india" inside
+    # "Indianapolis" and "mexico" inside "New Mexico".
+    if _DB_NON_US_TOKEN_RE.search(loc):
         return False
     # 3. A known non-US city vetoes, and must be checked BEFORE state
     #    abbreviations: "Jakarta, ID" and "Berlin, DE" would otherwise match
@@ -356,8 +373,14 @@ def is_us_location(location: str) -> bool:
     #    matched " la" inside "Lagos, NG".
     if _DB_US_ABBR_RE.search(loc):
         return True
-    # 5. No signal either way → keep (bare "Remote", lone US city, unknown).
-    return True
+    # 5. No signal either way. Two callers want opposite defaults:
+    #    insert_job's us_only gate is lenient (keep bare "Remote" and lone US
+    #    city names), while the ATS fetchers are strict — a company board can
+    #    list any country, so an unrecognisable location is not assumed US.
+    #    This is the SINGLE implementation; ats_scraper wraps it with
+    #    strict=True. Two divergent copies previously meant fixing one left the
+    #    other shipping non-US jobs.
+    return not strict
 
 
 # SQLite in WAL mode allows many readers but only ONE writer. This app runs

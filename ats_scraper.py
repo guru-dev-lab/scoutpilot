@@ -123,94 +123,16 @@ _NON_US_TOKENS = [
 ]
 
 
-# State abbreviation as a standalone token, in the position a US state is
-# actually written: "Austin, TX", "Remote - CA", "Boise ID". A two-letter
-# country code that collides with a state (ID/IN/DE/MD/LA/OR/OK/PA/MS/AL) is
-# still ambiguous from the string alone, which is why every fetcher that has a
-# structured country field must trust that field instead of calling this.
-_US_ABBR_RE = re.compile(
-    r"(?:^|[,\-/(]|\s)\s*(" + "|".join(
-        a.strip() for a in sorted(_US_STATE_ABBR)) + r")(?=$|[\s,.)/;])",
-    re.IGNORECASE,
-)
-
-
-# Major non-US cities. Needed because a "City, XX" string is ambiguous whenever
-# the country code collides with a state abbreviation — Jakarta/ID reads as
-# Idaho, Bangalore/IN as Indiana, Berlin/DE as Delaware. Fetchers with a real
-# country field must trust that field; this only backstops the plain-string path.
-_NON_US_CITIES = [
-    "jakarta", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
-    "chennai", "pune", "berlin", "munich", "hamburg", "frankfurt", "chisinau",
-    "toronto", "vancouver", "montreal", "london", "manchester", "dublin",
-    "paris", "madrid", "barcelona", "lisbon", "amsterdam", "brussels",
-    "zurich", "vienna", "warsaw", "prague", "stockholm", "oslo", "helsinki",
-    "copenhagen", "athens", "istanbul", "dubai", "tel aviv", "cairo", "lagos",
-    "nairobi", "johannesburg", "cape town", "sao paulo", "buenos aires",
-    "santiago", "bogota", "lima", "mexico city", "guadalajara", "manila",
-    "bangkok", "hanoi", "kuala lumpur", "jakarta", "seoul", "tokyo", "osaka",
-    "beijing", "shanghai", "shenzhen", "taipei", "sydney", "melbourne",
-    "auckland", "wellington", "karachi", "lahore", "dhaka", "colombo",
-]
-
-_NON_US_RE = re.compile(
-    r"(?<![a-z])(" + "|".join(
-        re.escape(t.strip()) for t in
-        sorted(set(x.strip() for x in _NON_US_TOKENS) | set(_NON_US_CITIES),
-               key=len, reverse=True) if t.strip()
-    ) + r")(?![a-z])",
-    re.IGNORECASE,
-)
+# US location detection lives in database.py — ONE implementation. Two copies
+# previously drifted: the ats_scraper one was corrected while database.py's
+# still let "London" through insert_job's us_only gate. ATS boards can list any
+# country, so an unrecognisable location must NOT be assumed US here.
+from database import is_us_location as _db_is_us_location
 
 
 def is_us_location(location: str) -> bool:
-    """Heuristic: does this location string indicate a US-eligible role?
-
-    Returns True for explicit US mentions, US states, Worldwide/Anywhere.
-    Returns True for bare "Remote" (no country qualifier) — assume US-eligible.
-    Returns False if a non-US country/region is clearly named without US.
-    """
-    if not location:
-        return False
-
-    # Bare "Remote" without any country qualifier — accept as US-eligible
-    stripped = location.strip().lower()
-    if stripped in ("remote", "remote - us", "remote - usa", "remote, usa",
-                    "remote, us", "anywhere"):
-        return True
-
-    loc = f" {stripped} "
-
-    # Fast allow: worldwide/anywhere/global = US-eligible
-    for tok in ("worldwide", "anywhere", "global"):
-        if tok in loc:
-            return True
-
-    # Fast reject: clearly non-US with no US mention.
-    # Word-boundary matched — a bare substring test made "india" fire inside
-    # "Indianapolis, IN" and threw away a real US city.
-    non_us_hit = bool(_NON_US_RE.search(loc))
-    us_hit = any(tok in loc for tok in _US_TOKENS)
-    if non_us_hit and not us_hit:
-        return False
-
-    if us_hit:
-        return True
-
-    # Check US state names
-    if any(state in loc for state in _US_STATES):
-        return True
-
-    # Check US state abbreviations. This used to be a bare substring test, which
-    # matched " la" inside "Lagos, NG" and " id" inside "Jakarta, ID" — letting
-    # Nigeria and Indonesia through as Louisiana and Idaho — while a genuine
-    # "Indianapolis, IN" was rejected. Require a real word boundary, and only
-    # accept the abbreviation where a state actually appears: after a comma or
-    # at the end of the string.
-    if _US_ABBR_RE.search(loc):
-        return True
-
-    return False
+    """Strict US check for ATS company boards."""
+    return _db_is_us_location(location, strict=True)
 
 
 def is_remote_string(s: str) -> bool:
@@ -1235,6 +1157,15 @@ async def _fetch_platform(
                     return []
 
         results = await asyncio.gather(*[_one(c) for c in companies], return_exceptions=True)
+        # A platform that sweeps hundreds of boards and inserts nothing is the
+        # signature of a silent failure, not a quiet day — fetch_greenhouse once
+        # raised NameError on every single item into a per-item debug handler
+        # and returned 0 for every board without a word in the logs.
+        _ok = sum(1 for r in results if isinstance(r, list))
+        _crashed = sum(1 for r in results if isinstance(r, Exception))
+        if _crashed:
+            logger.warning(
+                f"[{platform}] {_crashed}/{len(companies)} companies raised")
         for r in results:
             if isinstance(r, list):
                 total_inserted += len(r)
@@ -1245,6 +1176,11 @@ async def _fetch_platform(
                     )
                     break
 
+    if companies and total_inserted == 0:
+        logger.warning(
+            f"[{platform}] swept {len(companies)} companies and inserted 0 — "
+            f"expected for a quiet cycle, but check for a silent fetcher error "
+            f"if it persists")
     return total_inserted
 
 
