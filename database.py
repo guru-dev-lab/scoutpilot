@@ -1,4 +1,5 @@
 import aiosqlite
+import asyncio
 import hashlib
 import json
 import os
@@ -322,7 +323,30 @@ def is_us_location(location: str) -> bool:
     return True
 
 
+# SQLite in WAL mode allows many readers but only ONE writer. This app runs
+# ~13 concurrent workers (5+3 ATS platforms, Light, JobSpy, LinkedIn, Scoring,
+# two discovery bots), and every one of them opens its own connection. When
+# several tried to write at once they queued on busy_timeout and eventually
+# raised "database is locked", which crashed whole worker passes — the
+# Discovery worker died that way in production. Serialising writes in-process
+# removes the contention entirely: nothing waits on the OS lock any more.
+_WRITE_LOCK: Optional[asyncio.Lock] = None
+
+
+def _write_lock() -> asyncio.Lock:
+    global _WRITE_LOCK
+    if _WRITE_LOCK is None:
+        _WRITE_LOCK = asyncio.Lock()
+    return _WRITE_LOCK
+
+
 async def insert_job(job_data: dict) -> bool:
+    """Insert a job if it doesn't already exist. Serialised against other writers."""
+    async with _write_lock():
+        return await _insert_job_unlocked(job_data)
+
+
+async def _insert_job_unlocked(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist (exact hash + fuzzy title + URL check). Returns True if inserted."""
     # US-only gate — applies to EVERY source. Skip clearly non-US locations;
     # keep empty/unknown location (can't determine origin).
