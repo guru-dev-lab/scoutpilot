@@ -394,6 +394,11 @@ _ANALYST_DOMAIN_QUALIFIERS: dict[str, str] = {
     "qc": "qa", "test": "qa", "validation": "qa",
     # clinical / lab / scientific
     "clinical": "ops_pm", "laboratory": "ops_pm", "lab": "ops_pm",
+    "behavior": "ops_pm", "behavioral": "ops_pm", "bcba": "ops_pm",
+    # hospitality / retail / field operations
+    "resort": "ops_pm", "hotel": "ops_pm", "hospitality": "ops_pm",
+    "restaurant": "ops_pm", "casino": "ops_pm", "retail": "ops_pm",
+    "store": "ops_pm", "field": "ops_pm", "facilities": "ops_pm",
     "chemical": "ops_pm", "environmental": "ops_pm", "safety": "ops_pm",
     "pharmacovigilance": "ops_pm",
 }
@@ -456,6 +461,49 @@ def _detect_family(text: str) -> Optional[str]:
 # reachable with both a foundation hit (e.g. SQL) and a toolkit hit (e.g.
 # Tableau) — one foundation hit alone tops out at 40 even with every bonus.
 _SIGNATURE_RESCUE_MIN = 60
+
+
+# Words that carry no role information — seniority, level markers, filler.
+_NOISE_TOKENS = {
+    "sr", "snr", "senior", "jr", "junior", "lead", "principal", "staff",
+    "chief", "head", "associate", "assistant", "entry", "level", "experienced",
+    "i", "ii", "iii", "iv", "v", "vi", "1", "2", "3", "4", "5",
+    "the", "of", "and", "or", "for", "to", "in", "at", "with", "a", "an",
+    "full", "part", "time", "days", "nights", "shift", "contract", "temp",
+    "remote", "hybrid", "onsite", "on", "site", "us", "usa", "national",
+    "new", "grad", "program", "team", "group", "global", "regional",
+}
+
+# Generic head nouns. On their own these match almost any posting, which is why
+# "Board Certified Behavior Analyst" scored 82 against a BI profile: the word
+# "Analyst" alone carried the match while "Behavior" was ignored.
+_HEAD_NOUNS = {
+    "analyst", "analytics", "analysis", "engineer", "developer", "development",
+    "manager", "specialist", "consultant", "coordinator", "director",
+    "scientist", "architect", "administrator", "technician", "officer",
+    "representative", "executive", "advisor", "generalist", "intern",
+    "professional", "expert", "operator", "agent", "strategist", "planner",
+}
+
+
+def _distinctive_tokens(text: str) -> set:
+    """Words in a title that actually identify the role, i.e. everything left
+    once seniority, filler and generic head nouns are removed."""
+    words = re.findall(r"[a-z0-9\+#\.]+", (text or "").lower())
+    return {w for w in words
+            if w not in _NOISE_TOKENS and w not in _HEAD_NOUNS and len(w) > 1}
+
+
+def _profile_vocabulary(target_title: str, expanded: list, keywords: list) -> set:
+    """Every distinctive word the profile recognises, from its own title, its
+    expanded variants and its keyword list."""
+    vocab: set = set()
+    vocab |= _distinctive_tokens(target_title)
+    for t in (expanded or []):
+        vocab |= _distinctive_tokens(str(t))
+    for k in (keywords or []):
+        vocab |= _distinctive_tokens(str(k))
+    return vocab
 
 
 def score_relevance_fuzzy(
@@ -551,6 +599,46 @@ def score_relevance_fuzzy(
             # keyword overlap should rescue this job.
             base_title_score = min(base_title_score, 22)
             best_score = base_title_score
+            fence_capped = True
+
+    # ── Modifier-recognition gate ────────────────────────────────────────
+    # A title has to be recognisable by its MODIFIER, not just its head noun.
+    # "Analyst" alone matched every expansion containing the word, so
+    # "Board Certified Behavior Analyst", "CSOC CIR Tier II Analyst",
+    # "Research Analyst" and even "ANALYST II" all scored 82-90 against a BI
+    # profile. Likewise "Front End Developer" scored 85 purely on "Developer".
+    # If none of the job's identifying words appear anywhere in the profile's
+    # vocabulary (its title, expansions and keywords), the match is carried
+    # entirely by a generic noun and is not this role.
+    job_tokens = _distinctive_tokens(job_title)
+    vocab = _profile_vocabulary(target_title, expanded_titles, keywords)
+
+    # A title that IS one of the profile's own variants must never be gated.
+    # "Analytics Analyst" is a listed expansion, but both of its words are
+    # generic head nouns, so it had no distinctive tokens and was being capped
+    # by the very gate meant to protect it.
+    _jt = re.sub(r"[^a-z0-9 ]", " ", (job_title or "").lower())
+    _jt = " ".join(w for w in _jt.split() if w not in _NOISE_TOKENS)
+    _is_own_variant = False
+    for _cand in [target_title] + list(expanded_titles or []):
+        _ct2 = re.sub(r"[^a-z0-9 ]", " ", str(_cand).lower())
+        _ct2 = " ".join(w for w in _ct2.split() if w not in _NOISE_TOKENS)
+        # Exact match only. token_set_ratio scored "analyst" against
+        # "reporting analyst" at 100 because a subset counts as a full match,
+        # which let the contentless title "ANALYST II" bypass the gate at 90.
+        if _ct2 and _ct2 == _jt:
+            _is_own_variant = True
+            break
+
+    if vocab and not _is_own_variant:
+        if not job_tokens:
+            # Nothing but a head noun and filler, e.g. "ANALYST II".
+            base_title_score = min(base_title_score, 22)
+            best_score = min(best_score, 22)
+            fence_capped = True
+        elif not (job_tokens & vocab):
+            base_title_score = min(base_title_score, 22)
+            best_score = min(best_score, 22)
             fence_capped = True
 
     # ── v1.9.6: Skill-signature description rescue ───────────────────────
