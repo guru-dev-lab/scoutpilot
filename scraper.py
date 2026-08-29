@@ -310,20 +310,45 @@ def _detect_work_type(row: dict) -> str:
     # ── REMOTE: description only → require STRONG signals ──
     # A single "\bremote\b" in a long description is often noise
     # ("remote support", "remote teams", onsite job that "offers no remote")
+    # Definitive: the description states THIS ROLE is remote.
     strong_desc_remote = [
         r'\bfully[\s\-]?remote\b', r'\b100%\s*remote\b',
         r'\bwork\s*from\s*home\b', r'\bwfh\b',
-        r'\btelecommute\b', r'\btelework\b',
-        r'\bremote[\s\-]?first\b', r'\bremote[\s\-]?friendly\b',
         r'\bremote\s+position\b', r'\bremote\s+role\b',
         r'\bremote\s+job\b', r'\bremote\s+opportunity\b',
         r'\bthis\s+(is\s+a\s+)?remote\b',
         r'\bopen\s+to\s+remote\b', r'\bremote\s+eligible\b',
         r'\bdesignated\s+as\s+.{0,20}remote\b',
     ]
-    for pat in strong_desc_remote:
-        if re.search(pat, description):
-            return "remote"
+    # Weak: describes the COMPANY or a possibility, not this posting.
+    # "We have a remote-friendly culture" and "Telework may be available" were
+    # both being treated as proof, which is how "Senior Analytics Engineer,
+    # Boston, MA" and "Program Analyst, Washington DC" came out Remote.
+    weak_desc_remote = [
+        r'\bremote[\s\-]?first\b', r'\bremote[\s\-]?friendly\b',
+        r'\btelecommute\b', r'\btelework\b',
+    ]
+    # A conditional kills even a definitive phrase: "remote may be available".
+    _conditional = re.compile(
+        r'\b(may|might|could|can|possible|potential|option(al)?|considered|'
+        r'depending|negotiab)\w*\b[\w\s,]{0,30}\b(remote|telework|telecommute)\b'
+        r'|\b(remote|telework|telecommute)\b[\w\s,]{0,30}\b(may|might|could|'
+        r'possible|potential|option(al)?|considered|negotiab)\w*\b')
+
+    # A concrete "City, ST" location is STRUCTURED data; a description is prose.
+    # When the location names a real place and neither the title nor the
+    # location says remote, prose alone must not flip the label.
+    _concrete_location = bool(
+        re.search(r'\b[a-z][a-z\s\.\-]{2,},\s*([a-z]{2}\b|[a-z]{4,})', location))
+
+    if not _conditional.search(description):
+        for pat in strong_desc_remote:
+            if re.search(pat, description):
+                return "remote"
+        if not _concrete_location:
+            for pat in weak_desc_remote:
+                if re.search(pat, description):
+                    return "remote"
 
     # "work remotely" / "working remotely" — only if it's a positive statement
     # Skip if negated: "no option to work remotely", "not able to work remotely"

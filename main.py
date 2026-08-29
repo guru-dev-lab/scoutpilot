@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.21.5"
+BUILD_VERSION = "2.22.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -575,6 +575,56 @@ async def lifespan(app: FastAPI):
                 await _db4.close()
     except Exception as e:
         logger.error(f"[Rescore] fence backfill failed: {e}")
+
+    # Repair rows written before the entity decoding and the tightened remote
+    # detection. Both are display-facing: a title reading "R&amp;D Finance" and
+    # a Boston job badged Remote are visible defects, and existing rows are
+    # never rewritten by re-scraping because dedup rejects them.
+    try:
+        from database import get_db as _gdb5, _clean_text as _ct
+        from scraper import _detect_work_type as _dwt
+        _db5 = await _gdb5()
+        try:
+            _cur = await _db5.execute(
+                "SELECT id, title, company_name, location FROM jobs "
+                "WHERE title LIKE '%&%;%' OR company_name LIKE '%&%;%' "
+                "   OR location LIKE '%&%;%'")
+            _ents = [dict(r) for r in await _cur.fetchall()]
+            for _r in _ents:
+                await _db5.execute(
+                    "UPDATE jobs SET title=?, company_name=?, location=? WHERE id=?",
+                    (_ct(_r["title"]), _ct(_r["company_name"]),
+                     _ct(_r["location"]), _r["id"]))
+            if _ents:
+                await _db5.commit()
+                logger.warning(f"[Repair] decoded HTML entities in {len(_ents)} rows")
+
+            # Re-derive work_type where the label contradicts a concrete
+            # location. Only ever demotes remote -> hybrid/onsite here.
+            _cur = await _db5.execute(
+                "SELECT id, title, location, description FROM jobs "
+                "WHERE work_type='remote' AND location != '' "
+                "  AND location NOT LIKE '%remote%' AND location NOT LIKE '%anywhere%' "
+                "  AND location LIKE '%,%'")
+            _susp = [dict(r) for r in await _cur.fetchall()]
+            _demoted = 0
+            for _r in _susp:
+                _wt = _dwt({"title": _r["title"], "location": _r["location"],
+                            "description": _r["description"] or ""})
+                if _wt != "remote":
+                    await _db5.execute(
+                        "UPDATE jobs SET work_type=?, is_remote=0 WHERE id=?",
+                        (_wt, _r["id"]))
+                    _demoted += 1
+            if _demoted:
+                await _db5.commit()
+                logger.warning(
+                    f"[Repair] re-labelled {_demoted}/{len(_susp)} rows that claimed "
+                    f"remote with a concrete location")
+        finally:
+            await _db5.close()
+    except Exception as e:
+        logger.error(f"[Repair] backfill failed: {e}")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:

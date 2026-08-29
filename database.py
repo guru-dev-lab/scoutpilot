@@ -1,6 +1,7 @@
 import aiosqlite
 import asyncio
 import hashlib
+import html
 import json
 import os
 import re
@@ -406,6 +407,20 @@ async def insert_job(job_data: dict) -> bool:
         return await _insert_job_unlocked(job_data)
 
 
+def _clean_text(v) -> str:
+    """Decode HTML entities and collapse whitespace.
+
+    Several sources hand back HTML-escaped text — FindWork accounted for 79
+    titles reading "R&amp;D Finance" and "Security Compliance &amp; Regulatory
+    Affairs Analyst". Unescaping twice is deliberate: some feeds double-encode
+    (&amp;amp;), and a second pass is harmless on already-clean text.
+    """
+    if not v:
+        return ""
+    out = html.unescape(html.unescape(str(v)))
+    return re.sub(r"\s+", " ", out).strip()
+
+
 async def _insert_job_unlocked(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist (exact hash + fuzzy title + URL check). Returns True if inserted."""
     # US-only gate — applies to EVERY source. Skip clearly non-US locations;
@@ -414,6 +429,13 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
         _loc = (job_data.get("location") or "").strip()
         if _loc and not is_us_location(_loc):
             return False
+    # Normalise the display fields BEFORE hashing, so the dedup hash is computed
+    # on clean text and an escaped/unescaped pair cannot slip through as two
+    # different jobs.
+    for _f in ("title", "company_name", "location"):
+        if job_data.get(_f):
+            job_data[_f] = _clean_text(job_data[_f])
+
     h = make_job_hash(
         job_data.get("company_name", ""),
         job_data.get("title", ""),
