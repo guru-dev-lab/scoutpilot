@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.21.4"
+BUILD_VERSION = "2.21.5"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1863,6 +1863,35 @@ async def api_debug_pipeline():
                 "  COUNT(*) AS no_desc_visible "
                 "FROM jobs WHERE (description IS NULL OR description='') "
                 "  AND status NOT IN ('hidden') GROUP BY source ORDER BY no_desc_visible DESC")
+            # Look at the ACTUAL rows the user sees, ordered exactly as the feed
+            # orders them. Aggregates cannot show a mangled title or a remote
+            # label that contradicts its own location.
+            out["sample_feed"] = await rows(
+                "SELECT j.title, j.company_name, j.location, j.work_type, "
+                "       j.is_remote, j.relevance_score, j.source, "
+                "       COALESCE(p.title,'(none)') AS profile "
+                "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
+                "WHERE j.status != 'hidden' "
+                "ORDER BY datetime(j.first_seen_at) DESC LIMIT 40")
+            # Titles still carrying raw HTML entities (&amp; &#39; &quot; ...).
+            out["entity_titles"] = await rows(
+                "SELECT COUNT(*) AS n FROM jobs "
+                "WHERE title LIKE '%&amp;%' OR title LIKE '%&#%' OR title LIKE '%&quot;%' "
+                "   OR title LIKE '%&lt;%' OR title LIKE '%&gt;%' OR title LIKE '%&nbsp;%'")
+            out["entity_examples"] = await rows(
+                "SELECT title, source FROM jobs "
+                "WHERE title LIKE '%&amp;%' OR title LIKE '%&#%' LIMIT 8")
+            # work_type=remote on a row whose location names a concrete city.
+            out["suspect_remote"] = await rows(
+                "SELECT COUNT(*) AS n FROM jobs "
+                "WHERE status != 'hidden' AND work_type='remote' "
+                "  AND location NOT LIKE '%remote%' AND location NOT LIKE '%anywhere%' "
+                "  AND location != '' AND location LIKE '%,%'")
+            out["suspect_remote_examples"] = await rows(
+                "SELECT title, location, source FROM jobs "
+                "WHERE status != 'hidden' AND work_type='remote' "
+                "  AND location NOT LIKE '%remote%' AND location NOT LIKE '%anywhere%' "
+                "  AND location != '' AND location LIKE '%,%' LIMIT 10")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
