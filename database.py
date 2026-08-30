@@ -1092,6 +1092,12 @@ async def init_archive_table():
 
 
 async def cleanup_old_jobs() -> dict:
+    """Serialised against the other writers — see _write_lock()."""
+    async with _write_lock():
+        return await _cleanup_old_jobs_unlocked()
+
+
+async def _cleanup_old_jobs_unlocked() -> dict:
     """Delete jobs older than RETENTION_DAYS. No archive step.
 
     Jobs the user has SAVED or APPLIED to are never deleted — losing an
@@ -1431,6 +1437,13 @@ async def storage_stats() -> dict:
 
 
 async def reclaim_space(force_vacuum: bool = False) -> dict:
+    """Serialised against the other writers — a VACUUM takes an exclusive lock
+    on the entire database, so any concurrent write fails outright."""
+    async with _write_lock():
+        return await _reclaim_space_unlocked(force_vacuum)
+
+
+async def _reclaim_space_unlocked(force_vacuum: bool = False) -> dict:
     """Return dead space to the filesystem, cheapest step first.
 
     A full VACUUM rebuilds the database and needs free disk roughly equal to
