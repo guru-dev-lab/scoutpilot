@@ -98,6 +98,12 @@ AGGREGATOR_DOMAINS = {
     "smartrecruiters.com", "icims.com", "myworkdayjobs.com",
     "jobs.lever.co", "boards.greenhouse.io",
     # AI job sites / aggregator clones — same as us, not real employers
+    # Sites that put the JOB ITSELF behind account creation — clicking Apply
+    # lands on their signup page, e.g.
+    # himalayas.app/signup/talent?redirect=%2Fcompanies%2F...%2Fjobs%2F...
+    # These are the boards to avoid entirely: LinkedIn/Indeed/Glassdoor at
+    # least let you read the posting first.
+    "jobicy.com", "jobspresso.co", "remoteleaf.com", "dailyremote.com",
     "otta.com", "builtin.com", "cord.co", "hired.com", "triplebyte.com",
     "angel.co", "remotive.com", "weworkremotely.com", "flexjobs.com",
     "remote.co", "himalayas.app", "jobgether.com", "4dayweek.io",
