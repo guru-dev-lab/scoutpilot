@@ -994,7 +994,7 @@ async def scrape_linkedin_guest(
     search_term: str,
     location: str = "United States",
     profile_id: Optional[int] = None,
-    pages: int = 3,
+    pages: int = 12,
     days: int = 7,
     work_type: Optional[str] = None,
 ) -> list[dict]:
@@ -1035,6 +1035,8 @@ async def scrape_linkedin_guest(
 
     jobs: list[dict] = []
     seen_urls: set[str] = set()
+    inserted: list[dict] = []
+    empty_streak = 0
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
             for page in range(pages):
@@ -1045,8 +1047,16 @@ async def scrape_linkedin_guest(
                     logger.warning(f"[LinkedInGuest] page {page} error: {e}")
                     break
                 if resp.status_code == 429:
-                    logger.warning("[LinkedInGuest] 429 — backing off")
-                    break
+                    # Deep pagination makes 429s likely. Pause once and retry
+                    # this page rather than abandoning the whole term.
+                    logger.warning(f"[LinkedInGuest] 429 at page {page} — pausing")
+                    await asyncio.sleep(20)
+                    try:
+                        resp = await client.get(_LI_GUEST, params=params)
+                    except Exception:
+                        break
+                    if resp.status_code != 200:
+                        break
                 if resp.status_code != 200:
                     logger.warning(f"[LinkedInGuest] HTTP {resp.status_code}")
                     break
@@ -1054,6 +1064,7 @@ async def scrape_linkedin_guest(
                 cards = _LI_CARD_RE.findall(resp.text)
                 if not cards:
                     break
+                page_start_idx = len(jobs)
 
                 for card in cards:
                     try:
@@ -1108,18 +1119,28 @@ async def scrape_linkedin_guest(
                         logger.debug(f"[LinkedInGuest] card skip: {e}")
                         continue
 
+                # Insert this page NOW so pagination depth can adapt to what is
+                # actually new. LinkedIn holds 150+ remote "data analyst" jobs
+                # posted in the last 24h; a fixed 2 pages captured ~20 of them.
+                # Going deep unconditionally would burn proxy bandwidth
+                # re-fetching known jobs, so keep going while pages produce new
+                # rows and stop when two in a row do not — deep on a Monday
+                # morning, nearly free on a quiet afternoon.
+                page_new = 0
+                for job in jobs[page_start_idx:]:
+                    try:
+                        if await insert_job(job):
+                            inserted.append(job)
+                            page_new += 1
+                    except Exception as e:
+                        logger.debug(f"[LinkedInGuest] insert skip: {e}")
+                empty_streak = empty_streak + 1 if page_new == 0 else 0
+                if empty_streak >= 2:
+                    break
+
                 await asyncio.sleep(1.0)  # be polite between pages
     except Exception as e:
         logger.error(f"[LinkedInGuest] '{search_term}': {e}")
-        return []
-
-    inserted = []
-    for job in jobs:
-        try:
-            if await insert_job(job):
-                inserted.append(job)
-        except Exception as e:
-            logger.debug(f"[LinkedInGuest] insert skip: {e}")
 
     logger.info(
         f"[LinkedInGuest] '{search_term}'"

@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.25.0"
+BUILD_VERSION = "2.26.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -787,7 +787,7 @@ async def lifespan(app: FastAPI):
         total = 0
         for profile in profiles:
             terms = _build_profile_terms(profile) or [profile["title"]]
-            window = 4
+            window = 6
             start = (cycle * window) % max(len(terms), 1)
             picked = [terms[(start + i) % len(terms)] for i in range(min(window, len(terms)))]
             for term in picked:
@@ -797,9 +797,15 @@ async def lifespan(app: FastAPI):
                 # to label remote/hybrid correctly.
                 for wt in ("remote", "hybrid", "onsite"):
                     try:
+                        # days=1: only postings from the last 24h, so deep
+                        # pagination spends its pages on genuinely new jobs
+                        # instead of re-walking the same week.
+                        # pages=12 is a CEILING, not a cost — the scraper stops
+                        # after two pages that add nothing new, so a quiet cycle
+                        # still costs two pages.
                         r = await scrape_linkedin_guest(
                             term, "United States", profile["id"],
-                            pages=2, days=7, work_type=wt)
+                            pages=12, days=1, work_type=wt)
                         total += len(r)
                     except Exception as e:
                         logger.error(f"[LinkedInGuest] '{term}'/{wt}: {e}")
