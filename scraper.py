@@ -1091,8 +1091,38 @@ async def scrape_linkedin_guest(
                         # believe it — that is authoritative and the card text is
                         # not. Only fall back to guessing on an untyped query.
                         if work_type:
-                            wt = work_type
-                            is_remote = work_type == "remote"
+                            # LinkedIn's f_WT filter is a HINT, not a fact. A
+                            # live f_WT=2 (remote) query returned Lockheed
+                            # Martin in Lexington KY, CACI in Washington DC,
+                            # Aritzia in Seattle WA and Public Storage in
+                            # Burbank CA — all concrete cities. Trusting the
+                            # filter put those on the board as Remote.
+                            # Same rule as everywhere else: a structured
+                            # location outranks a claimed label.
+                            _ll = loc.lower().strip()
+                            _loc_says_remote = (
+                                "remote" in _ll or "anywhere" in _ll
+                                or _ll in ("united states", "usa", "us", "")
+                            )
+                            _city_anchored = bool(
+                                re.search(r"[a-z]{3,},\s*[a-z]{2}\b", _ll)
+                                or re.search(r"[a-z]{3,},\s*[a-z]{4,}", _ll)
+                                # LinkedIn also writes metros without a comma:
+                                # "Salt Lake City Metropolitan Area",
+                                # "Greater Boston Area", "New York City Area".
+                                or re.search(r"\b(metropolitan|metro|greater)\b", _ll)
+                                or re.search(r"\barea\b", _ll))
+                            if (work_type == "remote" and _city_anchored
+                                    and not _loc_says_remote):
+                                # Could be genuinely remote with an HQ address,
+                                # or not remote at all. Hybrid is the honest
+                                # middle and keeps it out of the Remote filter;
+                                # if the description proves otherwise, the
+                                # enrich + rescore pass can still lift it.
+                                wt, is_remote = "hybrid", False
+                            else:
+                                wt = work_type
+                                is_remote = work_type == "remote"
                         else:
                             is_remote = "remote" in loc.lower()
                             wt = "remote" if is_remote else _detect_work_type(

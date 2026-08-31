@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.29.1"
+BUILD_VERSION = "2.30.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -664,6 +664,34 @@ async def lifespan(app: FastAPI):
             await _db6.close()
     except Exception as e:
         logger.error(f"[Repair] non-US purge failed: {e}")
+
+    # LinkedIn rows already stored as remote on the strength of its f_WT
+    # filter alone. A live f_WT=2 query returned Lockheed Martin in Lexington
+    # KY and CACI in Washington DC, so any city-anchored LinkedIn "remote" row
+    # is downgraded to hybrid — honest, and it keeps them out of the Remote
+    # filter until a description proves otherwise.
+    try:
+        from database import get_db as _gdb7
+        _db7 = await _gdb7()
+        try:
+            _cur7 = await _db7.execute(
+                "UPDATE jobs SET work_type='hybrid', is_remote=0 "
+                "WHERE source='linkedin' AND work_type='remote' "
+                "  AND location != '' "
+                "  AND lower(location) NOT LIKE '%remote%' "
+                "  AND lower(location) NOT LIKE '%anywhere%' "
+                "  AND lower(location) NOT IN ('united states','usa','us') "
+                "  AND (location LIKE '%,%' OR lower(location) LIKE '%area%' "
+                "       OR lower(location) LIKE '%metro%' OR lower(location) LIKE '%greater%')")
+            if _cur7.rowcount:
+                await _db7.commit()
+                logger.warning(
+                    f"[Repair] downgraded {_cur7.rowcount} city-anchored LinkedIn "
+                    f"'remote' rows to hybrid")
+        finally:
+            await _db7.close()
+    except Exception as e:
+        logger.error(f"[Repair] linkedin remote downgrade failed: {e}")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:
