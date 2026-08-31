@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.26.0"
+BUILD_VERSION = "2.26.1"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1987,6 +1987,20 @@ async def api_debug_pipeline():
                 "WHERE status != 'hidden' AND work_type='remote' "
                 "  AND location NOT LIKE '%remote%' AND location NOT LIKE '%anywhere%' "
                 "  AND location != '' AND location LIKE '%,%' LIMIT 10")
+            # Real intake rate. "Not enough jobs" is either a low arrival rate
+            # or a filter eating them, and only an hourly breakdown separates
+            # the two.
+            out["intake_per_hour"] = await rows(
+                "SELECT strftime('%Y-%m-%d %H:00', first_seen_at) AS hour, "
+                "       COUNT(*) AS inserted, "
+                "       SUM(CASE WHEN status != 'hidden' THEN 1 ELSE 0 END) AS visible "
+                "FROM jobs WHERE first_seen_at > datetime('now','-8 hours') "
+                "GROUP BY hour ORDER BY hour DESC")
+            out["intake_by_source_1h"] = await rows(
+                "SELECT source, COUNT(*) AS n, "
+                "       SUM(CASE WHEN status != 'hidden' THEN 1 ELSE 0 END) AS visible "
+                "FROM jobs WHERE first_seen_at > datetime('now','-1 hours') "
+                "GROUP BY source ORDER BY n DESC")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
