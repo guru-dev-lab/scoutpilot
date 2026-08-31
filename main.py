@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.24.1"
+BUILD_VERSION = "2.25.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -635,6 +635,35 @@ async def lifespan(app: FastAPI):
             await _db5.close()
     except Exception as e:
         logger.error(f"[Repair] backfill failed: {e}")
+
+    # Purge rows the previous US filter let through: open-ended locations
+    # qualified by a non-US region ("Anywhere In South America"), European
+    # cities that were not in the list (Cologne, Dusseldorf, Nuremberg), and
+    # German-language postings identifiable by their (m/w/d) gender marker.
+    try:
+        from database import get_db as _gdb6, is_us_location as _isus, \
+            looks_non_us_posting as _nonus
+        _db6 = await _gdb6()
+        try:
+            _cur6 = await _db6.execute(
+                "SELECT id, title, location FROM jobs WHERE status != 'hidden'")
+            _rows6 = [dict(r) for r in await _cur6.fetchall()]
+            _kill = [r["id"] for r in _rows6
+                     if ((r["location"] or "").strip()
+                         and not _isus(r["location"]))
+                     or _nonus(r["title"] or "")]
+            for _i in range(0, len(_kill), 400):
+                _chunk = _kill[_i:_i + 400]
+                await _db6.execute(
+                    f"UPDATE jobs SET status='hidden' WHERE id IN "
+                    f"({','.join('?' for _ in _chunk)})", _chunk)
+            if _kill:
+                await _db6.commit()
+                logger.warning(f"[Repair] hid {len(_kill)} non-US rows")
+        finally:
+            await _db6.close()
+    except Exception as e:
+        logger.error(f"[Repair] non-US purge failed: {e}")
 
     # Run cleanup on startup to archive stale jobs immediately
     try:

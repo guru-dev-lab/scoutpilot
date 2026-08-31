@@ -312,10 +312,39 @@ _DB_NON_US_CITIES = [
     "copenhagen", "athens", "istanbul", "dubai", "tel aviv", "cairo", "lagos",
     "nairobi", "johannesburg", "cape town", "sao paulo", "buenos aires",
     "santiago", "bogota", "lima", "mexico city", "guadalajara", "manila",
+    "cologne", "koln", "dusseldorf", "duesseldorf", "nuremberg", "nurnberg",
+    "stuttgart", "leipzig", "dresden", "hannover", "hanover", "essen",
+    "dortmund", "bremen", "bonn", "mannheim", "karlsruhe", "wiesbaden",
+    "heidelberg", "freiburg", "augsburg", "bielefeld", "muenster", "aachen",
+    "graz", "linz", "salzburg", "innsbruck", "basel", "bern", "geneva",
+    "lausanne", "zug", "rotterdam", "utrecht", "eindhoven", "antwerp",
+    "ghent", "gothenburg", "malmo", "aarhus", "bergen", "tampere", "espoo",
+    "porto", "valencia", "seville", "milan", "rome", "turin", "naples",
+    "bologna", "zagreb", "ljubljana", "bratislava", "budapest", "bucharest",
+    "sofia", "belgrade", "vilnius", "riga", "tallinn", "reykjavik",
+    "edinburgh", "glasgow", "bristol", "leeds", "birmingham", "cardiff",
+    "belfast", "cork", "galway", "ottawa", "calgary", "edmonton", "winnipeg",
+    "quebec", "halifax", "monterrey", "medellin", "quito", "montevideo",
+    "asuncion", "la paz", "caracas", "panama city", "san jose costa rica",
     "bangkok", "hanoi", "kuala lumpur", "seoul", "tokyo", "osaka", "beijing",
     "shanghai", "shenzhen", "taipei", "sydney", "melbourne", "auckland",
     "wellington", "karachi", "lahore", "dhaka", "colombo", "gdansk", "krakow",
 ]
+
+# Regions/continents that disqualify an open-ended location.
+_DB_NON_US_REGIONS = [
+    "south america", "latin america", "latam", "central america", "europe",
+    "emea", "apac", "asia", "africa", "middle east", "oceania", "caribbean",
+    "eu", "eu only", "european union", "uk", "united kingdom", "canada",
+    "india", "australia", "new zealand", "singapore", "japan", "china",
+    "germany", "france", "spain", "poland", "brazil", "argentina", "mexico",
+]
+_DB_NON_US_REGION_RE = re.compile(
+    r"(?<![a-z])(" + "|".join(re.escape(r) for r in
+                              sorted(_DB_NON_US_REGIONS, key=len, reverse=True))
+    + r")(?![a-z])",
+    re.IGNORECASE,
+)
 
 _DB_NON_US_TOKEN_RE = re.compile(
     r"(?<![a-z])(" + "|".join(
@@ -331,6 +360,20 @@ _DB_NON_US_CITY_RE = re.compile(
     + r")(?![a-z])",
     re.IGNORECASE,
 )
+
+
+# German/Austrian/Swiss postings carry a gender marker — (m/w/d), (w/m/d),
+# (m/f/d), (gn), (m/w/x). No US posting uses these, so a title carrying one is
+# non-US regardless of what its location string says.
+_DACH_MARKER_RE = re.compile(
+    r"\(\s*(m\s*[/|]\s*w\s*[/|]\s*[dx]|w\s*[/|]\s*m\s*[/|]\s*[dx]|"
+    r"m\s*[/|]\s*f\s*[/|]\s*[dx]|gn|d\s*[/|]\s*m\s*[/|]\s*w)\s*\)",
+    re.IGNORECASE)
+
+
+def looks_non_us_posting(title: str) -> bool:
+    """True when the TITLE itself proves a non-US origin."""
+    return bool(_DACH_MARKER_RE.search(title or ""))
 
 
 def is_us_location(location: str, strict: bool = False) -> bool:
@@ -352,6 +395,22 @@ def is_us_location(location: str, strict: bool = False) -> bool:
                     "remote, us", "remote (us)", "anywhere", "us", "usa"):
         return True
     loc = f" {stripped} "
+
+    # A non-US region named ANYWHERE in the string kills the open-ended
+    # qualifiers. "Anywhere In South America" was passing because the bare word
+    # "anywhere" sits in _US_TOKENS and matched before anything else looked at
+    # "South America".
+    _open_ended = ("anywhere", "worldwide", "global", "remote")
+    if _DB_NON_US_REGION_RE.search(loc):
+        # Only an explicit US mention can rescue it, e.g. "Worldwide (US only)".
+        # "america" on its own is NOT a US signal — it matches inside "South
+        # America" and "Latin America", which is how "Anywhere In South
+        # America" was being rescued and landing on a US-only board.
+        if not re.search(
+                r"(?<![a-z])(u\.?s\.?a?|united states|north america|"
+                r"stateside|conus)(?![a-z])", loc, re.IGNORECASE):
+            return False
+
     # 1. Strong US signals win outright (covers "North America (US, Canada)").
     if any(tok in loc for tok in _US_TOKENS):
         return True
@@ -428,6 +487,11 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
     if getattr(settings, "us_only", True):
         _loc = (job_data.get("location") or "").strip()
         if _loc and not is_us_location(_loc):
+            return False
+        # A German/Austrian/Swiss gender marker in the title proves non-US
+        # origin even when the location string looks harmless ("Cologne",
+        # "Remote"). Arbeitnow is a Berlin board and was the main leak.
+        if looks_non_us_posting(job_data.get("title") or ""):
             return False
     # Normalise the display fields BEFORE hashing, so the dedup hash is computed
     # on clean text and an escaped/unescaped pair cannot slip through as two
