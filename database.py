@@ -31,7 +31,10 @@ async def get_db():
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute("PRAGMA busy_timeout=30000")  # Wait up to 30s for locks (many parallel source workers)
+    # 60s. Writes are serialised in-process by _write_lock, but READERS still
+    # queue behind a long write, and the worker count went from 13 to 18 when
+    # the ATS platforms were sharded. 30s was occasionally not enough.
+    await db.execute("PRAGMA busy_timeout=60000")
     await db.execute("PRAGMA foreign_keys=ON")
     return db
 
