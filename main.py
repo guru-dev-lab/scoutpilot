@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.26.1"
+BUILD_VERSION = "2.27.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -904,10 +904,10 @@ async def lifespan(app: FastAPI):
 
     # One worker per ATS platform. Fast public APIs now sweep ALL their companies
     # every run (no rotation), so intervals are sized to a full sweep + politeness.
-    asyncio.create_task(_worker("ATS-greenhouse", 180, _make_ats_body("greenhouse")))     # ~770 companies/run
-    asyncio.create_task(_worker("ATS-ashby", 150, _make_ats_body("ashby")))               # ~360
-    asyncio.create_task(_worker("ATS-lever", 130, _make_ats_body("lever")))               # ~200
-    asyncio.create_task(_worker("ATS-smartrecruiters", 150, _make_ats_body("smartrecruiters")))  # ~145
+    asyncio.create_task(_worker("ATS-greenhouse", 120, _make_ats_body("greenhouse")))     # ~770 companies/run
+    asyncio.create_task(_worker("ATS-ashby", 110, _make_ats_body("ashby")))               # ~360
+    asyncio.create_task(_worker("ATS-lever", 100, _make_ats_body("lever")))               # ~200
+    asyncio.create_task(_worker("ATS-smartrecruiters", 110, _make_ats_body("smartrecruiters")))  # ~145
     asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
     # Cloudflare-fronted platforms: low concurrency + long intervals. Workable
     # answered ~40 quick probes with a 24-hour 429 ban, so these are swept
@@ -922,14 +922,14 @@ async def lifespan(app: FastAPI):
     # 30x frees request budget for the ATS sweep that is actually producing.
     asyncio.create_task(_worker("Light", 300, _light_body))
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
-    asyncio.create_task(_worker("LinkedIn-Guest", 900, _linkedin_body))  # cheap public feed, USA only
+    asyncio.create_task(_worker("LinkedIn-Guest", 480, _linkedin_body))  # cheap public feed, USA only
     # Backfill descriptions on rows that arrived without one (LinkedIn's guest
     # feed has no description, and the skill-signature rescue — the mechanism
     # that catches a role hidden by its title — cannot run without one).
     # 30-min interval and a 12-row cap because each LinkedIn page is ~300KB
     # through the metered proxy; the queue drains and then idles.
     asyncio.create_task(_worker("Enrich", 1800, _enrich_body))
-    asyncio.create_task(_worker("Scoring", 30, _scoring_body))# classify + hide, keeps up with inflow
+    asyncio.create_task(_worker("Scoring", 20, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
     asyncio.create_task(_worker("Discovery-Harvest", 600, _ats_harvest_body))  # URL-harvest: free, high-yield roster growth
@@ -2001,6 +2001,17 @@ async def api_debug_pipeline():
                 "       SUM(CASE WHEN status != 'hidden' THEN 1 ELSE 0 END) AS visible "
                 "FROM jobs WHERE first_seen_at > datetime('now','-1 hours') "
                 "GROUP BY source ORDER BY n DESC")
+            # Exactly what the owner's filter yields: remote + relevance>=50,
+            # per profile, over the windows the UI offers.
+            out["user_filter_yield"] = await rows(
+                "SELECT COALESCE(p.title,'(none)') AS profile, "
+                "  SUM(CASE WHEN j.first_seen_at > datetime('now','-1 hours') THEN 1 ELSE 0 END) AS last_1h, "
+                "  SUM(CASE WHEN j.first_seen_at > datetime('now','-24 hours') THEN 1 ELSE 0 END) AS last_24h, "
+                "  SUM(CASE WHEN j.first_seen_at > datetime('now','-72 hours') THEN 1 ELSE 0 END) AS last_3d "
+                "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
+                "WHERE j.status != 'hidden' AND j.work_type='remote' "
+                "  AND j.relevance_score >= 50 "
+                "GROUP BY profile ORDER BY last_3d DESC")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
