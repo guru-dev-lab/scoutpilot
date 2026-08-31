@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.28.0"
+BUILD_VERSION = "2.29.0"
 BUILD_DATE = "2026-08-27"
 RECENT_CHANGES = [
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -751,12 +751,19 @@ async def lifespan(app: FastAPI):
     # holds up the fast ones (Greenhouse/Ashby).
     _ats_cycles = {}
 
-    def _make_ats_body(platform: str):
-        _ats_cycles[platform] = 0
+    def _make_ats_body(platform: str, shard: int = 0, shards: int = 1):
+        """One body per platform SHARD. Greenhouse alone has ~1,700 companies;
+        a single worker sweeps them sequentially, so a job posted just after
+        its company was visited waits a full sweep to be found. Splitting the
+        roster across parallel workers cuts that wait by the shard count."""
+        _key = f"{platform}#{shard}"
+        _ats_cycles[_key] = 0
         async def _body():
             from scraper import scrape_ats_for_profile
-            _ats_cycles[platform] += 1
-            await _for_each_profile(scrape_ats_for_profile, _ats_cycles[platform], [platform])
+            _ats_cycles[_key] += 1
+            await _for_each_profile(
+                scrape_ats_for_profile, _ats_cycles[_key], [platform],
+                shard, shards)
         return _body
 
     _jobspy_cycle = {"n": 0}
@@ -771,6 +778,42 @@ async def lifespan(app: FastAPI):
     async def _light_body():
         from scraper import scrape_light_for_profile
         await _for_each_profile(scrape_light_for_profile)
+
+    def _make_linkedin_body(work_type: str):
+        """One worker per workplace type. They were running sequentially inside
+        a single body, so a cycle was 6 terms x 3 types x up to 12 pages before
+        it came round again. Running the three in parallel cuts that wait to a
+        third."""
+        _st = {"cycle": 0}
+
+        async def _body():
+            from scraper import scrape_linkedin_guest, _build_profile_terms
+            from database import get_enabled_sources
+            if "linkedin" not in await get_enabled_sources():
+                return
+            profiles = await get_profiles()
+            if not profiles:
+                return
+            _st["cycle"] += 1
+            cycle = _st["cycle"]
+            total = 0
+            for profile in profiles:
+                terms = _build_profile_terms(profile) or [profile["title"]]
+                window = 6
+                start = (cycle * window) % max(len(terms), 1)
+                picked = [terms[(start + i) % len(terms)]
+                          for i in range(min(window, len(terms)))]
+                for term in picked:
+                    try:
+                        r = await scrape_linkedin_guest(
+                            term, "United States", profile["id"],
+                            pages=12, days=1, work_type=work_type)
+                        total += len(r)
+                    except Exception as e:
+                        logger.error(f"[LinkedInGuest] '{term}'/{work_type}: {e}")
+                    await asyncio.sleep(1.5)
+            logger.info(f"[LinkedInGuest/{work_type}] cycle {cycle}: +{total} new")
+        return _body
 
     async def _linkedin_body():
         """LinkedIn via its public guest feed — ~2.9KB/job instead of JobSpy's
@@ -904,10 +947,22 @@ async def lifespan(app: FastAPI):
 
     # One worker per ATS platform. Fast public APIs now sweep ALL their companies
     # every run (no rotation), so intervals are sized to a full sweep + politeness.
-    asyncio.create_task(_worker("ATS-greenhouse", 120, _make_ats_body("greenhouse")))     # ~770 companies/run
-    asyncio.create_task(_worker("ATS-ashby", 110, _make_ats_body("ashby")))               # ~360
-    asyncio.create_task(_worker("ATS-lever", 100, _make_ats_body("lever")))               # ~200
-    asyncio.create_task(_worker("ATS-smartrecruiters", 110, _make_ats_body("smartrecruiters")))  # ~145
+    # Sharded: several workers per platform, each taking every Nth company, so
+    # the roster is swept in parallel rather than one company at a time.
+    # Greenhouse ~1,700 companies / 4 shards, Ashby ~1,080 / 3, and so on.
+    for _sh in range(4):
+        asyncio.create_task(_worker(
+            f"ATS-greenhouse-{_sh+1}", 120, _make_ats_body("greenhouse", _sh, 4)))
+    for _sh in range(3):
+        asyncio.create_task(_worker(
+            f"ATS-ashby-{_sh+1}", 110, _make_ats_body("ashby", _sh, 3)))
+    for _sh in range(2):
+        asyncio.create_task(_worker(
+            f"ATS-lever-{_sh+1}", 100, _make_ats_body("lever", _sh, 2)))
+    for _sh in range(2):
+        asyncio.create_task(_worker(
+            f"ATS-smartrecruiters-{_sh+1}", 110,
+            _make_ats_body("smartrecruiters", _sh, 2)))
     asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
     # Cloudflare-fronted platforms: low concurrency + long intervals. Workable
     # answered ~40 quick probes with a 24-hour 429 ban, so these are swept
@@ -922,7 +977,11 @@ async def lifespan(app: FastAPI):
     # 30x frees request budget for the ATS sweep that is actually producing.
     asyncio.create_task(_worker("Light", 300, _light_body))
     asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
-    asyncio.create_task(_worker("LinkedIn-Guest", 480, _linkedin_body))  # cheap public feed, USA only
+    # Three parallel LinkedIn workers, one per workplace type. Remote runs
+    # most often because it is the filter the board is browsed with.
+    asyncio.create_task(_worker("LinkedIn-remote", 300, _make_linkedin_body("remote")))
+    asyncio.create_task(_worker("LinkedIn-hybrid", 600, _make_linkedin_body("hybrid")))
+    asyncio.create_task(_worker("LinkedIn-onsite", 600, _make_linkedin_body("onsite")))
     # Backfill descriptions on rows that arrived without one (LinkedIn's guest
     # feed has no description, and the skill-signature rescue — the mechanism
     # that catches a role hidden by its title — cannot run without one).

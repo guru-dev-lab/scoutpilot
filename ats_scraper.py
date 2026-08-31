@@ -50,7 +50,7 @@ _PLATFORM_BUCKETS = {
 }
 
 # Max concurrent HTTP fetches per ATS platform
-PLATFORM_CONCURRENCY = 20
+PLATFORM_CONCURRENCY = 32
 
 # Per-platform overrides. Workable/Recruitee/Breezy sit behind Cloudflare and
 # rate-limit far more aggressively than the open Greenhouse/Lever/Ashby APIs —
@@ -1189,6 +1189,8 @@ async def scrape_all_ats(
     search_terms: list[str],
     cycle_number: int,
     platforms: Optional[list[str]] = None,
+    shard: int = 0,
+    shards: int = 1,
 ) -> dict:
     """Run ATS platforms for one profile, one cycle.
 
@@ -1217,12 +1219,18 @@ async def scrape_all_ats(
 
     for platform in active_platforms:
         slice_ = get_rotation_slice(companies, cycle_number, platform)
+        # Sharding: one worker per slice so a 1,693-company roster is swept by
+        # several workers in parallel instead of one sequentially. Time to
+        # discovery drops by roughly the shard count.
+        if shards > 1:
+            slice_ = [c for i, c in enumerate(slice_) if i % shards == shard]
         if not slice_:
             results[platform] = 0
             continue
         logger.info(
             f"[ATS] cycle#{cycle_number} {platform}: "
-            f"fetching {len(slice_)} companies (bucket {cycle_number % ROTATION_BUCKETS + 1}/{ROTATION_BUCKETS})"
+            f"fetching {len(slice_)} companies"
+            + (f" [shard {shard + 1}/{shards}]" if shards > 1 else "")
         )
         try:
             count = await _fetch_platform(platform, slice_, profile_id, search_terms)

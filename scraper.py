@@ -2629,7 +2629,8 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
 
 
 async def scrape_ats_for_profile(profile: dict, cycle_number: int,
-                                 platforms: Optional[list] = None) -> int:
+                                 platforms: Optional[list] = None,
+                                 shard: int = 0, shards: int = 1) -> int:
     """ATS (Greenhouse/Lever/Ashby/Workday/SmartRecruiters) for ONE profile.
     `platforms` restricts to specific platforms so each can run as its own
     worker. Uses cycle_number for company rotation. Never raises."""
@@ -2640,6 +2641,7 @@ async def scrape_ats_for_profile(profile: dict, cycle_number: int,
         ats_results = await scrape_all_ats(
             profile_id=profile["id"], search_terms=terms,
             cycle_number=cycle_number, platforms=platforms,
+            shard=shard, shards=shards,
         )
         ats_total = sum(ats_results.values())
         if ats_total > 0:
