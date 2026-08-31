@@ -1156,6 +1156,19 @@ _LI_DESC_FALLBACK_RE = re.compile(
     r'class="[^"]*description__text[^"]*"[^>]*>(.*?)</section>', re.S)
 
 
+# A LinkedIn posting that applies on the EMPLOYER's site carries an offsite
+# marker; an Easy Apply posting does not, because you apply inside LinkedIn.
+# The guest list page exposes no such flag and the f_AL filter is ignored by
+# that endpoint, so the detail page is the only place this is knowable — and
+# the enrich pass already fetches it, so detection is free.
+_LI_OFFSITE_RE = re.compile(
+    r"offsite-apply-icon|apply-link-offsite|apply-link-offsite_", re.I)
+
+
+def _li_apply_is_offsite(html_text: str) -> bool:
+    return bool(_LI_OFFSITE_RE.search(html_text or ""))
+
+
 async def enrich_missing_descriptions(limit: int = 12) -> int:
     """Backfill descriptions for rows that arrived without one.
 
@@ -1182,7 +1195,7 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
             "WHERE (description IS NULL OR description = '') "
             "  AND source = 'linkedin' "
             "  AND status NOT IN ('hidden') "
-            "  AND relevance_score BETWEEN 25 AND 79 "
+            "  AND relevance_score BETWEEN 25 AND 95 "
             "ORDER BY first_seen_at DESC LIMIT ?",
             (limit,),
         )
@@ -1212,6 +1225,8 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
 
     updated = 0
     expired = 0
+    offsite = 0
+    easy_apply = 0
     # Reason counters. Without these a pass that processes rows and updates
     # none is indistinguishable from a worker that never ran — the exact
     # failure mode that hid fetch_greenhouse returning 0 for every board.
@@ -1240,6 +1255,26 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
                     expired += 1
                     await asyncio.sleep(1.2)
                     continue
+
+                # Record how this job is applied to while we have the page.
+                _offsite = _li_apply_is_offsite(resp.text)
+                try:
+                    from database import _write_lock as _wl2, get_db as _gdb
+                    async with _wl2():
+                        _d = await _gdb()
+                        try:
+                            await _d.execute(
+                                "UPDATE jobs SET is_direct_apply = ? WHERE id = ?",
+                                (1 if _offsite else 0, row["id"]))
+                            await _d.commit()
+                        finally:
+                            await _d.close()
+                    if _offsite:
+                        offsite += 1
+                    else:
+                        easy_apply += 1
+                except Exception as e:
+                    logger.debug(f"[Enrich] apply-method write {row['id']}: {e}")
 
                 m = _LI_DESC_RE.search(resp.text) or _LI_DESC_FALLBACK_RE.search(resp.text)
                 if not m:
@@ -1278,7 +1313,8 @@ async def enrich_missing_descriptions(limit: int = 12) -> int:
 
     if updated or expired:
         logger.info(f"[Enrich] {updated}/{len(rows)} descriptions added "
-                    f"(re-queued for scoring), {expired} expired postings hidden")
+                    f"(re-queued for scoring), {expired} expired hidden, "
+                    f"apply method: {offsite} offsite / {easy_apply} easy-apply")
     elif rows:
         logger.warning(
             f"[Enrich] processed {len(rows)} rows and updated NONE — {reasons}")
