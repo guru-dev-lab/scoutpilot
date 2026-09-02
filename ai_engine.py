@@ -85,9 +85,43 @@ def _sanitize_expansions(title: str, expansions: list[str]) -> list[str]:
         # Block ultra-short multi-word variants
         if len(vl) < 4:
             continue
+        # Block TRUNCATIONS of the target title. Dropping a leading qualifier
+        # does not give you a synonym, it gives you a different profession, and
+        # the expansion is then an EXACT title match so the job scores 100.
+        #
+        # Measured on the live board 2026-09-02: "Business Intelligence Analyst"
+        # had been expanded to "Intelligence Analyst", and the head of the feed
+        # was Criminal Intelligence Analyst (100), Cryptocurrency Intelligence
+        # Analyst (100), Senior Intelligence Analyst All Source (100),
+        # "Intelligence Analyst - Entry Level - Top Secret clearance required"
+        # (100) — military and law-enforcement intelligence work, top of a
+        # board built for BI. Same shape as "Cloud Operations Engineer" ->
+        # "Operations Engineer".
+        #
+        # The AI prompt already forbids "broader parent roles", but every
+        # example it gives is a single word, so a two-word truncation reads as
+        # compliant. This is the deterministic backstop, and it runs on the
+        # scoring path too — so it also cleans expansions already stored in the
+        # DB without needing a re-expansion call.
+        if _is_title_truncation(title_lower, vl):
+            continue
         seen.add(vl)
         out.append(vs)
     return out
+
+
+def _is_title_truncation(target_lower: str, variant_lower: str) -> bool:
+    """True when the variant is the target title with word(s) shaved off an end.
+
+    Contiguous word-subsequence test: "intelligence analyst" sits inside
+    ["business", "intelligence", "analyst"], so it is a truncation. "analytics
+    analyst" does not, so it survives.
+    """
+    tw = target_lower.split()
+    vw = variant_lower.split()
+    if not vw or len(vw) >= len(tw):
+        return False
+    return any(tw[i:i + len(vw)] == vw for i in range(len(tw) - len(vw) + 1))
 
 
 async def expand_title_ai(title: str) -> list[str]:
@@ -115,7 +149,7 @@ HARD RULES (breaking any of these = failure):
     * Data Analyst ≠ Data Engineer (engineer builds pipelines; analyst queries them)
     * DevOps/SRE ≠ Software Engineer ≠ Security Engineer
     * UX Designer ≠ Frontend Developer
-- NEVER include broader parent roles ("Analyst" for "Data Analyst", "Engineer" for "Backend Engineer")
+- NEVER include broader parent roles. This includes MULTI-WORD truncations, not just single words: for "Business Intelligence Analyst" the variant "Intelligence Analyst" is FORBIDDEN (that is military/law-enforcement intelligence work, a different profession); for "Cloud Operations Engineer" the variant "Operations Engineer" is FORBIDDEN. Never output a variant that is the target title with a word shaved off either end. ("Analyst" for "Data Analyst" and "Engineer" for "Backend Engineer" are forbidden for the same reason.)
 - NEVER include tangential roles ("Business Analyst" for "Data Analyst" — BA does requirements, DA does SQL/dashboards)
 - NEVER include industry prefixes ("Fintech DevOps", "Healthcare Data Analyst")
 - NEVER include tool/stack titles ("Tableau Analyst", "Terraform Engineer", "React Developer")
@@ -611,7 +645,18 @@ def score_relevance_fuzzy(
     # vocabulary (its title, expansions and keywords), the match is carried
     # entirely by a generic noun and is not this role.
     job_tokens = _distinctive_tokens(job_title)
-    vocab = _profile_vocabulary(target_title, expanded_titles, keywords)
+    # Built from the SANITIZED expansions. Using the raw list meant a single bad
+    # expansion donated its words to the vocabulary permanently — "Intelligence
+    # Analyst" put a free-standing "intelligence" in a BI profile's vocabulary,
+    # which is half of why criminal-intelligence work cleared the gate.
+    vocab = _profile_vocabulary(target_title, clean_expanded, keywords)
+
+    # The profile's ROLE IDENTITIES: the distinctive tokens of the target title
+    # and of each expansion, each kept as a set that must be matched WHOLE.
+    identity_sets = [ts for ts in
+                     ([_distinctive_tokens(target_title)] +
+                      [_distinctive_tokens(str(t)) for t in clean_expanded])
+                     if ts]
 
     # A title that IS one of the profile's own variants must never be gated.
     # "Analytics Analyst" is a listed expansion, but both of its words are
@@ -636,7 +681,27 @@ def score_relevance_fuzzy(
             base_title_score = min(base_title_score, 22)
             best_score = min(best_score, 22)
             fence_capped = True
-        elif not (job_tokens & vocab):
+        elif identity_sets and not any(ident <= job_tokens
+                                       for ident in identity_sets):
+            # Sharing ONE word with a role is not being that role. The old gate
+            # asked only for `job_tokens & vocab` — any single overlapping word
+            # anywhere in the profile's vocabulary — so "Criminal Intelligence
+            # Analyst", "Cryptocurrency Intelligence Analyst" and "Senior
+            # Intelligence Analyst (All Source)" all cleared it on the word
+            # "intelligence" alone and rode token_set_ratio to 88-100 at the top
+            # of a Business Intelligence board. Same for "Operations Lead" (a
+            # warehouse job, 80) and "GIS Programmer" (90) borrowing one word
+            # from a DevOps and a BI profile respectively.
+            #
+            # Now the job must contain EVERY distinctive word of at least one of
+            # the profile's roles: {business, intelligence} or {bi} or
+            # {reporting} or {data}, not merely intersect the union of them.
+            # "Business Intelligence Architect" and "Finance and BI Analyst"
+            # still pass; "Criminal Intelligence Analyst" does not.
+            #
+            # Jobs that carry a real description keep their escape hatch — the
+            # skill-signature rescue below runs after this cap and can still
+            # lift a genuinely-matching role whose title disguises it.
             base_title_score = min(base_title_score, 22)
             best_score = min(best_score, 22)
             fence_capped = True

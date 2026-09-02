@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.31.0"
+BUILD_VERSION = "2.32.0"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.32.0", "date": "2026-09-02", "status": "active", "change": "THE FEED WAS FULL OF SPY JOBS. Head of the live feed was Criminal Intelligence Analyst (100), Journeyman Intelligence Analyst (100), Cryptocurrency Intelligence Analyst (100), Senior Intelligence Analyst All Source (100) and Intelligence Analyst - Top Secret clearance required (100) — military and law-enforcement intelligence work sitting on top of a Business Intelligence board. Two independent causes, both fixed at the door. (1) The AI had expanded 'Business Intelligence Analyst' to the variant 'Intelligence Analyst'. Shaving a leading qualifier off a title does not give a synonym, it gives a different profession, and the variant then matches EXACTLY so the job scores 100. _sanitize_expansions now rejects any variant that is a contiguous word-subsequence of the target title, and the expansion prompt says so explicitly with this exact example. (2) The modifier gate asked only that a job share ONE word with the profile vocabulary, so 'intelligence' alone cleared it and token_set_ratio carried the job to 88 anyway — and the vocabulary was built from the RAW expansions, so the bad variant had donated a free-standing 'intelligence' to it. The gate now requires the job title to contain EVERY distinctive word of at least one of the profile's roles, and the vocabulary is built from sanitized expansions. Measured on the real feed head: 7 of 40 rows newly hidden, all of them junk (also caught Operations Lead at a grocery warehouse and GIS Programmer), and every legitimate row — Business Intelligence Architect, Finance and BI Analyst, Data Analyst I, Infrastructure Engineer III — kept its exact score. Jobs with a real description keep the skill-signature rescue as an escape hatch. Also: /api/admin/rescore-all-jobs now applies VISIBILITY (status follows relevance_hide_below) instead of only writing a score — visibility here is status-driven, so a rescore alone left poisoned rows sitting at the top of the feed — and its archive threshold defaults to off instead of silently archiving the 25-39 band."},
     {"version": "2.31.0", "date": "2026-09-02", "status": "active", "change": "WORKABLE AND BREEZY WERE 100% BLIND. Both platforms return a job LIST with no description field at all — fetch_workable literally set description to an empty string, and fetch_breezy read an item.description key that Breezy never sends. Every one of their 486 rows (199 workable + 287 breezy) was scored on its title alone, which means the skill-signature rescue — the whole mechanism for catching a role whose title hides it — could never fire for the most valuable rows on the board: direct-apply employer jobs. New Enrich-ATS worker (600s, 60 rows/pass) backfills them. Workable via the v1 per-job API (the v3 path 404s), joining description + requirements + benefits because the requirements block is where the matched skills live. Breezy via its schema.org JobPosting block, falling back to the description div — verified that Breezy emits JSON-LD on some postings and not others, and that the div class has to be matched as a whole token ('position-description' also contains 'description') with the closing tag found by counting depth. Measured 11/11 Breezy boards and 3/3 Workable jobs yielding real text; end-to-end test inserts two blind rows and confirms 4000 and 3445 chars land with scored_at cleared for re-judging."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
@@ -2266,12 +2267,22 @@ async def api_reclassify():
 
 
 @app.post("/api/admin/rescore-all-jobs")
-async def api_rescore_all_jobs(threshold: int = 40):
+async def api_rescore_all_jobs(threshold: int = 0, apply_visibility: bool = True):
     """Admin: re-score every job in the DB against all profiles using the
-    current (v1.9.5+) fuzzy scorer with role-family fence. Jobs that score
-    below `threshold` against every profile are archived. This flushes the
-    noise that was scored under the looser v1.9.4 and earlier rules."""
+    current fuzzy scorer, with NO AI calls — deterministic and zero-token.
+
+    Rescoring alone used to be half a flush. Visibility on this board is driven
+    by `status`, not by relevance_score, so a row scored 100 under a poisoned
+    expansion kept status='new' and stayed at the top of the feed no matter what
+    its new score said. With apply_visibility (the default) the row's status is
+    brought back in line with the current relevance_hide_below: rows that fall
+    under it are hidden, rows that rise above it are un-hidden.
+
+    `threshold` archives rows scoring below it and now DEFAULTS TO 0 — off.
+    The old default of 40 quietly archived the whole 25-39 band, which is
+    deliberately kept visible (hide_below is 25)."""
     from database import get_db
+    from config import settings as _cfg
     from ai_engine import score_relevance_fuzzy, _sanitize_expansions
     profiles = await get_profiles()
     if not profiles:
@@ -2294,10 +2305,14 @@ async def api_rescore_all_jobs(threshold: int = 40):
 
     db = await get_db()
     try:
-        cur = await db.execute("SELECT id, title, description FROM jobs WHERE status != 'archived'")
+        cur = await db.execute(
+            "SELECT id, title, description, status FROM jobs WHERE status != 'archived'")
         rows = await cur.fetchall()
+        hide_below = _cfg.relevance_hide_below
         rescored = 0
         archived = 0
+        newly_hidden = 0
+        unhidden = 0
         for row in rows:
             jid, jtitle, jdesc = row[0], row[1] or "", row[2] or ""
             best = 0
@@ -2310,11 +2325,23 @@ async def api_rescore_all_jobs(threshold: int = 40):
                     best = s
             await db.execute("UPDATE jobs SET relevance_score = ? WHERE id = ?", (best, jid))
             rescored += 1
-            if best < threshold:
+            if threshold and best < threshold:
                 await db.execute("UPDATE jobs SET status = 'archived' WHERE id = ?", (jid,))
                 archived += 1
+            elif apply_visibility:
+                status = row[3]
+                if best < hide_below and status in ("new", "viewed"):
+                    await db.execute(
+                        "UPDATE jobs SET status = 'hidden' WHERE id = ?", (jid,))
+                    newly_hidden += 1
+                elif best >= hide_below and status == "hidden":
+                    await db.execute(
+                        "UPDATE jobs SET status = 'new' WHERE id = ?", (jid,))
+                    unhidden += 1
         await db.commit()
-        return {"ok": True, "rescored": rescored, "archived": archived, "threshold": threshold}
+        return {"ok": True, "rescored": rescored, "archived": archived,
+                "newly_hidden": newly_hidden, "unhidden": unhidden,
+                "hide_below": hide_below, "threshold": threshold}
     except Exception as e:
         logger.exception("[Admin] rescore failed")
         return JSONResponse({"error": str(e)}, status_code=500)
