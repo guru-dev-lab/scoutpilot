@@ -1240,3 +1240,238 @@ async def scrape_all_ats(
             results[platform] = 0
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Description backfill for ATS rows that arrive without one
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Two of the eight platforms hand back a job LIST that carries no description
+# at all, and the code was reading a field that is never present:
+#   - Workable: the v3 list payload has no description key. `fetch_workable`
+#     literally sets `"description": ""`. All 199 rows were blind.
+#   - Breezy: `{slug}.breezy.hr/json` returns
+#     ['company','department','friendly_id','id','location','locations','name',
+#      'published_date','salary','type','url'] — no description key, so
+#     `item.get("description")` was always "". All 287 rows were blind.
+#
+# A blind row cannot be scored on its content, which means the skill-signature
+# rescue — the whole mechanism for catching a role whose TITLE hides it — can
+# never fire for it. These are direct-apply employer jobs, the most valuable
+# kind on the board, so they are exactly the rows worth a second request.
+#
+# Verified live 2026-09-02:
+#   Workable  GET  apply.workable.com/api/v1/accounts/{slug}/jobs/{shortcode}
+#             -> 200, ~6KB JSON with description + requirements + benefits.
+#             (the v3 per-job path 404s — v1 is the one that works)
+#   Breezy    GET  the job page; it embeds a JSON-LD JobPosting whose
+#             `description` was 3814 chars on the probe. Parsing the standard
+#             schema.org block is far steadier than chasing Breezy's CSS.
+
+_JSONLD_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.S | re.I,
+)
+
+
+def _jsonld_job_description(html: str) -> str:
+    """Pull the description out of a page's schema.org JobPosting block."""
+    for m in _JSONLD_RE.finditer(html):
+        try:
+            data = json.loads(m.group(1))
+        except Exception:
+            continue
+        for node in (data if isinstance(data, list) else [data]):
+            if not isinstance(node, dict):
+                continue
+            if node.get("@type") != "JobPosting":
+                continue
+            desc = node.get("description") or ""
+            if desc:
+                return desc
+    return ""
+
+
+def _plain(html_or_text: str) -> str:
+    """Strip markup and collapse whitespace."""
+    text = re.sub(r"<[^>]+>", " ", str(html_or_text or ""))
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _workable_shortcode(url: str) -> str:
+    """apply.workable.com/{slug}/j/{SHORTCODE}/ -> SHORTCODE."""
+    m = re.search(r"apply\.workable\.com/([^/]+)/j/([A-Za-z0-9]+)", url or "")
+    return m.group(2) if m else ""
+
+
+def _workable_slug(url: str) -> str:
+    m = re.search(r"apply\.workable\.com/([^/]+)/j/", url or "")
+    return m.group(1) if m else ""
+
+
+async def _enrich_workable_row(client: httpx.AsyncClient, url: str) -> str:
+    slug, shortcode = _workable_slug(url), _workable_shortcode(url)
+    if not slug or not shortcode:
+        return ""
+    api = f"https://apply.workable.com/api/v1/accounts/{slug}/jobs/{shortcode}"
+    resp = await client.get(api)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+    data = resp.json()
+    # Workable splits the posting across three fields; the requirements block is
+    # where the skills the scorer matches on actually live, so join all three.
+    parts = [data.get("description"), data.get("requirements"), data.get("benefits")]
+    return _plain("\n\n".join(p for p in parts if p))
+
+
+# Breezy does NOT emit JSON-LD on every board — probed 2026-09-02, one Duolingo
+# posting carried a JobPosting block (3814 chars) and the very next posting
+# carried none at all. Every page does render the body into
+# `<div class="description">`, so that div is the fallback.
+#
+# Two traps, both hit on the first attempt:
+#  1. `\bdescription\b` also matches INSIDE `class="container position-description"`
+#     — a hyphen is a word boundary — and that outer container opens 2KB earlier
+#     with the breadcrumbs and a Google Maps iframe in it. The class has to be
+#     matched as a whole token in a space-separated list.
+#  2. A `</div>` terminator regex stops at the first nested close. The body is
+#     arbitrary employer HTML, so the close has to be found by counting depth.
+_BREEZY_DESC_OPEN_RE = re.compile(
+    r'<div[^>]*\sclass="(?:[^"]*\s)?description(?:\s[^"]*)?"[^>]*>',
+    re.I,
+)
+_DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.I)
+
+
+def _div_inner_html(html: str, open_match: re.Match) -> str:
+    """Return the inner HTML of a div by counting nested open/close tags."""
+    depth = 1
+    pos = open_match.end()
+    for tag in _DIV_TAG_RE.finditer(html, pos):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return html[pos:tag.start()]
+    return html[pos:]
+
+
+async def _enrich_breezy_row(client: httpx.AsyncClient, url: str) -> str:
+    resp = await client.get(url)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+    text = _plain(_jsonld_job_description(resp.text))
+    if len(text) < 80:
+        m = _BREEZY_DESC_OPEN_RE.search(resp.text)
+        if m:
+            text = _plain(_div_inner_html(resp.text, m))
+    return text
+
+
+_ATS_ENRICHERS = {
+    "workable": _enrich_workable_row,
+    "breezy": _enrich_breezy_row,
+}
+
+
+async def enrich_ats_descriptions(limit: int = 60) -> int:
+    """Backfill descriptions on visible Workable/Breezy rows that lack one.
+
+    Deliberately mirrors the LinkedIn enricher in scraper.py: only rows still
+    visible, only rows whose score sits in the band where a description can
+    change the verdict, a hard per-pass cap, and `scored_at = NULL` on write so
+    the Scoring worker re-judges the row WITH the description.
+
+    The cap is far more generous than LinkedIn's 12 because these payloads are
+    ~6KB (Workable JSON) and ~22KB (Breezy page) rather than a ~300KB LinkedIn
+    render, and Breezy is not behind Cloudflare so it needs no proxy.
+    """
+    from database import get_db, MAX_DESCRIPTION_CHARS, _write_lock
+
+    platforms = tuple(_ATS_ENRICHERS)
+    placeholders = ",".join("?" for _ in platforms)
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, source, source_url FROM jobs "
+            "WHERE (description IS NULL OR description = '') "
+            f"  AND source IN ({placeholders}) "
+            "  AND status NOT IN ('hidden') "
+            "  AND relevance_score BETWEEN 25 AND 95 "
+            "ORDER BY first_seen_at DESC LIMIT ?",
+            (*platforms, limit),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+    if not rows:
+        # Say so out loud. A silent 0 is indistinguishable from a worker that
+        # never ran — the failure mode that hid fetch_greenhouse for weeks.
+        logger.info("[Enrich-ATS] no candidate rows "
+                    f"({'/'.join(platforms)} + no description + visible + relevance 25-95)")
+        return 0
+    logger.info(f"[Enrich-ATS] {len(rows)} candidates this pass")
+
+    # Workable is Cloudflare-fronted and already proxied for the sweep; Breezy
+    # is not, and a residential hop would only cost bandwidth. Two clients.
+    base: dict = {"timeout": HTTP_TIMEOUT, "headers": HTTP_HEADERS,
+                  "follow_redirects": True}
+    proxied = dict(base)
+    if settings.proxy_url:
+        proxied["proxy"] = settings.proxy_url
+
+    updated = 0
+    reasons: dict[str, int] = {"http": 0, "empty": 0, "too_short": 0,
+                               "error": 0, "no_url": 0}
+    per_source: dict[str, int] = {}
+
+    async with httpx.AsyncClient(**base) as direct_client, \
+               httpx.AsyncClient(**proxied) as proxy_client:
+        for row in rows:
+            source = row.get("source") or ""
+            url = row.get("source_url") or ""
+            enricher = _ATS_ENRICHERS.get(source)
+            if not url or not enricher:
+                reasons["no_url"] += 1
+                continue
+            client = (proxy_client if source in _PROXIED_PLATFORMS
+                      else direct_client)
+            try:
+                text = await enricher(client, url)
+                if not text:
+                    reasons["empty"] += 1
+                    if reasons["empty"] == 1:
+                        logger.warning(
+                            f"[Enrich-ATS] {source} job {row['id']} returned no "
+                            f"description text (url={url[:90]}) — payload shape "
+                            "may have changed")
+                    continue
+                if len(text) < 80:
+                    reasons["too_short"] += 1
+                    continue
+                async with _write_lock():
+                    wdb = await get_db()
+                    try:
+                        await wdb.execute(
+                            "UPDATE jobs SET description = ?, scored_at = NULL "
+                            "WHERE id = ?",
+                            (text[:MAX_DESCRIPTION_CHARS], row["id"]),
+                        )
+                        await wdb.commit()
+                    finally:
+                        await wdb.close()
+                updated += 1
+                per_source[source] = per_source.get(source, 0) + 1
+            except Exception as e:
+                reasons["error"] += 1
+                logger.debug(f"[Enrich-ATS] {source} job {row['id']}: {e}")
+            await asyncio.sleep(0.6)
+
+    if updated:
+        logger.info(f"[Enrich-ATS] {updated}/{len(rows)} descriptions added "
+                    f"(re-queued for scoring) {per_source}")
+    else:
+        logger.warning(
+            f"[Enrich-ATS] processed {len(rows)} rows and updated NONE — {reasons}")
+    return updated

@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.30.0"
-BUILD_DATE = "2026-08-27"
+BUILD_VERSION = "2.31.0"
+BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.31.0", "date": "2026-09-02", "status": "active", "change": "WORKABLE AND BREEZY WERE 100% BLIND. Both platforms return a job LIST with no description field at all — fetch_workable literally set description to an empty string, and fetch_breezy read an item.description key that Breezy never sends. Every one of their 486 rows (199 workable + 287 breezy) was scored on its title alone, which means the skill-signature rescue — the whole mechanism for catching a role whose title hides it — could never fire for the most valuable rows on the board: direct-apply employer jobs. New Enrich-ATS worker (600s, 60 rows/pass) backfills them. Workable via the v1 per-job API (the v3 path 404s), joining description + requirements + benefits because the requirements block is where the matched skills live. Breezy via its schema.org JobPosting block, falling back to the description div — verified that Breezy emits JSON-LD on some postings and not others, and that the div class has to be matched as a whole token ('position-description' also contains 'description') with the closing tag found by counting depth. Measured 11/11 Breezy boards and 3/3 Workable jobs yielding real text; end-to-end test inserts two blind rows and confirms 4000 and 3445 chars land with scored_at cleared for re-judging."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
     {"version": "1.9.5", "date": "2026-04-13", "status": "active", "change": "RELEVANCE HARDENING: Kills the 'Data Analyst filter showing QA Engineer / Web Developer / Marketing' class of leak. Three fixes. (1) AI title-expansion prompt is now STRICT — it forbids generic single-word variants (Developer, Engineer, Manager, Analyst, Designer, Specialist…) and cross-family matches (Data Analyst ≠ Software Engineer, UX Designer ≠ Frontend Dev). (2) New role-family fence in the fuzzy scorer — jobs whose title clearly belongs to a different family than the target are hard-capped at 22 regardless of keyword overlap. Families: data_analytics, data_engineering, data_science, software_engineering, devops_platform, security, design, product, marketing, sales_cs, qa, finance, hr, support. (3) Keywords (Python, SQL, Tableau, AWS) are NO LONGER sent to scrapers as standalone search queries — they bring back noisy SWE/QA/Marketing jobs that merely mention those tools. Keywords still count for relevance scoring. Plus partial_ratio only runs for multi-token targets ≥ 12 chars; old polluted expansions are sanitized on load; int() return for type safety. New POST /api/admin/rescore-all-jobs and /api/admin/re-expand-titles flush the existing noise."},
     {"version": "1.9.4", "date": "2026-04-13", "status": "active", "change": "THREE-PATH AUTO-DISCOVERY: Discovery now runs three paths in order. (1) URL extraction from direct_apply_url/source_url — now also captures JobSpy's job_url_direct field, which is the real employer ATS link for Indeed rows (JobSpy already resolved it during its scrape, we just weren't reading it). (2) HTML second-link fetch — for aggregator URLs (Indeed/LinkedIn/Glassdoor/SimplyHired/Wellfound/BuiltIn/etc), ScoutPilot GETs the listing page and regex-extracts any embedded ATS apply URL. (3) Name-based slug fuzzing — generates slug variants from unknown company names, probes each ATS, and fuzzy-matches the returned board name against the expected company (rapidfuzz threshold 70) to prevent false positives. Negative results cached in discovery_checked.json so repeat probes are free. The list now grows from Indeed/LinkedIn jobs too, not just direct-ATS jobs."},
@@ -887,6 +888,10 @@ async def lifespan(app: FastAPI):
         from scraper import enrich_missing_descriptions
         await enrich_missing_descriptions(limit=12)
 
+    async def _enrich_ats_body():
+        from ats_scraper import enrich_ats_descriptions
+        await enrich_ats_descriptions(limit=60)
+
     async def _scoring_body():
         global last_scrape_result
         from database import get_unscored_jobs
@@ -1016,6 +1021,16 @@ async def lifespan(app: FastAPI):
     # 30-min interval and a 12-row cap because each LinkedIn page is ~300KB
     # through the metered proxy; the queue drains and then idles.
     asyncio.create_task(_worker("Enrich", 1800, _enrich_body))
+    # Workable and Breezy hand back a job LIST with no description field at all,
+    # so 100% of their rows (199 + 287 measured 2026-09-02) were being scored
+    # blind — and a blind row can never trigger the skill-signature rescue.
+    # These are direct-apply employer jobs, the most valuable kind on the board.
+    # Runs 3x more often than the LinkedIn enricher with a 5x cap because the
+    # payloads are ~6KB of JSON and ~22KB of HTML, not a ~300KB LinkedIn render.
+    # Deliberately a backfill and not a fetch-time call: here the row has already
+    # survived the US and title filters, so only jobs that made the board cost
+    # a second request.
+    asyncio.create_task(_worker("Enrich-ATS", 600, _enrich_ats_body))
     asyncio.create_task(_worker("Scoring", 20, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
