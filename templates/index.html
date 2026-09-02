@@ -578,6 +578,15 @@
 </style>
 </head>
 <body>
+<!-- Shown only when the auto-refresh poll gets a 401. Without it an expired
+     session is indistinguishable from an empty board: the poll keeps running,
+     keeps failing, and keeps reporting "no new jobs". -->
+<div id="sessionExpiredBanner" style="display:none;position:sticky;top:0;z-index:9999;
+     background:#b42318;color:#fff;padding:10px 16px;font-size:14px;text-align:center">
+  Your session expired, so this page stopped receiving new jobs.
+  <a href="/login" style="color:#fff;text-decoration:underline;font-weight:600">Sign in again</a>
+  to resume.
+</div>
 <div class="app-shell">
 
   <!-- ═══════ Header ═══════ -->
@@ -615,8 +624,8 @@
         <option value="4">Last 4 Hours</option>
         <option value="12">Last 12 Hours</option>
         <option value="24">Last 24 Hours</option>
-        <option value="72" selected>Last 3 Days</option>
-        <option value="168">Last 7 Days</option>
+        <option value="72">Last 3 Days</option>
+        <option value="168" selected>Last 7 Days</option>
         <option value="720">Last 30 Days</option>
       </select>
     </div>
@@ -669,8 +678,8 @@
     <div class="filter-group">
       <label>Min Relevance</label>
       <select id="filterRelevance" onchange="loadJobs()">
-        <option value="0">Any</option>
-        <option value="50" selected>50+</option>
+        <option value="0" selected>Any</option>
+        <option value="50">50+</option>
         <option value="70">70+</option>
         <option value="80">80+</option>
         <option value="90">90+</option>
@@ -1595,6 +1604,16 @@ async function checkForNewJobs() {
     if (location) params.set('location', location);
 
     var res = await fetch(API + '/api/jobs?' + params);
+    if (res.status === 401) {
+      // The poll ran every 60s and fed {"error":"unauthorized"} straight into
+      // `data.jobs || []`, so an expired session looked exactly like "no new
+      // jobs" — forever. A board that has silently stopped updating reads as a
+      // board with nothing on it.
+      var b = document.getElementById('sessionExpiredBanner');
+      if (b) b.style.display = 'block';
+      if (window._autoRefreshTimer) clearInterval(window._autoRefreshTimer);
+      return;
+    }
     var data = await res.json();
     var latestJobs = data.jobs || [];
 
@@ -2368,7 +2387,7 @@ checkStatus();
 // is fine. New jobs stream in automatically when the user is at the top of the
 // list; a click-bar appears only if they've scrolled down, so their reading
 // position is never disrupted.
-setInterval(checkForNewJobs, 5000);
+window._autoRefreshTimer = setInterval(checkForNewJobs, 5000);
 setInterval(checkStatus, 15000);
 setInterval(loadSkills, 120000);
 
