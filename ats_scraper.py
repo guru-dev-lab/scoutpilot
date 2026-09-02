@@ -1392,11 +1392,21 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     placeholders = ",".join("?" for _ in platforms)
     db = await get_db()
     try:
+        # Deliberately NOT restricted to visible rows, unlike the LinkedIn
+        # enricher. Raising the relevance floor to 50 created a catch-22 for
+        # these two platforms: the row arrives with no description, is therefore
+        # scored on its title alone, that puts it under the floor, it gets
+        # hidden — and a visible-only queue would then never fetch the very
+        # description that could rescue it. A Workable payload is ~6KB and a
+        # Breezy page ~22KB unproxied, so reaching into the hidden band costs
+        # little. The 25-95 band still applies: below 25 the gate or the family
+        # fence rejected the role structurally and no description changes that,
+        # above 95 there is nothing left to prove.
         cur = await db.execute(
             "SELECT id, source, source_url FROM jobs "
             "WHERE (description IS NULL OR description = '') "
             f"  AND source IN ({placeholders}) "
-            "  AND status NOT IN ('hidden') "
+            "  AND status != 'archived' "
             "  AND relevance_score BETWEEN 25 AND 95 "
             "ORDER BY first_seen_at DESC LIMIT ?",
             (*platforms, limit),
@@ -1453,9 +1463,17 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                 async with _write_lock():
                     wdb = await get_db()
                     try:
+                        # status is restored to 'new' alongside scored_at, not
+                        # just cleared: get_unscored_jobs() filters on
+                        # status='new', so a hidden row with scored_at NULL is
+                        # invisible to the Scoring worker and would sit with a
+                        # fresh description and a stale score forever. The next
+                        # scoring pass re-hides it if the description does not
+                        # in fact rescue it.
                         await wdb.execute(
-                            "UPDATE jobs SET description = ?, scored_at = NULL "
-                            "WHERE id = ?",
+                            "UPDATE jobs SET description = ?, scored_at = NULL, "
+                            "status = CASE WHEN status = 'hidden' THEN 'new' "
+                            "ELSE status END WHERE id = ?",
                             (text[:MAX_DESCRIPTION_CHARS], row["id"]),
                         )
                         await wdb.commit()
