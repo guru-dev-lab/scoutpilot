@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.32.0"
+BUILD_VERSION = "2.33.0"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.33.0", "date": "2026-09-02", "status": "active", "change": "THE SCORER FIX DIDN'T REACH THE BOARD. v2.32.0 stopped criminal-intelligence jobs from ever scoring 100 again, but every one already on the board kept its old score and its place at the top: dedup means a job is never re-scraped, and scoring only runs on new rows. The admin rescue endpoint is behind the site password. New startup backfill re-validates every VISIBLE job against the current scorer once per boot — fuzzy only, no AI calls, no tokens — and hides what now falls under the threshold. Only visible rows are scanned because this class of fix can only lower a score, so nothing already hidden can be wrongly hidden. Rows that land in the 25-75 ambiguous band get scored_at cleared instead of being frozen at a fuzzy number, so the classifier still gets the last word where it is owed one; below 25 nothing is owed, because that is exactly what a fresh scrape of the same title would score today. Verified on a database seeded with all 40 rows of the real feed head at their real live scores: 16 hidden, 3 re-queued, and the visible head is now Infrastructure Engineer III, Lead Platform Engineer, Finance and BI Analyst, Customer Insights Analyst rather than Top Secret clearance work."},
     {"version": "2.32.0", "date": "2026-09-02", "status": "active", "change": "THE FEED WAS FULL OF SPY JOBS. Head of the live feed was Criminal Intelligence Analyst (100), Journeyman Intelligence Analyst (100), Cryptocurrency Intelligence Analyst (100), Senior Intelligence Analyst All Source (100) and Intelligence Analyst - Top Secret clearance required (100) — military and law-enforcement intelligence work sitting on top of a Business Intelligence board. Two independent causes, both fixed at the door. (1) The AI had expanded 'Business Intelligence Analyst' to the variant 'Intelligence Analyst'. Shaving a leading qualifier off a title does not give a synonym, it gives a different profession, and the variant then matches EXACTLY so the job scores 100. _sanitize_expansions now rejects any variant that is a contiguous word-subsequence of the target title, and the expansion prompt says so explicitly with this exact example. (2) The modifier gate asked only that a job share ONE word with the profile vocabulary, so 'intelligence' alone cleared it and token_set_ratio carried the job to 88 anyway — and the vocabulary was built from the RAW expansions, so the bad variant had donated a free-standing 'intelligence' to it. The gate now requires the job title to contain EVERY distinctive word of at least one of the profile's roles, and the vocabulary is built from sanitized expansions. Measured on the real feed head: 7 of 40 rows newly hidden, all of them junk (also caught Operations Lead at a grocery warehouse and GIS Programmer), and every legitimate row — Business Intelligence Architect, Finance and BI Analyst, Data Analyst I, Infrastructure Engineer III — kept its exact score. Jobs with a real description keep the skill-signature rescue as an escape hatch. Also: /api/admin/rescore-all-jobs now applies VISIBILITY (status follows relevance_hide_below) instead of only writing a score — visibility here is status-driven, so a rescore alone left poisoned rows sitting at the top of the feed — and its archive threshold defaults to off instead of silently archiving the 25-39 band."},
     {"version": "2.31.0", "date": "2026-09-02", "status": "active", "change": "WORKABLE AND BREEZY WERE 100% BLIND. Both platforms return a job LIST with no description field at all — fetch_workable literally set description to an empty string, and fetch_breezy read an item.description key that Breezy never sends. Every one of their 486 rows (199 workable + 287 breezy) was scored on its title alone, which means the skill-signature rescue — the whole mechanism for catching a role whose title hides it — could never fire for the most valuable rows on the board: direct-apply employer jobs. New Enrich-ATS worker (600s, 60 rows/pass) backfills them. Workable via the v1 per-job API (the v3 path 404s), joining description + requirements + benefits because the requirements block is where the matched skills live. Breezy via its schema.org JobPosting block, falling back to the description div — verified that Breezy emits JSON-LD on some postings and not others, and that the div class has to be matched as a whole token ('position-description' also contains 'description') with the closing tag found by counting depth. Measured 11/11 Breezy boards and 3/3 Workable jobs yielding real text; end-to-end test inserts two blind rows and confirms 4000 and 3445 chars land with scored_at cleared for re-judging."},
     {"version": "1.9.6", "date": "2026-04-13", "status": "active", "change": "SKILL SIGNATURE — description-based rescue for disguised roles. Plus on top of the family fence, not a replacement. Each profile now gets a one-time AI-generated 'skill signature' (foundation skills + toolkit + bonus signals) cached forever in the DB. At runtime, when the family fence would hard-cap a job at 22, the scorer first walks the JOB DESCRIPTION (zero AI cost) looking for signature matches. If it finds enough — e.g. SQL + Tableau + dashboards + KPIs in a Solutions Engineer description — it overrides the fence with a 60-100 score. This rescues legit-but-disguised roles: Solutions Engineer that's really a DA, Product Analyst that's really a DA, Business Systems Analyst + EDW, Growth Specialist with SQL/Looker. Built-in fallback signatures for 9 common roles (Data Analyst, BI Analyst, Data Engineer, Data Scientist, Software Engineer, DevOps, Security, Product Manager, UX Designer) so rescue works even before AI generates a custom one. New POST /api/admin/generate-signatures backfills existing profiles. Total cost: 1 AI call per profile (one-time), 0 AI calls per job. Direct mismatches (SWE / Web Dev / Marketing for a DA profile) still get capped at 22."},
@@ -1036,6 +1037,19 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
     asyncio.create_task(_worker("Discovery-Harvest", 600, _ats_harvest_body))  # URL-harvest: free, high-yield roster growth
+
+    # Re-validate everything currently VISIBLE against the current scorer, once
+    # per boot. A scorer fix does nothing to the backlog on its own: dedup means
+    # a job is never re-scraped, and update_job_scores() only ever runs on new
+    # rows — so when "Intelligence Analyst" was removed as a Business
+    # Intelligence variant, the criminal-intelligence jobs it had already scored
+    # 100 stayed exactly where they were, at the top of the feed.
+    #
+    # Only visible rows need checking. This class of fix can only ever LOWER a
+    # score, so a row already hidden below the threshold cannot be wrongly
+    # hidden; scanning the visible head is both sufficient and ~5x cheaper.
+    # Fuzzy only — no AI calls, no tokens. Runs as a task so it never delays boot.
+    asyncio.create_task(_rescore_visible_backfill())
     logger.info("[Workers] Launched 10 workers — 5 ATS platforms + Light + JobSpy + Scoring + Discovery + Discovery-Workday")
 
     # Keep deep sweep and cleanup on scheduler
@@ -2264,6 +2278,85 @@ async def api_reclassify():
         "hidden": hidden,
         "kept": scored - hidden,
     }
+
+
+async def _rescore_visible_backfill() -> None:
+    """Bring every visible job's score and status in line with today's scorer."""
+    try:
+        from config import settings as _s
+        from database import get_db, _write_lock
+        from ai_engine import (score_relevance_fuzzy, _sanitize_expansions,
+                               _get_fallback_signature)
+        hide_below = _s.relevance_hide_below
+        profiles = await get_profiles()
+        if not profiles:
+            return
+        pds = []
+        for p in profiles:
+            kws = p.get("keywords", [])
+            if isinstance(kws, str):
+                kws = [k.strip() for k in kws.split(",") if k.strip()]
+            pds.append({
+                "title": p["title"],
+                "expanded": _sanitize_expansions(
+                    p["title"], p.get("expanded_titles", []) or []),
+                "keywords": kws,
+                "signature": p.get("skill_signature") or _get_fallback_signature(p["title"]),
+            })
+
+        db = await get_db()
+        try:
+            cur = await db.execute(
+                "SELECT id, title, description FROM jobs "
+                "WHERE status IN ('new', 'viewed')")
+            rows = [(r[0], r[1] or "", r[2] or "") for r in await cur.fetchall()]
+        finally:
+            await db.close()
+
+        changed: list[tuple[int, int]] = []
+        for jid, jtitle, jdesc in rows:
+            best = 0
+            for pd in pds:
+                sc = score_relevance_fuzzy(jtitle, jdesc, pd["title"],
+                                           pd["expanded"], pd["keywords"],
+                                           skill_signature=pd["signature"])
+                if sc > best:
+                    best = sc
+            changed.append((jid, best))
+
+        hidden = 0
+        requeued = 0
+        async with _write_lock():
+            db = await get_db()
+            try:
+                for jid, best in changed:
+                    await db.execute(
+                        "UPDATE jobs SET relevance_score = ? WHERE id = ?",
+                        (best, jid))
+                    if best < hide_below:
+                        await db.execute(
+                            "UPDATE jobs SET status = 'hidden' WHERE id = ?", (jid,))
+                        hidden += 1
+                    elif _AI_BAND_LOW <= best <= _AI_BAND_HIGH:
+                        # This is a fuzzy score, and fuzzy is not the last word
+                        # inside the ambiguous band — the classifier is. Below
+                        # the band nothing is owed: a row the backfill puts at 22
+                        # is exactly what a fresh scrape of that title would
+                        # score today, and the AI is never consulted down there.
+                        # In the band it IS owed a judgement, so hand the row
+                        # back to the Scoring worker instead of freezing it.
+                        await db.execute(
+                            "UPDATE jobs SET scored_at = NULL WHERE id = ?", (jid,))
+                        requeued += 1
+                await db.commit()
+            finally:
+                await db.close()
+        logger.warning(
+            f"[Rescore] re-validated {len(rows)} visible jobs against the current "
+            f"scorer — {hidden} fell below the threshold ({hide_below}) and were "
+            f"hidden, {requeued} re-queued for AI adjudication")
+    except Exception as e:
+        logger.error(f"[Rescore] visible backfill failed: {e}")
 
 
 @app.post("/api/admin/rescore-all-jobs")
