@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.34.5"
+BUILD_VERSION = "2.35.0"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.35.0", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS: found it. The counter added last build settled it — a 20-row pass reported started {workable: 20} but attempted {workable: 9}, so all 20 coroutines ran (the event loop was fine) and the semaphore slots were simply blocked. The slowest completed fetch was 8.2s, yet the pass burned 242s. The write was happening inline while still holding the platform semaphore, and _write_lock() is process-wide with ~18 ATS insert workers queued on it — so a coroutine that had finished its 8-second fetch sat on its slot waiting its turn to write. Network throughput was never the problem; write-lock contention was, and it was being paid once per row. Fetching and writing are now separate phases: fetch concurrently under the semaphores, then write every result in ONE lock acquisition. Per-pass cap back to 60. This is also the honest answer to the earlier guesses — concurrency in 2.34.3 and the smaller bite in 2.34.5 were both treating symptoms, and neither would have fixed it."},
     {"version": "2.34.4", "date": "2026-09-02", "status": "active", "change": "Making Enrich-ATS diagnosable instead of guessing at it. Two passes in a row logged '80 candidates this pass' and then nothing at all — no completion, no error — so every failure mode inside it was invisible, and adding concurrency did not change that. Now: a 240s hard deadline on the pass so it ALWAYS reports, a 12s per-request timeout instead of the sweep's 25s (these are single small payloads, not board sweeps), and the result line carries elapsed time, per-source attempt counts, the slowest request per source and the full reason breakdown. 'Updated none' and 'never finished' are different failures and the old logging could not tell them apart. No theory about the cause is being shipped with this — the next log line decides it."},
     {"version": "2.34.3", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS was never finishing a pass. The live worker logged '80 candidates this pass' and no completion line seven minutes later: it walked the queue strictly one row at a time with a 0.6s sleep between each, and a Workable fetch goes through the rotating residential proxy. Now fetches concurrently per platform — Workable 3, Breezy 4, matching the sweep's own limits and keeping Workable low because its Cloudflare once answered ~40 quick probes with a 24-hour IP ban. The politeness delay moved inside the semaphore so it throttles one platform's rate instead of stalling the whole pass. Measured on 36 real Workable and Breezy jobs: 36/36 enriched in 4.1s, all un-hidden and re-queued. Separately, the startup rescore backfill now plans outside the write lock and applies in batches of 200 — scoring 6,300 rows while holding the process-wide lock was wrong on its own terms, though the logs show it completed in 3s and did NOT cause the one 'database is locked' crash seen after the last deploy. That crash is still unexplained and is being watched."},
     {"version": "2.34.2", "date": "2026-09-02", "status": "active", "change": "The ATS enrichment band was excluding 94% of its own queue. Of 480 description-less Workable and Breezy rows only 29 sat inside the 25-95 window, so the worker was draining at ~6 rows per pass and would never reach the rest. Dropped the lower bound entirely for these two platforms. A sub-25 score normally means the gate or the family fence rejected the role structurally — but that verdict was reached on a BARE TITLE, because the platform never sent a description, and the skill-signature rescue that exists to catch a role its title hides cannot run on a row with no text. Refusing to fetch the description because the description-less score is low is circular. 480 one-time fetches of a 6KB and a 22KB payload is affordable. Cadence 600s to 300s and cap 60 to 80 so the backlog drains in about an hour instead of a day."},
@@ -897,10 +898,10 @@ async def lifespan(app: FastAPI):
 
     async def _enrich_ats_body():
         from ats_scraper import enrich_ats_descriptions
-        # 20, not 80. The last pass issued 10 requests in 272s and hit the
-        # deadline having written nothing — a bite the pass cannot chew is worse
-        # than a small one, because a cancelled pass saves none of its work.
-        await enrich_ats_descriptions(limit=20)
+        # Back to 60 now that writes no longer block the fetch loop. The
+        # earlier cut to 20 was compensating for write-lock contention that has
+        # since been removed at its source.
+        await enrich_ats_descriptions(limit=60)
 
     async def _scoring_body():
         global last_scrape_result

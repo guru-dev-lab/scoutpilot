@@ -1463,7 +1463,6 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     # wider. These match the sweep's own _PLATFORM_CONCURRENCY.
     _ENRICH_CONCURRENCY = {"workable": 3, "breezy": 4}
     sems = {plat: asyncio.Semaphore(n) for plat, n in _ENRICH_CONCURRENCY.items()}
-    lock_ = asyncio.Lock()
     attempted: dict[str, int] = {}
     slowest: dict[str, float] = {}
     # started counts coroutines that got as far as the semaphore; attempted
@@ -1474,14 +1473,14 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     started: dict[str, int] = {}
 
     async def _one(row, direct_client, proxy_client):
-        nonlocal updated
-        started[row.get("source") or "?"] = started.get(row.get("source") or "?", 0) + 1
+        """Fetch one description. Does NOT write — see the note below."""
         source = row.get("source") or ""
+        started[source] = started.get(source, 0) + 1
         url = row.get("source_url") or ""
         enricher = _ATS_ENRICHERS.get(source)
         if not url or not enricher:
             reasons["no_url"] += 1
-            return
+            return None
         sem = sems.get(source)
         client = proxy_client if source in _PROXIED_PLATFORMS else direct_client
         async with (sem or asyncio.Semaphore(1)):
@@ -1499,38 +1498,18 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                             f"[Enrich-ATS] {source} job {row['id']} returned no "
                             f"description text (url={url[:90]}) — payload shape "
                             "may have changed")
-                    return
+                    return None
                 if len(text) < 80:
                     reasons["too_short"] += 1
-                    return
-                async with _write_lock():
-                    wdb = await get_db()
-                    try:
-                        # status is restored to 'new' alongside scored_at, not
-                        # just cleared: get_unscored_jobs() filters on
-                        # status='new', so a hidden row with scored_at NULL is
-                        # invisible to the Scoring worker and would sit with a
-                        # fresh description and a stale score forever. The next
-                        # scoring pass re-hides it if the description does not
-                        # in fact rescue it.
-                        await wdb.execute(
-                            "UPDATE jobs SET description = ?, scored_at = NULL, "
-                            "status = CASE WHEN status = 'hidden' THEN 'new' "
-                            "ELSE status END WHERE id = ?",
-                            (text[:MAX_DESCRIPTION_CHARS], row["id"]),
-                        )
-                        await wdb.commit()
-                    finally:
-                        await wdb.close()
-                async with lock_:
-                    updated += 1
-                    per_source[source] = per_source.get(source, 0) + 1
+                    return None
+                return (row["id"], source, text)
             except Exception as e:
                 reasons["error"] += 1
                 logger.debug(f"[Enrich-ATS] {source} job {row['id']}: {e}")
+                return None
             finally:
                 # Politeness delay held INSIDE the semaphore, so it throttles a
-                # platform's own rate without stalling the whole pass.
+                # platform's own request rate without stalling the whole pass.
                 await asyncio.sleep(0.4)
 
     # Hard deadline on the whole pass. Without it a slow platform silently eats
@@ -1539,16 +1518,51 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     PASS_DEADLINE = 240
     t0 = time.monotonic()
     timed_out = False
+    fetched: list = []
     async with httpx.AsyncClient(**base) as direct_client, \
                httpx.AsyncClient(**proxied) as proxy_client:
         try:
-            await asyncio.wait_for(
+            results = await asyncio.wait_for(
                 asyncio.gather(
                     *[_one(r, direct_client, proxy_client) for r in rows],
                     return_exceptions=True),
                 timeout=PASS_DEADLINE)
+            fetched = [r for r in results if isinstance(r, tuple)]
         except asyncio.TimeoutError:
             timed_out = True
+    fetch_secs = time.monotonic() - t0
+
+    # WRITE AFTER THE FETCHES, IN ONE LOCK ACQUISITION.
+    #
+    # The write used to happen inline, still holding the platform semaphore. But
+    # _write_lock() is process-wide and ~18 ATS insert workers queue on it, so a
+    # coroutine that had finished its 8-second fetch then sat on its semaphore
+    # slot waiting its turn to write. Measured: a 20-row pass issued 9 requests
+    # in 242s — all 20 coroutines started, so the event loop was fine and the
+    # slots were simply blocked — while the slowest completed fetch was 8.2s.
+    # Network throughput was never the problem; write-lock contention was, and
+    # it was being paid per row.
+    async with _write_lock():
+        wdb = await get_db()
+        try:
+            for jid, source, text in fetched:
+                # status is restored to 'new' alongside scored_at, not just
+                # cleared: get_unscored_jobs() filters on status='new', so a
+                # hidden row with scored_at NULL is invisible to the Scoring
+                # worker and would sit with a fresh description and a stale
+                # score forever. The next scoring pass re-hides it if the
+                # description does not in fact rescue it.
+                await wdb.execute(
+                    "UPDATE jobs SET description = ?, scored_at = NULL, "
+                    "status = CASE WHEN status = 'hidden' THEN 'new' "
+                    "ELSE status END WHERE id = ?",
+                    (text[:MAX_DESCRIPTION_CHARS], jid),
+                )
+                updated += 1
+                per_source[source] = per_source.get(source, 0) + 1
+            await wdb.commit()
+        finally:
+            await wdb.close()
     elapsed = time.monotonic() - t0
 
     # Always report, including on the timeout path, and always include the
@@ -1556,6 +1570,7 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     # failures and the old logging could not tell them apart.
     logger.warning(
         f"[Enrich-ATS] {updated}/{len(rows)} descriptions added in {elapsed:.0f}s"
+        f" (fetch {fetch_secs:.0f}s)"
         f"{' (HIT THE ' + str(PASS_DEADLINE) + 's DEADLINE)' if timed_out else ''}"
         f" — by source {per_source or '{}'}, "
         f"started {dict(started)}, attempted {dict(attempted)}, "
