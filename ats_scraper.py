@@ -1399,15 +1399,25 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
         # hidden — and a visible-only queue would then never fetch the very
         # description that could rescue it. A Workable payload is ~6KB and a
         # Breezy page ~22KB unproxied, so reaching into the hidden band costs
-        # little. The 25-95 band still applies: below 25 the gate or the family
-        # fence rejected the role structurally and no description changes that,
-        # above 95 there is nothing left to prove.
+        # little.
+        #
+        # No lower score bound either, which is the opposite of the LinkedIn
+        # enricher. A sub-25 score normally means the gate or the family fence
+        # rejected the role structurally — but that verdict was reached on a BARE
+        # TITLE, because these platforms never sent a description. The
+        # skill-signature rescue exists precisely to catch a role its title
+        # hides, and it cannot run on a row that has no text. Refusing to fetch
+        # the description because the description-less score is low is circular.
+        # Measured: of 480 description-less Workable and Breezy rows, only 29 sat
+        # in the old 25-95 window — the band was excluding 94% of the queue.
+        # 480 one-time fetches of a 6KB and a 22KB payload is affordable; the
+        # upper bound stays because above 95 there is nothing left to prove.
         cur = await db.execute(
             "SELECT id, source, source_url FROM jobs "
             "WHERE (description IS NULL OR description = '') "
             f"  AND source IN ({placeholders}) "
             "  AND status != 'archived' "
-            "  AND relevance_score BETWEEN 25 AND 95 "
+            "  AND relevance_score <= 95 "
             "ORDER BY first_seen_at DESC LIMIT ?",
             (*platforms, limit),
         )
@@ -1419,7 +1429,7 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
         # Say so out loud. A silent 0 is indistinguishable from a worker that
         # never ran — the failure mode that hid fetch_greenhouse for weeks.
         logger.info("[Enrich-ATS] no candidate rows "
-                    f"({'/'.join(platforms)} + no description + visible + relevance 25-95)")
+                    f"({'/'.join(platforms)} + no description + relevance <= 95)")
         return 0
     logger.info(f"[Enrich-ATS] {len(rows)} candidates this pass")
 
