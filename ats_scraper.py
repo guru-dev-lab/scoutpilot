@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -1435,7 +1436,11 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
 
     # Workable is Cloudflare-fronted and already proxied for the sweep; Breezy
     # is not, and a residential hop would only cost bandwidth. Two clients.
-    base: dict = {"timeout": HTTP_TIMEOUT, "headers": HTTP_HEADERS,
+    # 12s, not the sweep's 25s. These are single small payloads, and a pass that
+    # cannot finish tells us nothing: the worker logged "80 candidates" twice and
+    # never once logged a result, so every failure mode was invisible.
+    ENRICH_TIMEOUT = 12
+    base: dict = {"timeout": ENRICH_TIMEOUT, "headers": HTTP_HEADERS,
                   "follow_redirects": True}
     proxied = dict(base)
     if settings.proxy_url:
@@ -1459,6 +1464,8 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     _ENRICH_CONCURRENCY = {"workable": 3, "breezy": 4}
     sems = {plat: asyncio.Semaphore(n) for plat, n in _ENRICH_CONCURRENCY.items()}
     lock_ = asyncio.Lock()
+    attempted: dict[str, int] = {}
+    slowest: dict[str, float] = {}
 
     async def _one(row, direct_client, proxy_client):
         nonlocal updated
@@ -1471,8 +1478,13 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
         sem = sems.get(source)
         client = proxy_client if source in _PROXIED_PLATFORMS else direct_client
         async with (sem or asyncio.Semaphore(1)):
+            attempted[source] = attempted.get(source, 0) + 1
+            _t = time.monotonic()
             try:
                 text = await enricher(client, url)
+                _dt = round(time.monotonic() - _t, 1)
+                if _dt > slowest.get(source, 0):
+                    slowest[source] = _dt
                 if not text:
                     reasons["empty"] += 1
                     if reasons["empty"] == 1:
@@ -1514,16 +1526,30 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                 # platform's own rate without stalling the whole pass.
                 await asyncio.sleep(0.4)
 
+    # Hard deadline on the whole pass. Without it a slow platform silently eats
+    # the worker's interval and the pass never reports at all — which is exactly
+    # what happened, twice.
+    PASS_DEADLINE = 240
+    t0 = time.monotonic()
+    timed_out = False
     async with httpx.AsyncClient(**base) as direct_client, \
                httpx.AsyncClient(**proxied) as proxy_client:
-        await asyncio.gather(
-            *[_one(r, direct_client, proxy_client) for r in rows],
-            return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *[_one(r, direct_client, proxy_client) for r in rows],
+                    return_exceptions=True),
+                timeout=PASS_DEADLINE)
+        except asyncio.TimeoutError:
+            timed_out = True
+    elapsed = time.monotonic() - t0
 
-    if updated:
-        logger.info(f"[Enrich-ATS] {updated}/{len(rows)} descriptions added "
-                    f"(re-queued for scoring) {per_source}")
-    else:
-        logger.warning(
-            f"[Enrich-ATS] processed {len(rows)} rows and updated NONE — {reasons}")
+    # Always report, including on the timeout path, and always include the
+    # per-source timing. "Updated none" and "never finished" are different
+    # failures and the old logging could not tell them apart.
+    logger.warning(
+        f"[Enrich-ATS] {updated}/{len(rows)} descriptions added in {elapsed:.0f}s"
+        f"{' (HIT THE ' + str(PASS_DEADLINE) + 's DEADLINE)' if timed_out else ''}"
+        f" — by source {per_source or '{}'}, "
+        f"attempted {dict(attempted)}, slowest {dict(slowest)}, reasons {reasons}")
     return updated
