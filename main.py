@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.36.0"
+BUILD_VERSION = "2.37.0"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.37.0", "date": "2026-09-02", "status": "active", "change": "Relevance floor 50 -> 30, and work_type now reads the job description. The floor was set to 50 while onsite jobs were still shown; remote-only is already a hard filter removing ~80% of the board, and stacking both took the visible feed from 8,019 to 1,190 in one hour. Two aggressive filters in series is one too many. On work_type: Greenhouse, Workday and SmartRecruiters publish NO workplace field — over 25,000 rows — and were classified from the location string and title alone. The old comment said descriptions were too noisy (remote-friendly culture boilerplate); measured on 5,917 live Greenhouse jobs that does not hold, because scraper._detect_work_type demands strong phrases, kills them next to a conditional, and will not let prose override a concrete City, ST. Disagreements on 4,390 US rows: onsite->hybrid 115, remote->hybrid 15, onsite->remote 6. Hybrid was badly undercounted (38 vs a true 168); the remote feed changes by only -15/+6 of 484. CORRECTION to what I reported earlier: the ~130 figure I gave for jobs mislabelled Remote was wrong — it was mostly onsite->hybrid, which never touched the remote view. The real remote error is 15, about 3%. The startup repair also used to look ONLY at rows already tagged remote and could only demote them, so onsite rows whose JD said fully remote stayed onsite forever; it now corrects in every direction, over rows that have a description to judge on, with batched writes outside the lock. Lifted out of a closure so it is testable."},
     {"version": "2.36.0", "date": "2026-09-02", "status": "active", "change": "REMOTE-ONLY BOARD, owner's call. Implemented strictly as a feed filter: an unset work_type now resolves to remote instead of all. Onsite and hybrid rows keep being scraped, scored and stored — they are simply not shown. This must NEVER become a scrape-time discard again: every ATS fetcher used to gate on remote and hardcode work_type=remote on the survivors, which threw away every onsite and hybrid US job across 4,374 companies (greenhouse went 0 to 499 per company when that was removed in v2.12). Flip settings.remote_only or set REMOTE_ONLY=false on Railway and the whole board returns with no re-scrape. The All Types dropdown option now sends work_type=all rather than an empty string, so it stays a live control instead of a button that silently does nothing — an empty value cannot mean both no-preference and deliberately-everything. Verified through the real HTTP endpoint: default returns remote only, all returns all four, hybrid and onsite each return their own, and no row is deleted."},
     {"version": "2.35.0", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS: found it. The counter added last build settled it — a 20-row pass reported started {workable: 20} but attempted {workable: 9}, so all 20 coroutines ran (the event loop was fine) and the semaphore slots were simply blocked. The slowest completed fetch was 8.2s, yet the pass burned 242s. The write was happening inline while still holding the platform semaphore, and _write_lock() is process-wide with ~18 ATS insert workers queued on it — so a coroutine that had finished its 8-second fetch sat on its slot waiting its turn to write. Network throughput was never the problem; write-lock contention was, and it was being paid once per row. Fetching and writing are now separate phases: fetch concurrently under the semaphores, then write every result in ONE lock acquisition. Per-pass cap back to 60. This is also the honest answer to the earlier guesses — concurrency in 2.34.3 and the smaller bite in 2.34.5 were both treating symptoms, and neither would have fixed it."},
     {"version": "2.34.4", "date": "2026-09-02", "status": "active", "change": "Making Enrich-ATS diagnosable instead of guessing at it. Two passes in a row logged '80 candidates this pass' and then nothing at all — no completion, no error — so every failure mode inside it was invisible, and adding concurrency did not change that. Now: a 240s hard deadline on the pass so it ALWAYS reports, a 12s per-request timeout instead of the sweep's 25s (these are single small payloads, not board sweeps), and the result line carries elapsed time, per-source attempt counts, the slowest request per source and the full reason breakdown. 'Updated none' and 'never finished' are different failures and the old logging could not tell them apart. No theory about the cause is being shipped with this — the next log line decides it."},
@@ -1108,44 +1109,8 @@ async def lifespan(app: FastAPI):
             await db.close()
     asyncio.create_task(_fix_fake_posted_at())
 
-    # Re-detect work_type for ALL jobs currently tagged as remote
-    # Catches false positives from earlier detection logic
-    async def _fix_work_types():
-        from database import get_db
-        from scraper import _detect_work_type
-        db = await get_db()
-        try:
-            cursor = await db.execute(
-                "SELECT id, title, location, description, source, work_type "
-                "FROM jobs WHERE work_type = 'remote'"
-            )
-            rows = await cursor.fetchall()
-            fixed = 0
-            for row in rows:
-                new_type = _detect_work_type({
-                    "title": row[1] or "",
-                    "location": row[2] or "",
-                    "description": row[3] or "",
-                    "source": row[4] or "",
-                    # These rows are all currently work_type='remote', so preserve
-                    # the platform's remote flag. This lets detection keep genuinely
-                    # remote roles (whose stored text lacks the word "remote") and
-                    # only downgrade the ones with a clear onsite signal — instead
-                    # of blanket-demoting every LinkedIn job saved without a JD.
-                    "is_remote": 1,
-                })
-                if new_type != "remote":
-                    await db.execute(
-                        "UPDATE jobs SET work_type = ?, is_remote = 0 WHERE id = ?",
-                        (new_type, row[0]),
-                    )
-                    fixed += 1
-            await db.commit()
-            logger.info(f"[Startup] Re-detected work_type: {fixed}/{len(rows)} jobs changed from remote → onsite/hybrid")
-        except Exception as e:
-            logger.error(f"[Startup] Fix work_type failed: {e}")
-        finally:
-            await db.close()
+    # Re-derive work_type for every row that has a description to judge on.
+    # See _fix_work_types for the measurement behind it.
     asyncio.create_task(_fix_work_types())
 
     yield
@@ -2299,6 +2264,71 @@ async def api_reclassify():
         "hidden": hidden,
         "kept": scored - hidden,
     }
+
+
+async def _fix_work_types() -> None:
+    """Re-derive work_type for every row that has a description to judge on.
+
+    This used to look ONLY at rows already tagged 'remote', and could only ever
+    demote them. That made two whole classes of error unfixable: an onsite row
+    whose JD says "this role is fully remote" stayed onsite forever, and an
+    onsite row whose JD says "in-office 3 days a week" never became hybrid.
+    Measured on 5,917 live Greenhouse jobs, the onsite->hybrid correction alone
+    was 115 of 4,390 US rows — hybrid was undercounted 38 against a true 168.
+
+    Restricted to rows WITH a description, because _detect_work_type falls back
+    to onsite on silence: re-running it over a description-less LinkedIn row
+    would blanket-demote genuinely remote jobs.
+
+    Detection runs outside the write lock and the writes go in batches — a
+    per-row write here would queue behind ~18 ATS insert workers on the
+    process-wide lock, which is exactly how the ATS enricher lost 90% of its
+    throughput.
+
+    Module-level rather than a closure inside the startup routine so it can be
+    driven by a test; as a nested function it was unreachable.
+    """
+    from database import get_db, _write_lock
+    from scraper import _detect_work_type
+    try:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id, title, location, description, source, work_type "
+                "FROM jobs WHERE description IS NOT NULL AND description != ''")
+            rows = [(r[0], r[1] or "", r[2] or "", r[3] or "", r[4] or "", r[5] or "")
+                    for r in await cursor.fetchall()]
+        finally:
+            await db.close()
+
+        changes = []
+        for jid, title, loc, desc, source, current in rows:
+            new_type = _detect_work_type({
+                "title": title, "location": loc,
+                "description": desc, "source": source,
+            })
+            if new_type != current:
+                changes.append((jid, new_type))
+
+        CHUNK = 200
+        for i in range(0, len(changes), CHUNK):
+            async with _write_lock():
+                db = await get_db()
+                try:
+                    for jid, new_type in changes[i:i + CHUNK]:
+                        await db.execute(
+                            "UPDATE jobs SET work_type = ?, is_remote = ? WHERE id = ?",
+                            (new_type, 1 if new_type == "remote" else 0, jid))
+                    await db.commit()
+                finally:
+                    await db.close()
+            await asyncio.sleep(0)
+        from collections import Counter
+        logger.warning(
+            f"[Startup] work_type re-derived on {len(rows)} rows with a description "
+            f"— {len(changes)} corrected {dict(Counter(c[1] for c in changes))}")
+    except Exception as e:
+        logger.error(f"[Startup] Fix work_type failed: {e}")
 
 
 async def _rescore_visible_backfill() -> None:

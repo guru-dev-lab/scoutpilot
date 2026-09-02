@@ -148,15 +148,35 @@ def is_remote_string(s: str) -> bool:
 # Company list loader
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _derive_work_type(platform_field: str, location: str, title: str = "") -> tuple[str, bool]:
+def _derive_work_type(platform_field: str, location: str, title: str = "",
+                      description: str = "") -> tuple[str, bool]:
     """Return (work_type, is_remote) for an ATS row.
 
     Every ATS fetcher used to hardcode work_type="remote" because they only
     ever kept remote jobs. Now that onsite and hybrid rows are kept too, the
-    label has to come from real data. Lever/Ashby/Workable publish an explicit
-    workplace field; the rest only give a location string, so fall back to
-    reading that. Never guess "remote" from silence — an unlabelled row with a
-    city in it is onsite.
+    label has to come from real data. Lever/Ashby/Workable/Recruitee/Breezy
+    publish an explicit workplace field and it is trusted outright.
+
+    Greenhouse, Workday and SmartRecruiters publish NO workplace field — that is
+    over 25,000 of the board's rows — and this used to classify them from the
+    location string and title alone, ignoring the description entirely. The old
+    comment justified that by saying descriptions are full of "remote-friendly
+    culture" boilerplate that would mislabel onsite roles as remote.
+
+    Measured on 5,917 live Greenhouse jobs, that concern does not hold, because
+    scraper._detect_work_type was built for exactly this problem: it demands
+    strong phrases ("this role is fully remote", "US - Remote Eligible"), kills
+    even a strong phrase when a conditional sits next to it ("remote may be
+    available"), and refuses to let prose alone override a concrete "City, ST".
+    Against the old rule it disagreed on 136 of 4,390 US rows:
+        onsite -> hybrid  115    (a real gain; hybrid was undercounted 38 -> 168)
+        remote -> hybrid   15    (mislabelled as remote, hybrid in the JD)
+        onsite -> remote    6    (genuinely remote, missed by location alone)
+    So the net effect on the remote feed is small — minus 15, plus 6 out of 484,
+    about 3% — and every flip inspected was correct. The big win is hybrid.
+
+    Never guess "remote" from silence: _detect_work_type's own fallback is
+    onsite, so an unlabelled row with a city in it stays onsite.
     """
     f = (platform_field or "").strip().lower().replace("_", "").replace("-", "")
     if f in ("remote", "fullyremote", "remotefirst"):
@@ -166,12 +186,15 @@ def _derive_work_type(platform_field: str, location: str, title: str = "") -> tu
     if f in ("onsite", "inoffice", "office", "inperson"):
         return "onsite", False
 
-    blob = f"{location} {title}".lower()
-    if "hybrid" in blob:
-        return "hybrid", False
-    if is_remote_string(blob):
-        return "remote", True
-    return "onsite", False
+    # No workplace field. Read everything, including the description.
+    from scraper import _detect_work_type
+    wt = _detect_work_type({
+        "title": title or "",
+        "location": location or "",
+        "description": description or "",
+        "source": "ats",
+    })
+    return wt, wt == "remote"
 
 
 def load_companies() -> list[dict]:
@@ -315,11 +338,12 @@ async def fetch_greenhouse(
             clean_desc = re.sub(r"<[^>]+>", " ", content_html)
             clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
-            # Greenhouse publishes no workplace field, so classify from the
-            # location string and title. The description is deliberately not
-            # used: it is full of boilerplate like "remote-friendly culture"
-            # that would mislabel plenty of onsite roles as remote.
-            _gh_wt, _gh_remote = _derive_work_type("", loc_name, title)
+            # Greenhouse publishes no workplace field. The description IS used
+            # now — see _derive_work_type for the measurement that overturned
+            # the old "boilerplate would mislabel onsite roles" reasoning.
+            # Greenhouse is the largest source on the board at ~16,000 rows, so
+            # it is where this is worth the most.
+            _gh_wt, _gh_remote = _derive_work_type("", loc_name, title, clean_desc)
 
             job = {
                 "title": title,

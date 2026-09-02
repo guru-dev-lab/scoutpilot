@@ -52,11 +52,16 @@ class Settings(BaseSettings):
     # fence and was plausible. That reasoning leaned on a fence that was leakier
     # than I thought — v2.32.0 found "Criminal Intelligence Analyst" scoring 100,
     # never mind 25. With the gate now requiring a whole role identity, the
-    # owner's call (2026-09-02) is to stop spending attention on the weak band at
-    # all: "the job board result is aweful". 50 is the floor for a solid match.
-    # One number, reversible — the startup backfill re-applies it in both
-    # directions on the next boot.
-    relevance_hide_below: int = 50
+    # owner's call (2026-09-02) was to stop spending attention on the weak band
+    # at all: "the job board result is aweful". Set to 50.
+    #
+    # Then lowered to 30 the same afternoon, once the board went remote-only.
+    # 50 was chosen while onsite jobs were still shown, and remote-only is
+    # already a hard filter that removes ~80% of the board on its own — stacking
+    # both cut the visible feed from 8,019 to 1,190 in one hour. Two aggressive
+    # filters in series is one too many. One number, reversible: the startup
+    # backfill re-applies it in both directions on the next boot.
+    relevance_hide_below: int = 30
 
     # Remote-only board. Owner's call 2026-09-02.
     #
