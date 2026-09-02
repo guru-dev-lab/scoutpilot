@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.34.2"
+BUILD_VERSION = "2.34.3"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.34.3", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS was never finishing a pass. The live worker logged '80 candidates this pass' and no completion line seven minutes later: it walked the queue strictly one row at a time with a 0.6s sleep between each, and a Workable fetch goes through the rotating residential proxy. Now fetches concurrently per platform — Workable 3, Breezy 4, matching the sweep's own limits and keeping Workable low because its Cloudflare once answered ~40 quick probes with a 24-hour IP ban. The politeness delay moved inside the semaphore so it throttles one platform's rate instead of stalling the whole pass. Measured on 36 real Workable and Breezy jobs: 36/36 enriched in 4.1s, all un-hidden and re-queued. Separately, the startup rescore backfill now plans outside the write lock and applies in batches of 200 — scoring 6,300 rows while holding the process-wide lock was wrong on its own terms, though the logs show it completed in 3s and did NOT cause the one 'database is locked' crash seen after the last deploy. That crash is still unexplained and is being watched."},
     {"version": "2.34.2", "date": "2026-09-02", "status": "active", "change": "The ATS enrichment band was excluding 94% of its own queue. Of 480 description-less Workable and Breezy rows only 29 sat inside the 25-95 window, so the worker was draining at ~6 rows per pass and would never reach the rest. Dropped the lower bound entirely for these two platforms. A sub-25 score normally means the gate or the family fence rejected the role structurally — but that verdict was reached on a BARE TITLE, because the platform never sent a description, and the skill-signature rescue that exists to catch a role its title hides cannot run on a row with no text. Refusing to fetch the description because the description-less score is low is circular. 480 one-time fetches of a 6KB and a 22KB payload is affordable. Cadence 600s to 300s and cap 60 to 80 so the backlog drains in about an hour instead of a day."},
     {"version": "2.34.1", "date": "2026-09-02", "status": "active", "change": "Fixed a catch-22 the new relevance floor created for Workable and Breezy. Those platforms ship jobs with no description, so the row is scored on its title alone, which now puts it under 50 and hides it — and the enrichment queue only looked at VISIBLE rows, so it could never fetch the description that would rescue it. The ATS enricher now reaches into the hidden band too (unlike the LinkedIn one, which stays visible-only because each page is ~300KB through the metered proxy; a Workable payload is ~6KB and Breezy is unproxied). It also restores status to new alongside clearing scored_at, because get_unscored_jobs filters on status=new — a hidden row with a fresh description and a null scored_at is invisible to the Scoring worker and would keep its stale score forever. The next pass re-hides it if the description does not actually rescue it."},
     {"version": "2.34.0", "date": "2026-09-02", "status": "active", "change": "RELEVANCE FLOOR 25 -> 50, owner's call. The 25 floor was set on Aug 28 reasoning that the role-family fence hard-caps real mismatches at 22, so anything above had passed a real test — but v2.32.0 found that fence leaking jobs at 100, so the premise was wrong. Sort stays JUST FOUND: newest discovery first, now among solid matches only. The startup backfill was also rebuilt to stop conflating two different jobs. RE-JUDGING only touches rows stored ABOVE the 25-75 AI band, because those carry a pure fuzzy score the classifier never saw — exactly the kind Intelligence Analyst inflated to 100. Rows at or below 75 had AI input and keep it; overwriting a judgement with a title heuristic is a downgrade. A re-judged row that lands under 25 was structurally rejected by the gate or the fence and is hidden; one that lands in the band gets scored_at cleared and stays VISIBLE while it waits, because get_unscored_jobs only picks up status=new and hiding it first would strand it forever. APPLYING THE THRESHOLD is separate and needs no rescoring — it is the only thing that acts on a hide_below change, since dedup means an existing job is never re-scraped. Verified on the pre-fix feed: 39 visible -> 22, 11 structurally rejected, 6 hidden by the new floor, everything still showing scores 62 or better."},
@@ -2342,46 +2343,67 @@ async def _rescore_visible_backfill() -> None:
         finally:
             await db.close()
 
-        rejudged = 0
-        hidden = 0
-        requeued = 0
-        threshold_hidden = 0
-        async with _write_lock():
-            db = await get_db()
-            try:
-                for jid, jtitle, jdesc, stored in rows:
-                    score = stored
-                    if stored > _AI_BAND_HIGH:
-                        best = 0
-                        for pd in pds:
-                            sc = score_relevance_fuzzy(
-                                jtitle, jdesc, pd["title"], pd["expanded"],
-                                pd["keywords"], skill_signature=pd["signature"])
-                            if sc > best:
-                                best = sc
-                        if best != stored:
+        # PLAN OUTSIDE THE LOCK. Scoring 6,300 rows against 3 profiles while
+        # holding the process-wide write lock starved every other writer and
+        # crashed the Scoring worker with "database is locked" — WAL allows a
+        # single writer, and ~18 workers were queued behind a lock this pass held
+        # for its entire duration. Nothing here touches the database.
+        rejudged = hidden = requeued = threshold_hidden = 0
+        plan: list[tuple[int, int | None, str | None, bool]] = []
+        for jid, jtitle, jdesc, stored in rows:
+            new_score: int | None = None
+            score = stored
+            if stored > _AI_BAND_HIGH:
+                best = 0
+                for pd in pds:
+                    sc = score_relevance_fuzzy(
+                        jtitle, jdesc, pd["title"], pd["expanded"],
+                        pd["keywords"], skill_signature=pd["signature"])
+                    if sc > best:
+                        best = sc
+                if best != stored:
+                    new_score = best
+                    rejudged += 1
+                score = best
+                if _AI_BAND_LOW <= best <= _AI_BAND_HIGH:
+                    requeued += 1
+                    plan.append((jid, new_score, None, True))
+                    continue            # leave visible for the Scoring worker
+                if best < _AI_BAND_LOW:
+                    hidden += 1
+                    plan.append((jid, new_score, "hidden", False))
+                    continue
+            if score < hide_below:
+                threshold_hidden += 1
+                plan.append((jid, new_score, "hidden", False))
+            elif new_score is not None:
+                plan.append((jid, new_score, None, False))
+            # rows needing no change are simply not planned
+
+        # APPLY IN SMALL BATCHES, releasing the lock between each so the ATS
+        # workers, the enrichers and the Scoring worker all get their turn.
+        CHUNK = 200
+        db_writes = 0
+        for i in range(0, len(plan), CHUNK):
+            async with _write_lock():
+                db = await get_db()
+                try:
+                    for jid, new_score, status, requeue in plan[i:i + CHUNK]:
+                        if new_score is not None:
                             await db.execute(
                                 "UPDATE jobs SET relevance_score = ? WHERE id = ?",
-                                (best, jid))
-                            rejudged += 1
-                        score = best
-                        if _AI_BAND_LOW <= best <= _AI_BAND_HIGH:
+                                (new_score, jid))
+                        if status:
+                            await db.execute(
+                                "UPDATE jobs SET status = ? WHERE id = ?", (status, jid))
+                        if requeue:
                             await db.execute(
                                 "UPDATE jobs SET scored_at = NULL WHERE id = ?", (jid,))
-                            requeued += 1
-                            continue    # leave visible for the Scoring worker
-                        if best < _AI_BAND_LOW:
-                            await db.execute(
-                                "UPDATE jobs SET status = 'hidden' WHERE id = ?", (jid,))
-                            hidden += 1
-                            continue
-                    if score < hide_below:
-                        await db.execute(
-                            "UPDATE jobs SET status = 'hidden' WHERE id = ?", (jid,))
-                        threshold_hidden += 1
-                await db.commit()
-            finally:
-                await db.close()
+                        db_writes += 1
+                    await db.commit()
+                finally:
+                    await db.close()
+            await asyncio.sleep(0)      # yield to the other workers
         logger.warning(
             f"[Rescore] {len(rows)} visible jobs checked — {rejudged} re-judged "
             f"(never AI-scored), {hidden} structurally rejected and hidden, "

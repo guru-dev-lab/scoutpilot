@@ -1446,17 +1446,31 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                                "error": 0, "no_url": 0}
     per_source: dict[str, int] = {}
 
-    async with httpx.AsyncClient(**base) as direct_client, \
-               httpx.AsyncClient(**proxied) as proxy_client:
-        for row in rows:
-            source = row.get("source") or ""
-            url = row.get("source_url") or ""
-            enricher = _ATS_ENRICHERS.get(source)
-            if not url or not enricher:
-                reasons["no_url"] += 1
-                continue
-            client = (proxy_client if source in _PROXIED_PLATFORMS
-                      else direct_client)
+    # Fetch concurrently, per platform. The first version walked the queue
+    # strictly one row at a time with a 0.6s sleep between each; a pass of 80
+    # rows never finished, because a Workable fetch goes through the rotating
+    # residential proxy and takes seconds. The live worker logged "80 candidates
+    # this pass" and no completion line 7 minutes later.
+    #
+    # Concurrency is per platform and deliberately low for Workable: its
+    # Cloudflare answered ~40 quick probes with `retry-after: 86287`, a 24-hour
+    # IP ban. Breezy is neither proxied nor Cloudflare-fronted, so it can go
+    # wider. These match the sweep's own _PLATFORM_CONCURRENCY.
+    _ENRICH_CONCURRENCY = {"workable": 3, "breezy": 4}
+    sems = {plat: asyncio.Semaphore(n) for plat, n in _ENRICH_CONCURRENCY.items()}
+    lock_ = asyncio.Lock()
+
+    async def _one(row, direct_client, proxy_client):
+        nonlocal updated
+        source = row.get("source") or ""
+        url = row.get("source_url") or ""
+        enricher = _ATS_ENRICHERS.get(source)
+        if not url or not enricher:
+            reasons["no_url"] += 1
+            return
+        sem = sems.get(source)
+        client = proxy_client if source in _PROXIED_PLATFORMS else direct_client
+        async with (sem or asyncio.Semaphore(1)):
             try:
                 text = await enricher(client, url)
                 if not text:
@@ -1466,10 +1480,10 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                             f"[Enrich-ATS] {source} job {row['id']} returned no "
                             f"description text (url={url[:90]}) — payload shape "
                             "may have changed")
-                    continue
+                    return
                 if len(text) < 80:
                     reasons["too_short"] += 1
-                    continue
+                    return
                 async with _write_lock():
                     wdb = await get_db()
                     try:
@@ -1489,12 +1503,22 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
                         await wdb.commit()
                     finally:
                         await wdb.close()
-                updated += 1
-                per_source[source] = per_source.get(source, 0) + 1
+                async with lock_:
+                    updated += 1
+                    per_source[source] = per_source.get(source, 0) + 1
             except Exception as e:
                 reasons["error"] += 1
                 logger.debug(f"[Enrich-ATS] {source} job {row['id']}: {e}")
-            await asyncio.sleep(0.6)
+            finally:
+                # Politeness delay held INSIDE the semaphore, so it throttles a
+                # platform's own rate without stalling the whole pass.
+                await asyncio.sleep(0.4)
+
+    async with httpx.AsyncClient(**base) as direct_client, \
+               httpx.AsyncClient(**proxied) as proxy_client:
+        await asyncio.gather(
+            *[_one(r, direct_client, proxy_client) for r in rows],
+            return_exceptions=True)
 
     if updated:
         logger.info(f"[Enrich-ATS] {updated}/{len(rows)} descriptions added "
