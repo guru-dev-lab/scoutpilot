@@ -19,7 +19,7 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.34.4"
+BUILD_VERSION = "2.34.5"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
     {"version": "2.34.4", "date": "2026-09-02", "status": "active", "change": "Making Enrich-ATS diagnosable instead of guessing at it. Two passes in a row logged '80 candidates this pass' and then nothing at all — no completion, no error — so every failure mode inside it was invisible, and adding concurrency did not change that. Now: a 240s hard deadline on the pass so it ALWAYS reports, a 12s per-request timeout instead of the sweep's 25s (these are single small payloads, not board sweeps), and the result line carries elapsed time, per-source attempt counts, the slowest request per source and the full reason breakdown. 'Updated none' and 'never finished' are different failures and the old logging could not tell them apart. No theory about the cause is being shipped with this — the next log line decides it."},
@@ -897,7 +897,10 @@ async def lifespan(app: FastAPI):
 
     async def _enrich_ats_body():
         from ats_scraper import enrich_ats_descriptions
-        await enrich_ats_descriptions(limit=80)
+        # 20, not 80. The last pass issued 10 requests in 272s and hit the
+        # deadline having written nothing — a bite the pass cannot chew is worse
+        # than a small one, because a cancelled pass saves none of its work.
+        await enrich_ats_descriptions(limit=20)
 
     async def _scoring_body():
         global last_scrape_result

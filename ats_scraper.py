@@ -1466,9 +1466,16 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     lock_ = asyncio.Lock()
     attempted: dict[str, int] = {}
     slowest: dict[str, float] = {}
+    # started counts coroutines that got as far as the semaphore; attempted
+    # counts those that got THROUGH it and issued a request. The gap between
+    # them is the whole diagnosis: 80 started and 10 attempted means requests
+    # are hanging and holding slots, while 10 started means the event loop
+    # itself is starved and the coroutines never ran at all.
+    started: dict[str, int] = {}
 
     async def _one(row, direct_client, proxy_client):
         nonlocal updated
+        started[row.get("source") or "?"] = started.get(row.get("source") or "?", 0) + 1
         source = row.get("source") or ""
         url = row.get("source_url") or ""
         enricher = _ATS_ENRICHERS.get(source)
@@ -1551,5 +1558,6 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
         f"[Enrich-ATS] {updated}/{len(rows)} descriptions added in {elapsed:.0f}s"
         f"{' (HIT THE ' + str(PASS_DEADLINE) + 's DEADLINE)' if timed_out else ''}"
         f" — by source {per_source or '{}'}, "
-        f"attempted {dict(attempted)}, slowest {dict(slowest)}, reasons {reasons}")
+        f"started {dict(started)}, attempted {dict(attempted)}, "
+        f"slowest {dict(slowest)}, reasons {reasons}")
     return updated
