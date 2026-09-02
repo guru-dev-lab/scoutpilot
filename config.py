@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     # directions on the next boot.
     relevance_hide_below: int = 50
 
+    # Remote-only board. Owner's call 2026-09-02.
+    #
+    # This is a FEED FILTER and nothing else. It must never become a scrape-time
+    # discard: every ATS fetcher used to gate on remote and hardcode
+    # work_type="remote" on whatever survived, which threw away every onsite and
+    # hybrid US job from 4,374 companies and made work-type grouping meaningless
+    # (greenhouse went 0 -> 499 per company when that was removed in v2.12).
+    # Onsite and hybrid rows keep being scraped, scored and stored; they are
+    # simply not shown. Flip this to False, or set REMOTE_ONLY=false on Railway,
+    # and the whole board comes back with no re-scrape.
+    remote_only: bool = True
+
     # Scraping
     scrape_interval_minutes: int = 5
 

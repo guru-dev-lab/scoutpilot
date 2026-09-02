@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.35.0"
+BUILD_VERSION = "2.36.0"
 BUILD_DATE = "2026-09-02"
 RECENT_CHANGES = [
+    {"version": "2.36.0", "date": "2026-09-02", "status": "active", "change": "REMOTE-ONLY BOARD, owner's call. Implemented strictly as a feed filter: an unset work_type now resolves to remote instead of all. Onsite and hybrid rows keep being scraped, scored and stored — they are simply not shown. This must NEVER become a scrape-time discard again: every ATS fetcher used to gate on remote and hardcode work_type=remote on the survivors, which threw away every onsite and hybrid US job across 4,374 companies (greenhouse went 0 to 499 per company when that was removed in v2.12). Flip settings.remote_only or set REMOTE_ONLY=false on Railway and the whole board returns with no re-scrape. The All Types dropdown option now sends work_type=all rather than an empty string, so it stays a live control instead of a button that silently does nothing — an empty value cannot mean both no-preference and deliberately-everything. Verified through the real HTTP endpoint: default returns remote only, all returns all four, hybrid and onsite each return their own, and no row is deleted."},
     {"version": "2.35.0", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS: found it. The counter added last build settled it — a 20-row pass reported started {workable: 20} but attempted {workable: 9}, so all 20 coroutines ran (the event loop was fine) and the semaphore slots were simply blocked. The slowest completed fetch was 8.2s, yet the pass burned 242s. The write was happening inline while still holding the platform semaphore, and _write_lock() is process-wide with ~18 ATS insert workers queued on it — so a coroutine that had finished its 8-second fetch sat on its slot waiting its turn to write. Network throughput was never the problem; write-lock contention was, and it was being paid once per row. Fetching and writing are now separate phases: fetch concurrently under the semaphores, then write every result in ONE lock acquisition. Per-pass cap back to 60. This is also the honest answer to the earlier guesses — concurrency in 2.34.3 and the smaller bite in 2.34.5 were both treating symptoms, and neither would have fixed it."},
     {"version": "2.34.4", "date": "2026-09-02", "status": "active", "change": "Making Enrich-ATS diagnosable instead of guessing at it. Two passes in a row logged '80 candidates this pass' and then nothing at all — no completion, no error — so every failure mode inside it was invisible, and adding concurrency did not change that. Now: a 240s hard deadline on the pass so it ALWAYS reports, a 12s per-request timeout instead of the sweep's 25s (these are single small payloads, not board sweeps), and the result line carries elapsed time, per-source attempt counts, the slowest request per source and the full reason breakdown. 'Updated none' and 'never finished' are different failures and the old logging could not tell them apart. No theory about the cause is being shipped with this — the next log line decides it."},
     {"version": "2.34.3", "date": "2026-09-02", "status": "active", "change": "Enrich-ATS was never finishing a pass. The live worker logged '80 candidates this pass' and no completion line seven minutes later: it walked the queue strictly one row at a time with a 0.6s sleep between each, and a Workable fetch goes through the rotating residential proxy. Now fetches concurrently per platform — Workable 3, Breezy 4, matching the sweep's own limits and keeping Workable low because its Cloudflare once answered ~40 quick probes with a 24-hour IP ban. The politeness delay moved inside the semaphore so it throttles one platform's rate instead of stalling the whole pass. Measured on 36 real Workable and Breezy jobs: 36/36 enriched in 4.1s, all un-hidden and re-queued. Separately, the startup rescore backfill now plans outside the write lock and applies in batches of 200 — scoring 6,300 rows while holding the process-wide lock was wrong on its own terms, though the logs show it completed in 3s and did NOT cause the one 'database is locked' crash seen after the last deploy. That crash is still unexplained and is being watched."},
@@ -1494,6 +1495,17 @@ async def api_get_jobs(
     profile: str = "",
 ):
     try:
+        # Remote-only board: an unset work_type means remote, not "all".
+        # "all" is the explicit escape hatch, so the dropdown's All Types option
+        # is still a live control rather than a button that silently does
+        # nothing — an empty string could not mean both "no preference" and
+        # "deliberately everything".
+        from config import settings as _rs
+        if work_type == "all":
+            work_type = ""
+        elif _rs.remote_only and not work_type:
+            work_type = "remote"
+
         # Parse profile — supports comma-separated IDs for multi-select
         profile_ids = []
         for chunk in profile.split(","):
