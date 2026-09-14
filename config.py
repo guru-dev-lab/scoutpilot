@@ -1,8 +1,18 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    # ── Spend kill switches (owner's order, 2026-09-14: nothing may cost money) ──
+    # Both default OFF. While off, the matching secret is blanked at load time,
+    # so every `if not settings.anthropic_api_key` / `if settings.proxy_url`
+    # guard in the codebase sees "unset" even if the variable is still present
+    # on Railway. One rule, one place. Set AI_ENABLED=true / PROXY_ENABLED=true
+    # on Railway to switch spend back on deliberately.
+    ai_enabled: bool = False
+    proxy_enabled: bool = False
+
     # AI
     anthropic_api_key: str = ""
 
@@ -87,6 +97,14 @@ class Settings(BaseSettings):
 
     # Site access
     site_password: str = ""  # Set to require password; empty = open access
+
+    @model_validator(mode="after")
+    def _apply_spend_switches(self):
+        if not self.ai_enabled:
+            self.anthropic_api_key = ""
+        if not self.proxy_enabled:
+            self.proxy_url = ""
+        return self
 
     class Config:
         env_file = ".env"
