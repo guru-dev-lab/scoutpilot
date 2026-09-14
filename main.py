@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.38.0"
-BUILD_DATE = "2026-09-02"
+BUILD_VERSION = "2.39.0"
+BUILD_DATE = "2026-09-14"
 RECENT_CHANGES = [
+    {"version": "2.39.0", "date": "2026-09-14", "status": "active", "change": "COST CUT, owner's call: nothing in this app may spend money. The DataImpulse residential proxy had run dry — every LinkedIn guest request was answering 407 TRAFFIC_EXHAUSTED, so the three LinkedIn workers and the LinkedIn description enricher were burning cycles for zero rows. PROXY_URL and ANTHROPIC_API_KEY are removed from Railway. Code-side: the LinkedIn workers and the LinkedIn enricher now check for a proxy before doing anything and skip with a single log line when there is none (Railway is a datacenter IP, which LinkedIn answers with 403 outright — measured 1 job ever without a proxy — so a proxyless cycle is pure noise). Every Anthropic call site was already guarded by the key check, so with the key gone scoring runs on the fuzzy scorer alone, discovery name-guessing stops, and the ATS harvest keeps growing the roster for free. /api/status now reports has_proxy. To bring LinkedIn back: set PROXY_URL. To bring AI scoring back: set ANTHROPIC_API_KEY. Nothing else changes."},
     {"version": "2.38.0", "date": "2026-09-02", "status": "active", "change": "THE BOARD WAS FILTERED FOUR TIMES OVER, AND I HAD ONLY BEEN TUNING TWO OF THEM. The access logs show what the browser actually asks for: min_relevance=50 and hours=72. So the UI carried its OWN relevance floor of 50, on top of the server relevance_hide_below — moving the server number from 50 to 30 changed nothing the owner could see, because the page still demanded 50. Two thresholds for one decision, one of them invisible. The UI relevance filter now defaults to Any and the server floor is the single source of truth; the time window defaults to 7 days instead of 3. THIRD BUG, and the reason the board could look frozen: the 5-second auto-refresh poll was returning 401 and feeding the error body straight into `data.jobs || []`, so an expired session was indistinguishable from no new jobs — silently, forever. It now stops the poll and shows a sign-in banner. Verified through the real HTTP endpoint: a remote job scoring 35 is invisible under the old UI defaults and visible under the new ones."},
     {"version": "2.37.0", "date": "2026-09-02", "status": "active", "change": "Relevance floor 50 -> 30, and work_type now reads the job description. The floor was set to 50 while onsite jobs were still shown; remote-only is already a hard filter removing ~80% of the board, and stacking both took the visible feed from 8,019 to 1,190 in one hour. Two aggressive filters in series is one too many. On work_type: Greenhouse, Workday and SmartRecruiters publish NO workplace field — over 25,000 rows — and were classified from the location string and title alone. The old comment said descriptions were too noisy (remote-friendly culture boilerplate); measured on 5,917 live Greenhouse jobs that does not hold, because scraper._detect_work_type demands strong phrases, kills them next to a conditional, and will not let prose override a concrete City, ST. Disagreements on 4,390 US rows: onsite->hybrid 115, remote->hybrid 15, onsite->remote 6. Hybrid was badly undercounted (38 vs a true 168); the remote feed changes by only -15/+6 of 484. CORRECTION to what I reported earlier: the ~130 figure I gave for jobs mislabelled Remote was wrong — it was mostly onsite->hybrid, which never touched the remote view. The real remote error is 15, about 3%. The startup repair also used to look ONLY at rows already tagged remote and could only demote them, so onsite rows whose JD said fully remote stayed onsite forever; it now corrects in every direction, over rows that have a description to judge on, with batched writes outside the lock. Lifted out of a closure so it is testable."},
     {"version": "2.36.0", "date": "2026-09-02", "status": "active", "change": "REMOTE-ONLY BOARD, owner's call. Implemented strictly as a feed filter: an unset work_type now resolves to remote instead of all. Onsite and hybrid rows keep being scraped, scored and stored — they are simply not shown. This must NEVER become a scrape-time discard again: every ATS fetcher used to gate on remote and hardcode work_type=remote on the survivors, which threw away every onsite and hybrid US job across 4,374 companies (greenhouse went 0 to 499 per company when that was removed in v2.12). Flip settings.remote_only or set REMOTE_ONLY=false on Railway and the whole board returns with no re-scrape. The All Types dropdown option now sends work_type=all rather than an empty string, so it stays a live control instead of a button that silently does nothing — an empty value cannot mean both no-preference and deliberately-everything. Verified through the real HTTP endpoint: default returns remote only, all returns all four, hybrid and onsite each return their own, and no row is deleted."},
@@ -92,6 +93,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import settings
+
+# Messages that would otherwise repeat every worker cycle (e.g. "no proxy,
+# skipping LinkedIn" every 5 minutes). Logged once per process.
+_logged_once: set = set()
+
+
+def _log_once(key: str, msg: str) -> None:
+    if key not in _logged_once:
+        _logged_once.add(key)
+        logger.warning(msg)
 from database import (
     init_db, get_jobs, get_job_count, update_job_status,
     update_job_scores, create_profile, get_profiles,
@@ -831,6 +842,16 @@ async def lifespan(app: FastAPI):
             from database import get_enabled_sources
             if "linkedin" not in await get_enabled_sources():
                 return
+            if not settings.proxy_url:
+                # Railway is a datacenter IP and LinkedIn's guest feed answers
+                # it with 403/CAPTCHA outright (1 job ever, pre-proxy). Without
+                # a residential proxy the cycle cannot return a row, so skip it
+                # instead of hammering LinkedIn for nothing. Set PROXY_URL to
+                # re-enable.
+                _log_once("linkedin-no-proxy",
+                          "[LinkedIn] no PROXY_URL configured — LinkedIn workers idle "
+                          "(datacenter IPs are blocked). Set PROXY_URL to re-enable.")
+                return
             profiles = await get_profiles()
             if not profiles:
                 return
@@ -897,6 +918,12 @@ async def lifespan(app: FastAPI):
 
     async def _enrich_body():
         from scraper import enrich_missing_descriptions
+        if not settings.proxy_url:
+            # This enricher only serves LinkedIn rows (300KB pages that need
+            # the residential proxy). No proxy = nothing it can fetch.
+            _log_once("enrich-no-proxy",
+                      "[Enrich] no PROXY_URL configured — LinkedIn enricher idle.")
+            return
         await enrich_missing_descriptions(limit=12)
 
     async def _enrich_ats_body():
@@ -2645,6 +2672,7 @@ async def api_status():
         "mode": "continuous",
         "cooldown_seconds": 60,
         "has_anthropic_key": bool(settings.anthropic_api_key),
+        "has_proxy": bool(settings.proxy_url),
         "has_serpapi_key": bool(settings.serpapi_key),
         "has_rapidapi_key": bool(settings.rapidapi_key),
         "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
