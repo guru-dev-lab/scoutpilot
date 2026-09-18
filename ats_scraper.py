@@ -232,6 +232,44 @@ async def load_companies_merged() -> list[dict]:
     return companies
 
 
+def company_pages(c: dict) -> Optional[dict]:
+    """The exact public URLs for one roster company: `page` is the careers page
+    a person (or a browser agent) opens, `api` is the JSON feed the fetcher
+    reads. Returns None when the entry can't be turned into a URL."""
+    ats = (c.get("ats") or "").lower()
+    slug = c.get("slug") or ""
+    if ats == "workday":
+        base = c.get("workday_url") or ""
+        if not base:
+            tenant, wd, site = c.get("tenant"), c.get("wd"), c.get("site")
+            if not (tenant and wd and site):
+                return None
+            base = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"
+        m = re.match(r"(https?://[^/]+)/wday/cxs/([^/]+)/([^/]+)", base)
+        if not m:
+            return None
+        page, api = f"{m.group(1)}/{m.group(3)}", base.rstrip("/") + "/jobs"
+    elif not slug:
+        return None
+    elif ats == "greenhouse":
+        page, api = f"https://job-boards.greenhouse.io/{slug}", f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+    elif ats == "lever":
+        page, api = f"https://jobs.lever.co/{slug}", f"https://api.lever.co/v0/postings/{slug}?mode=json"
+    elif ats == "ashby":
+        page, api = f"https://jobs.ashbyhq.com/{slug}", f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
+    elif ats == "smartrecruiters":
+        page, api = f"https://careers.smartrecruiters.com/{slug}", f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+    elif ats == "workable":
+        page, api = f"https://apply.workable.com/{slug}/", f"https://apply.workable.com/api/v3/accounts/{slug}/jobs"
+    elif ats == "recruitee":
+        page, api = f"https://{slug}.recruitee.com/", f"https://{slug}.recruitee.com/api/offers/"
+    elif ats == "breezy":
+        page, api = f"https://{slug}.breezy.hr/", f"https://{slug}.breezy.hr/json"
+    else:
+        return None
+    return {"name": c.get("name") or slug, "ats": ats, "page": page, "api": api}
+
+
 def save_companies(companies: list[dict]) -> bool:
     """Persist the company list back to disk (for admin endpoint use)."""
     try:

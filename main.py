@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.39.1"
-BUILD_DATE = "2026-09-14"
+BUILD_VERSION = "2.40.0"
+BUILD_DATE = "2026-09-18"
 RECENT_CHANGES = [
+    {"version": "2.40.0", "date": "2026-09-18", "status": "active", "change": "New endpoint /api/ats-pages (behind the site password; Claude in Chrome uses the owner's logged-in session): every company on the live ATS roster with its exact careers page and JSON feed URL, so the owner can hand exact pages to a browser agent for on-demand scraping. Filters: ats=greenhouse,lever,... q=name, format=txt|csv|json, limit/offset. Reads the merged roster (seed file + discovered DB) on every call, so it grows with the harvest worker. Read-only, no spend."},
     {"version": "2.39.1", "date": "2026-09-14", "status": "active", "change": "Spend kill switches. Removing the secrets from Railway was not something Claude could do (secret-store writes are denied), and a cost cut that depends on a variable being absent is fragile anyway. config.py now has ai_enabled and proxy_enabled, both default False; a model validator blanks anthropic_api_key and proxy_url at load time while they are off, so every existing guard in the codebase sees them as unset even if the variables are still present on Railway. Proven locally: with ANTHROPIC_API_KEY and PROXY_URL both set in the environment, classify_jobs_batch returns {} and run_discovery_round returns []. Set AI_ENABLED=true / PROXY_ENABLED=true to switch spend back on deliberately."},
     {"version": "2.39.0", "date": "2026-09-14", "status": "active", "change": "COST CUT, owner's call: nothing in this app may spend money. The DataImpulse residential proxy had run dry — every LinkedIn guest request was answering 407 TRAFFIC_EXHAUSTED, so the three LinkedIn workers and the LinkedIn description enricher were burning cycles for zero rows. PROXY_URL and ANTHROPIC_API_KEY are removed from Railway. Code-side: the LinkedIn workers and the LinkedIn enricher now check for a proxy before doing anything and skip with a single log line when there is none (Railway is a datacenter IP, which LinkedIn answers with 403 outright — measured 1 job ever without a proxy — so a proxyless cycle is pure noise). Every Anthropic call site was already guarded by the key check, so with the key gone scoring runs on the fuzzy scorer alone, discovery name-guessing stops, and the ATS harvest keeps growing the roster for free. /api/status now reports has_proxy. To bring LinkedIn back: set PROXY_URL. To bring AI scoring back: set ANTHROPIC_API_KEY. Nothing else changes."},
     {"version": "2.38.0", "date": "2026-09-02", "status": "active", "change": "THE BOARD WAS FILTERED FOUR TIMES OVER, AND I HAD ONLY BEEN TUNING TWO OF THEM. The access logs show what the browser actually asks for: min_relevance=50 and hours=72. So the UI carried its OWN relevance floor of 50, on top of the server relevance_hide_below — moving the server number from 50 to 30 changed nothing the owner could see, because the page still demanded 50. Two thresholds for one decision, one of them invisible. The UI relevance filter now defaults to Any and the server floor is the single source of truth; the time window defaults to 7 days instead of 3. THIRD BUG, and the reason the board could look frozen: the 5-second auto-refresh poll was returning 401 and feeding the error body straight into `data.jobs || []`, so an expired session was indistinguishable from no new jobs — silently, forever. It now stops the poll and shows a sign-in banner. Verified through the real HTTP endpoint: a remote job scoring 35 is invisible under the old UI defaults and visible under the new ones."},
@@ -2679,6 +2680,44 @@ async def api_status():
         "build": {"version": BUILD_VERSION, "date": BUILD_DATE},
         "has_password": bool(_passwords),
     }
+
+
+@app.get("/api/ats-pages")
+async def api_ats_pages(
+    ats: str = Query("", description="comma list: greenhouse,lever,ashby,..."),
+    q: str = Query("", description="company name contains"),
+    format: str = Query("txt", description="txt | csv | json"),
+    limit: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0),
+):
+    """Every ATS company on the live roster with its exact careers page and JSON
+    feed, for on-demand scraping from a browser agent running in the owner's
+    logged-in browser (stays behind the site password). Reads the merged roster each call, so it grows as the
+    harvest worker discovers companies."""
+    from ats_scraper import load_companies_merged, company_pages
+    wanted = {a.strip().lower() for a in ats.split(",") if a.strip()}
+    needle = q.strip().lower()
+    rows = []
+    for c in await load_companies_merged():
+        p = company_pages(c)
+        if not p or (wanted and p["ats"] not in wanted) or (needle and needle not in p["name"].lower()):
+            continue
+        rows.append(p)
+    rows.sort(key=lambda r: (r["ats"], r["name"].lower()))
+    total = len(rows)
+    rows = rows[offset:offset + limit] if limit else rows[offset:]
+    if format == "json":
+        return {"total": total, "offset": offset, "count": len(rows), "companies": rows}
+    if format == "csv":
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=["name", "ats", "page", "api"])
+        w.writeheader()
+        w.writerows(rows)
+        return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                                 headers={"Content-Disposition": "attachment; filename=ats_pages.csv"})
+    head = f"# {total} ATS companies (showing {len(rows)} from offset {offset}). name | ats | careers page | json feed\n"
+    body = "\n".join(f"{r['name']} | {r['ats']} | {r['page']} | {r['api']}" for r in rows)
+    return HTMLResponse(head + body + "\n", media_type="text/plain")
 
 
 @app.get("/api/discovery-stats")
