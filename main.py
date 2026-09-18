@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.40.0"
+BUILD_VERSION = "2.40.1"
 BUILD_DATE = "2026-09-18"
 RECENT_CHANGES = [
+    {"version": "2.40.1", "date": "2026-09-18", "status": "active", "change": "/api/ats-pages is now open (no password) on the owner's explicit instruction to host the dynamic list publicly: Claude takes the list and scrapes the ATS pages itself, without going through this site. Exposes only public company names and public careers/feed URLs; read-only; every other route stays gated."},
     {"version": "2.40.0", "date": "2026-09-18", "status": "active", "change": "New endpoint /api/ats-pages (behind the site password; Claude in Chrome uses the owner's logged-in session): every company on the live ATS roster with its exact careers page and JSON feed URL, so the owner can hand exact pages to a browser agent for on-demand scraping. Filters: ats=greenhouse,lever,... q=name, format=txt|csv|json, limit/offset. Reads the merged roster (seed file + discovered DB) on every call, so it grows with the harvest worker. Read-only, no spend."},
     {"version": "2.39.1", "date": "2026-09-14", "status": "active", "change": "Spend kill switches. Removing the secrets from Railway was not something Claude could do (secret-store writes are denied), and a cost cut that depends on a variable being absent is fragile anyway. config.py now has ai_enabled and proxy_enabled, both default False; a model validator blanks anthropic_api_key and proxy_url at load time while they are off, so every existing guard in the codebase sees them as unset even if the variables are still present on Railway. Proven locally: with ANTHROPIC_API_KEY and PROXY_URL both set in the environment, classify_jobs_batch returns {} and run_discovery_round returns []. Set AI_ENABLED=true / PROXY_ENABLED=true to switch spend back on deliberately."},
     {"version": "2.39.0", "date": "2026-09-14", "status": "active", "change": "COST CUT, owner's call: nothing in this app may spend money. The DataImpulse residential proxy had run dry — every LinkedIn guest request was answering 407 TRAFFIC_EXHAUSTED, so the three LinkedIn workers and the LinkedIn description enricher were burning cycles for zero rows. PROXY_URL and ANTHROPIC_API_KEY are removed from Railway. Code-side: the LinkedIn workers and the LinkedIn enricher now check for a proxy before doing anything and skip with a single log line when there is none (Railway is a datacenter IP, which LinkedIn answers with 403 outright — measured 1 job ever without a proxy — so a proxyless cycle is pure noise). Every Anthropic call site was already guarded by the key check, so with the key gone scoring runs on the fuzzy scorer alone, discovery name-guessing stops, and the ATS harvest keeps growing the roster for free. /api/status now reports has_proxy. To bring LinkedIn back: set PROXY_URL. To bring AI scoring back: set ANTHROPIC_API_KEY. Nothing else changes."},
@@ -1192,7 +1193,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -2691,8 +2692,9 @@ async def api_ats_pages(
     offset: int = Query(0, ge=0),
 ):
     """Every ATS company on the live roster with its exact careers page and JSON
-    feed, for on-demand scraping from a browser agent running in the owner's
-    logged-in browser (stays behind the site password). Reads the merged roster each call, so it grows as the
+    feed, for on-demand scraping from a browser agent run outside this site.
+    Open (no password) on the owner's explicit instruction: it lists only public
+    company names and public careers-page URLs. Reads the merged roster each call, so it grows as the
     harvest worker discovers companies."""
     from ats_scraper import load_companies_merged, company_pages
     wanted = {a.strip().lower() for a in ats.split(",") if a.strip()}
