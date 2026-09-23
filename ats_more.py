@@ -185,8 +185,11 @@ async def fetch_ukg(client: httpx.AsyncClient, company: dict, profile_id, search
                 if txt and txt not in parts:
                     parts.append(txt)
             loc = "; ".join(parts[:3])
-            remote_flag = "remote" if (it.get("IsRemote") or it.get("RemoteWorkType")
-                                       or "remote" in loc.lower()) else ""
+            # Railway SHAPE log, 22 Sep: the item carries JobLocationType
+            # (the platform's own workplace field) — trust it first.
+            jlt = str(it.get("JobLocationType") or "").lower()
+            remote_flag = ("remote" if ("remote" in jlt or it.get("IsRemote") or "remote" in loc.lower())
+                           else "hybrid" if "hybrid" in jlt else "")
             oid = it.get("Id") or it.get("OpportunityId")
             url = f"{page}/OpportunityDetail?opportunityId={oid}" if oid else ""
             desc = _strip(it.get("BriefDescription") or it.get("Description") or "")
@@ -467,9 +470,10 @@ def jobvite_urls(c: dict) -> tuple[str, str]:
     return f"https://jobs.jobvite.com/{slug}", f"https://jobs.jobvite.com/{slug}"
 
 
-_JV_ROW = re.compile(
-    r'<a[^>]+href="(?:https?://jobs\.jobvite\.com)?/([a-z0-9][a-z0-9_-]*)/job/([A-Za-z0-9]+)"[^>]*>(.*?)</a>'
-    r'(?:\s*</td>\s*<td[^>]*jv-job-list-location[^>]*>(.*?)</td>)?', re.I | re.S)
+_JV_LINK = re.compile(
+    r'<a[^>]+href="(?:https?://jobs\.jobvite\.com)?/([a-z0-9][a-z0-9_-]*)/job/([A-Za-z0-9]+)"[^>]*>(.*?)</a>',
+    re.I | re.S)
+_JV_LOC = re.compile(r'jv-job-list-location[^>]*>(.*?)</(?:td|div|span)>', re.I | re.S)
 
 
 async def fetch_jobvite(client: httpx.AsyncClient, company: dict, profile_id, search_terms: list[str]) -> list[dict]:
@@ -489,11 +493,21 @@ async def fetch_jobvite(client: httpx.AsyncClient, company: dict, profile_id, se
     except Exception as e:
         logger.warning(f"[jobvite:{slug}] fetch error: {e}")
         return []
-    rows = _JV_ROW.findall(html)
+    # One <tr> per job on the jv-job-list table; the location sits in its own
+    # cell somewhere after the link, not necessarily right after it.
+    rows: list[tuple[str, str, str, str]] = []
+    for tr in re.split(r"<tr[^>]*>", html)[1:]:
+        m = _JV_LINK.search(tr)
+        if not m:
+            continue
+        lm = _JV_LOC.search(tr)
+        rows.append((m.group(1), m.group(2), m.group(3), lm.group(1) if lm else ""))
     if "jobvite" not in _SHAPE_LOGGED:
         _SHAPE_LOGGED.add("jobvite")
+        i = html.find("/job/")
+        snip = re.sub(r"\s+", " ", html[max(0, i - 300): i + 500]) if i >= 0 else html[:400]
         logger.warning(f"[jobvite] SHAPE rows={len(rows)} bytes={len(html)} "
-                       f"has_list_class={'jv-job-list' in html}")
+                       f"has_list_class={'jv-job-list' in html} snippet={snip!r}")
     seen = set()
     for _slug, jid, title_html, loc_html in rows:
         try:
@@ -522,8 +536,11 @@ def icims_urls(c: dict) -> tuple[str, str]:
     return f"https://{host}/jobs/search?ss=1", f"https://{host}/jobs/search?ss=1&searchRelation=keyword_all&in_iframe=1"
 
 
-_ICIMS_LINK = re.compile(
-    r'<a[^>]+class="iCIMS_Anchor"[^>]+href="(https?://[^"]+/jobs/(\d+)/[^"]*)"[^>]*>(.*?)</a>', re.I | re.S)
+# Any <a> whose attributes mention iCIMS_Anchor, in any attribute order, with
+# an absolute OR relative href — the Railway sweep fetched three pages per
+# host (so the anchors were there) and parsed nothing with the stricter form.
+_ICIMS_A = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.I | re.S)
+_ICIMS_HREF = re.compile(r'href="([^"]*?/jobs/(\d+)/[^"]*)"', re.I)
 _ICIMS_H = re.compile(r"<h[23][^>]*>(.*?)</h[23]>", re.I | re.S)
 _ICIMS_LOC = re.compile(r"Job Locations?\s*(?:</dt>|</span>|</div>)\s*<(?:dd|div|span)[^>]*>(.*?)</(?:dd|div|span)>", re.I | re.S)
 
@@ -538,6 +555,14 @@ async def fetch_icims(client: httpx.AsyncClient, company: dict, profile_id, sear
         for pr in range(0, 3):
             url = f"https://{host}/jobs/search?ss=1&searchRelation=keyword_all&in_iframe=1&pr={pr}"
             resp = await client.get(url)
+            if pr == 0 and "icims-first" not in _SHAPE_LOGGED:
+                _SHAPE_LOGGED.add("icims-first")
+                body = re.sub(r"\s+", " ", resp.text or "")
+                i = body.find("iCIMS_Anchor")
+                snip = body[max(0, i - 200): i + 600] if i >= 0 else body[:600]
+                logger.warning(f"[icims] FIRST host={host} status={resp.status_code} "
+                               f"bytes={len(resp.text or '')} anchors={resp.text.count('iCIMS_Anchor')} "
+                               f"snippet={snip!r}")
             if resp.status_code != 200:
                 if pr == 0:
                     logger.warning(f"[icims:{host}] HTTP {resp.status_code}")
@@ -551,22 +576,27 @@ async def fetch_icims(client: httpx.AsyncClient, company: dict, profile_id, sear
     n_rows = 0
     seen = set()
     for html in pages_html:
-        blocks = re.split(r'(?=<a[^>]+class="iCIMS_Anchor")', html)
-        for b in blocks:
-            m = _ICIMS_LINK.search(b)
-            if not m:
+        for am in _ICIMS_A.finditer(html):
+            attrs, inner = am.group(1), am.group(2)
+            if "iCIMS_Anchor" not in attrs:
+                continue
+            hm_ = _ICIMS_HREF.search(attrs)
+            if not hm_:
                 continue
             n_rows += 1
             try:
-                url, jid, inner = m.group(1), m.group(2), m.group(3)
+                url, jid = hm_.group(1), hm_.group(2)
+                if url.startswith("/"):
+                    url = f"https://{host}{url}"
                 if jid in seen:
                     continue
                 seen.add(jid)
-                hm = _ICIMS_H.search(inner) or _ICIMS_H.search(b[:2000])
+                tail = html[am.end(): am.end() + 4000]
+                hm = _ICIMS_H.search(inner) or _ICIMS_H.search(tail[:2000])
                 title = _strip(hm.group(1) if hm else inner)
                 if not title or not a._title_matches_profile(title, search_terms):
                     continue
-                lm = _ICIMS_LOC.search(b[:4000])
+                lm = _ICIMS_LOC.search(inner) or _ICIMS_LOC.search(tail)
                 loc = _strip(lm.group(1)) if lm else ""
                 job = _row("icims", title, name,
                            loc.replace("US-", "").replace("-", ", ") if loc else "",
