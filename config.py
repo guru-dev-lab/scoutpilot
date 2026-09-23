@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # filters in series is one too many. One number, reversible: the startup
     # backfill re-applies it in both directions on the next boot.
     relevance_hide_below: int = 30
+    # Comma-separated profile titles to purge (row, jobs, archive) at the next
+    # boot — the owner's way to delete a profile without logging in. Matched
+    # case-insensitively; harmless once the profile is gone.
+    purge_profiles: str = ""
 
     # Remote-only board. Owner's call 2026-09-02.
     #

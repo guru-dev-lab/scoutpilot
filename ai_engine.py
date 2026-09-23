@@ -528,6 +528,33 @@ def _distinctive_tokens(text: str) -> set:
             if w not in _NOISE_TOKENS and w not in _HEAD_NOUNS and len(w) > 1}
 
 
+def _identity_tokens(text: str) -> set:
+    """The words that make a title THIS role, for the modifier gate.
+
+    Distinctive words first (modifiers such as "business", "bi", "reporting").
+    A title that has fewer than two of them is identified by its modifier AND
+    its head nouns together: "Business Analytics Analyst" is {business,
+    analytics, analyst}, "Data Analyst" is {data, analyst}, "Analytics Analyst"
+    is {analytics, analyst}.
+
+    Why: with the head nouns stripped, "Business Analytics Analyst" reduced to
+    the single word "business" and "Data Analytics Analyst" to "data", so ANY
+    title containing "business" or "data" cleared the gate — Relationship
+    Banker Business Specialist (55), a Customer Service Rep on Business Center
+    Drive (51), Sr Data Scientist (51), Danaher Business System Leader (53).
+    One shared everyday word is not a role. Keeping the head nouns in a short
+    identity means the job must also be an analyst/analytics/developer-shaped
+    title, which those are not, while "Finance and BI Analyst", "Business
+    Intelligence Architect" and "Data Analyst II" still pass.
+    """
+    words = re.findall(r"[a-z0-9\+#\.]+", (text or "").lower())
+    kept = [w for w in words if w not in _NOISE_TOKENS and len(w) > 1]
+    distinct = {w for w in kept if w not in _HEAD_NOUNS}
+    if len(distinct) >= 2:
+        return distinct
+    return distinct | {w for w in kept if w in _HEAD_NOUNS}
+
+
 def _profile_vocabulary(target_title: str, expanded: list, keywords: list) -> set:
     """Every distinctive word the profile recognises, from its own title, its
     expanded variants and its keyword list."""
@@ -654,9 +681,14 @@ def score_relevance_fuzzy(
     # The profile's ROLE IDENTITIES: the distinctive tokens of the target title
     # and of each expansion, each kept as a set that must be matched WHOLE.
     identity_sets = [ts for ts in
-                     ([_distinctive_tokens(target_title)] +
-                      [_distinctive_tokens(str(t)) for t in clean_expanded])
+                     ([_identity_tokens(target_title)] +
+                      [_identity_tokens(str(t)) for t in clean_expanded])
                      if ts]
+    # The job side of the subset test keeps its head nouns too, so a short
+    # identity like {data, analyst} can be matched by "Senior Data Analyst" and
+    # NOT by "Sr Data Scientist" (see _identity_tokens).
+    job_role_tokens = {w for w in re.findall(r"[a-z0-9\+#\.]+", (job_title or "").lower())
+                       if w not in _NOISE_TOKENS and len(w) > 1}
 
     # A title that IS one of the profile's own variants must never be gated.
     # "Analytics Analyst" is a listed expansion, but both of its words are
@@ -681,7 +713,7 @@ def score_relevance_fuzzy(
             base_title_score = min(base_title_score, 22)
             best_score = min(best_score, 22)
             fence_capped = True
-        elif identity_sets and not any(ident <= job_tokens
+        elif identity_sets and not any(ident <= job_role_tokens
                                        for ident in identity_sets):
             # Sharing ONE word with a role is not being that role. The old gate
             # asked only for `job_tokens & vocab` — any single overlapping word

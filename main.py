@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.40.1"
-BUILD_DATE = "2026-09-18"
+BUILD_VERSION = "2.41.0"
+BUILD_DATE = "2026-09-22"
 RECENT_CHANGES = [
+    {"version": "2.41.0", "date": "2026-09-22", "status": "active", "change": "ONE SHARED WORD IS NOT A ROLE. With the AI off, the head of the board against the Business Intelligence profile read Relationship Banker Business Specialist (55), Customer Service Rep on Business Center Drive (51), Sr Data Scientist (51), Danaher Business System Leader (53). Cause: the modifier gate stripped head nouns before building each role identity, so 'Business Analytics Analyst' reduced to the one word 'business' and 'Data Analytics Analyst' to 'data' — and any title containing either word cleared the gate and rode token_set_ratio past the floor. A role with fewer than two distinctive words now keeps its head nouns in its identity ({business, analytics, analyst}, {data, analyst}), and the job side of the subset test keeps its head nouns too, so the job must also be analyst-, analytics- or developer-shaped. Replayed against the live sample feed before shipping. The boot-time rescore backfill re-judges the visible backlog with the new gate. Also, owner's instruction: deleting a profile is now a full purge (row, jobs, archive), and profiles soft-deleted under older builds are purged at startup. /api/debug/pipeline gains remote_feed: the head of the board exactly as the remote-only owner sees it."},
     {"version": "2.40.1", "date": "2026-09-18", "status": "active", "change": "/api/ats-pages is now open (no password) on the owner's explicit instruction to host the dynamic list publicly: Claude takes the list and scrapes the ATS pages itself, without going through this site. Exposes only public company names and public careers/feed URLs; read-only; every other route stays gated."},
     {"version": "2.40.0", "date": "2026-09-18", "status": "active", "change": "New endpoint /api/ats-pages (behind the site password; Claude in Chrome uses the owner's logged-in session): every company on the live ATS roster with its exact careers page and JSON feed URL, so the owner can hand exact pages to a browser agent for on-demand scraping. Filters: ats=greenhouse,lever,... q=name, format=txt|csv|json, limit/offset. Reads the merged roster (seed file + discovered DB) on every call, so it grows with the harvest worker. Read-only, no spend."},
     {"version": "2.39.1", "date": "2026-09-14", "status": "active", "change": "Spend kill switches. Removing the secrets from Railway was not something Claude could do (secret-store writes are denied), and a cost cut that depends on a variable being absent is fragile anyway. config.py now has ai_enabled and proxy_enabled, both default False; a model validator blanks anthropic_api_key and proxy_url at load time while they are off, so every existing guard in the codebase sees them as unset even if the variables are still present on Railway. Proven locally: with ANTHROPIC_API_KEY and PROXY_URL both set in the environment, classify_jobs_batch returns {} and run_discovery_round returns []. Set AI_ENABLED=true / PROXY_ENABLED=true to switch spend back on deliberately."},
@@ -168,6 +169,44 @@ def _build_profile_data(profiles: list[dict]) -> list[dict]:
     return out
 
 
+def _home_profile(title: str, description: str, fetched_pd: dict | None, all_pd: list[dict],
+                  hide_below: int) -> tuple[dict | None, int, bool]:
+    """Which profile a job belongs to, and its fuzzy score there.
+
+    Every ATS sweep runs once per profile, so a row is tagged by whichever
+    profile's sweep inserted it FIRST — a "Data Analyst Senior Manager" fetched
+    by the Business Intelligence sweep sits under BI even though the Data
+    Analyst profile is the one that matches it. Before v2.41.0 that was hidden
+    by the gate's leak (one shared word passed). Now that the gate is strict,
+    a row must be judged where it belongs: if the fetching profile's gate
+    rejects it (at or under the family-fence cap) and another active profile
+    scores it at or above the floor, it moves there. Returns (profile, score,
+    moved). A job no profile wants keeps its fetching profile and its low score.
+    """
+    from ai_engine import score_relevance_fuzzy
+
+    def _sc(pd):
+        return score_relevance_fuzzy(
+            title, description or "", pd["title"], pd["expanded"], pd["keywords"],
+            skill_signature=pd.get("signature"))
+
+    fetched_score = _sc(fetched_pd) if fetched_pd else -1
+    if fetched_pd is not None and fetched_score > _FAMILY_FENCE_CAP:
+        return fetched_pd, fetched_score, False
+    best_pd, best = fetched_pd, fetched_score
+    for cand in all_pd:
+        if cand is fetched_pd:
+            continue
+        sc = _sc(cand)
+        if sc > best:
+            best_pd, best = cand, sc
+    if best_pd is not fetched_pd and best >= hide_below:
+        return best_pd, best, True
+    if fetched_pd is None:
+        return best_pd, best, False
+    return fetched_pd, fetched_score, False
+
+
 async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tuple[int, int]:
     """v2.2.0 relevance gate — the single scoring path for both the regular cycle
     and the deep sweep.
@@ -192,20 +231,18 @@ async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tup
     HIDE_BELOW = _cfg.relevance_hide_below
     BATCH = 18
 
-    # Assign each job to a profile (the one that fetched it, else best fuzzy).
+    # Assign each job to a profile: the one that fetched it unless that
+    # profile's gate rejects it and another active profile wants it.
     groups: dict = {}
+    moved_to: dict[int, int] = {}
     for job in new_jobs:
-        pd = pdata_by_id.get(job.get("search_profile_id"))
+        fetched = pdata_by_id.get(job.get("search_profile_id"))
+        pd, _f, moved = _home_profile(job["title"], job.get("description", ""),
+                                      fetched, all_pd, HIDE_BELOW)
         if pd is None:
-            best_f, pd = -1, all_pd[0]
-            for cand in all_pd:
-                f = score_relevance_fuzzy(
-                    job["title"], job.get("description", ""),
-                    cand["title"], cand["expanded"], cand["keywords"],
-                    skill_signature=cand.get("signature"),
-                )
-                if f > best_f:
-                    best_f, pd = f, cand
+            pd = all_pd[0]
+        if moved and pd.get("id") is not None:
+            moved_to[job["id"]] = pd["id"]
         groups.setdefault(pd["title"], (pd, []))[1].append(job)
 
     ai_scored = 0
@@ -261,7 +298,8 @@ async def _classify_and_store(new_jobs: list[dict], profiles: list[dict]) -> tup
                     job.get("source", ""),
                 )
                 hide = relevance < HIDE_BELOW
-                await update_job_scores(job["id"], relevance, trust, hide=hide)
+                await update_job_scores(job["id"], relevance, trust, hide=hide,
+                                        profile_id=moved_to.get(job["id"]))
                 ai_scored += 1
                 if hide:
                     hidden_count += 1
@@ -752,6 +790,38 @@ async def lifespan(app: FastAPI):
         await db.close()
     except Exception as e:
         logger.error(f"[Startup Cleanup] Old profile cleanup failed: {e}")
+
+    # A profile deleted from the UI is now purged outright (row, jobs, archive)
+    # — and any profile soft-deleted under the old build is finished off here.
+    try:
+        from database import purge_inactive_profiles
+        for gone in await purge_inactive_profiles():
+            logger.info(f"[Startup Cleanup] Purged deleted profile #{gone['id']} "
+                        f"'{gone['title']}': {gone['jobs']} jobs, {gone['archived']} archived")
+    except Exception as e:
+        logger.error(f"[Startup Cleanup] Inactive profile purge failed: {e}")
+
+    # PURGE_PROFILES=Devops — the owner's instruction on 22 Sep 2026 ("remove it
+    # for now … clear all its related data too"), carried out at boot because
+    # the delete route sits behind the site password.
+    try:
+        from config import settings as _ps
+        wanted = {t.strip().lower() for t in (_ps.purge_profiles or "").split(",") if t.strip()}
+        if wanted:
+            from database import get_db as _gdb, _purge_profile_rows, _write_lock as _wl
+            for p in await get_profiles():
+                if (p.get("title") or "").strip().lower() in wanted:
+                    async with _wl():
+                        _db = await _gdb()
+                        try:
+                            gone = await _purge_profile_rows(_db, p["id"])
+                            await _db.commit()
+                        finally:
+                            await _db.close()
+                    logger.warning(f"[Startup Cleanup] PURGE_PROFILES: removed profile "
+                                   f"#{p['id']} '{p['title']}' with {gone['jobs']} jobs")
+    except Exception as e:
+        logger.error(f"[Startup Cleanup] PURGE_PROFILES failed: {e}")
 
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility
@@ -2102,6 +2172,16 @@ async def api_debug_pipeline():
                 "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
                 "WHERE j.status != 'hidden' "
                 "ORDER BY datetime(j.first_seen_at) DESC LIMIT 40")
+            # The head of the board AS THE OWNER SEES IT: remote only, active
+            # profiles, ordered like the feed. sample_feed above ignores the
+            # remote-only filter, so it cannot show what he is looking at.
+            out["remote_feed"] = await rows(
+                "SELECT j.title, j.company_name, j.location, j.relevance_score, "
+                "       j.source, j.first_seen_at, COALESCE(p.title,'(none)') AS profile "
+                "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
+                "WHERE j.status != 'hidden' AND j.work_type = 'remote' "
+                "  AND (j.search_profile_id IS NULL OR p.is_active = 1) "
+                "ORDER BY datetime(j.first_seen_at) DESC, datetime(j.posted_at) DESC LIMIT 80")
             # Titles still carrying raw HTML entities (&amp; &#39; &quot; ...).
             out["entity_titles"] = await rows(
                 "SELECT COUNT(*) AS n FROM jobs "
@@ -2404,6 +2484,7 @@ async def _rescore_visible_backfill() -> None:
             if isinstance(kws, str):
                 kws = [k.strip() for k in kws.split(",") if k.strip()]
             pds.append({
+                "id": p["id"],
                 "title": p["title"],
                 "expanded": _sanitize_expansions(
                     p["title"], p.get("expanded_titles", []) or []),
@@ -2414,9 +2495,9 @@ async def _rescore_visible_backfill() -> None:
         db = await get_db()
         try:
             cur = await db.execute(
-                "SELECT id, title, description, relevance_score FROM jobs "
+                "SELECT id, title, description, relevance_score, search_profile_id FROM jobs "
                 "WHERE status IN ('new', 'viewed')")
-            rows = [(r[0], r[1] or "", r[2] or "", r[3] or 0)
+            rows = [(r[0], r[1] or "", r[2] or "", r[3] or 0, r[4])
                     for r in await cur.fetchall()]
         finally:
             await db.close()
@@ -2426,36 +2507,40 @@ async def _rescore_visible_backfill() -> None:
         # crashed the Scoring worker with "database is locked" — WAL allows a
         # single writer, and ~18 workers were queued behind a lock this pass held
         # for its entire duration. Nothing here touches the database.
-        rejudged = hidden = requeued = threshold_hidden = 0
-        plan: list[tuple[int, int | None, str | None, bool]] = []
-        for jid, jtitle, jdesc, stored in rows:
+        # With the AI switched off (v2.39.1) EVERY stored score is a fuzzy
+        # score, the 25-75 band included, so the "rows at or below 75 had AI
+        # input" premise no longer holds and every visible row is re-judged.
+        # With the AI on, only the never-AI-scored band is touched, as before.
+        ai_on = bool(_s.anthropic_api_key)
+        pd_by_id = {pd["id"]: pd for pd in pds}
+        rejudged = hidden = requeued = threshold_hidden = rehomed = 0
+        plan: list[tuple[int, int | None, str | None, bool, int | None]] = []
+        for jid, jtitle, jdesc, stored, pid in rows:
             new_score: int | None = None
+            new_pid: int | None = None
             score = stored
-            if stored > _AI_BAND_HIGH:
-                best = 0
-                for pd in pds:
-                    sc = score_relevance_fuzzy(
-                        jtitle, jdesc, pd["title"], pd["expanded"],
-                        pd["keywords"], skill_signature=pd["signature"])
-                    if sc > best:
-                        best = sc
+            if stored > _AI_BAND_HIGH or not ai_on:
+                home, best, moved = _home_profile(jtitle, jdesc, pd_by_id.get(pid), pds, hide_below)
+                if moved and home is not None:
+                    new_pid = home["id"]
+                    rehomed += 1
                 if best != stored:
                     new_score = best
                     rejudged += 1
                 score = best
-                if _AI_BAND_LOW <= best <= _AI_BAND_HIGH:
+                if ai_on and _AI_BAND_LOW <= best <= _AI_BAND_HIGH:
                     requeued += 1
-                    plan.append((jid, new_score, None, True))
+                    plan.append((jid, new_score, None, True, new_pid))
                     continue            # leave visible for the Scoring worker
                 if best < _AI_BAND_LOW:
                     hidden += 1
-                    plan.append((jid, new_score, "hidden", False))
+                    plan.append((jid, new_score, "hidden", False, new_pid))
                     continue
             if score < hide_below:
                 threshold_hidden += 1
-                plan.append((jid, new_score, "hidden", False))
-            elif new_score is not None:
-                plan.append((jid, new_score, None, False))
+                plan.append((jid, new_score, "hidden", False, new_pid))
+            elif new_score is not None or new_pid is not None:
+                plan.append((jid, new_score, None, False, new_pid))
             # rows needing no change are simply not planned
 
         # APPLY IN SMALL BATCHES, releasing the lock between each so the ATS
@@ -2466,7 +2551,11 @@ async def _rescore_visible_backfill() -> None:
             async with _write_lock():
                 db = await get_db()
                 try:
-                    for jid, new_score, status, requeue in plan[i:i + CHUNK]:
+                    for jid, new_score, status, requeue, new_pid in plan[i:i + CHUNK]:
+                        if new_pid is not None:
+                            await db.execute(
+                                "UPDATE jobs SET search_profile_id = ? WHERE id = ?",
+                                (new_pid, jid))
                         if new_score is not None:
                             await db.execute(
                                 "UPDATE jobs SET relevance_score = ? WHERE id = ?",
@@ -2484,7 +2573,8 @@ async def _rescore_visible_backfill() -> None:
             await asyncio.sleep(0)      # yield to the other workers
         logger.warning(
             f"[Rescore] {len(rows)} visible jobs checked — {rejudged} re-judged "
-            f"(never AI-scored), {hidden} structurally rejected and hidden, "
+            f"({'never AI-scored' if ai_on else 'AI off: all fuzzy'}), {rehomed} moved to the "
+            f"profile that matches them, {hidden} structurally rejected and hidden, "
             f"{requeued} re-queued for the classifier, {threshold_hidden} hidden "
             f"by the relevance threshold ({hide_below})")
     except Exception as e:

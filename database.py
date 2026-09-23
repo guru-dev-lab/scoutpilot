@@ -850,15 +850,23 @@ async def _update_job_status_unlocked(job_id: int, status: str):
         await db.close()
 
 
-async def update_job_scores(job_id: int, relevance: int, trust: int, hide: bool = False):
-    """Serialised against the other writers — see _write_lock()."""
+async def update_job_scores(job_id: int, relevance: int, trust: int, hide: bool = False,
+                            profile_id: int | None = None):
+    """Serialised against the other writers — see _write_lock().
+    profile_id, when given, re-homes the row to that profile (see
+    main._home_profile): a job the fetching profile's gate rejects but another
+    active profile matches belongs to the other one."""
     async with _write_lock():
-        return await _update_job_scores_unlocked(job_id, relevance, trust, hide)
+        return await _update_job_scores_unlocked(job_id, relevance, trust, hide, profile_id)
 
 
-async def _update_job_scores_unlocked(job_id: int, relevance: int, trust: int, hide: bool = False):
+async def _update_job_scores_unlocked(job_id: int, relevance: int, trust: int, hide: bool = False,
+                                      profile_id: int | None = None):
     db = await get_db()
     try:
+        if profile_id is not None:
+            await db.execute("UPDATE jobs SET search_profile_id = ? WHERE id = ?",
+                             (profile_id, job_id))
         # Stamp scored_at so this job is never re-scored through AI again.
         # This is the core cost fix — see get_unscored_jobs().
         # hide=True: also set status='hidden' so a clearly-wrong role drops off
@@ -1091,13 +1099,54 @@ async def update_profile(profile_id: int, data: dict):
         await db.close()
 
 
-async def delete_profile(profile_id: int):
+async def _purge_profile_rows(db, profile_id: int) -> dict:
+    """Everything keyed to one profile, gone: its jobs, its archived jobs and
+    the profile row itself. Returns what was removed, for the log."""
+    out = {"jobs": 0, "archived": 0, "profile": 0}
+    cur = await db.execute("DELETE FROM jobs WHERE search_profile_id = ?", (profile_id,))
+    out["jobs"] = cur.rowcount or 0
+    try:
+        cur = await db.execute("DELETE FROM jobs_archive WHERE search_profile_id = ?", (profile_id,))
+        out["archived"] = cur.rowcount or 0
+    except Exception:
+        pass  # the archive table only exists on older volumes
+    cur = await db.execute("DELETE FROM search_profiles WHERE id = ?", (profile_id,))
+    out["profile"] = cur.rowcount or 0
+    return out
+
+
+async def delete_profile(profile_id: int) -> dict:
+    """Owner's instruction, 22 Sep 2026: "clear all its related data too".
+    A deleted profile used to be soft-deleted (is_active = 0) with only its
+    jobs removed, so the row and its expansions, keywords and signature stayed
+    on the volume forever and every profile-keyed table had to know about
+    is_active. Now it is a full purge."""
     db = await get_db()
     try:
-        await db.execute("UPDATE search_profiles SET is_active = 0 WHERE id = ?", (profile_id,))
-        # Hard-delete the profile's jobs so they don't linger as ghost data
-        await db.execute("DELETE FROM jobs WHERE search_profile_id = ?", (profile_id,))
+        out = await _purge_profile_rows(db, profile_id)
         await db.commit()
+        return out
+    finally:
+        await db.close()
+
+
+async def purge_inactive_profiles() -> list[dict]:
+    """Finish the job for profiles deleted under the old soft-delete: any row
+    still marked is_active = 0 is purged the same way, with its jobs. Runs at
+    startup so a profile removed from the UI before this build leaves nothing
+    behind either."""
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT id, title FROM search_profiles WHERE is_active = 0")
+        stale = await cur.fetchall()
+        done = []
+        for row in stale:
+            out = await _purge_profile_rows(db, row[0])
+            out.update({"id": row[0], "title": row[1]})
+            done.append(out)
+        if done:
+            await db.commit()
+        return done
     finally:
         await db.close()
 
