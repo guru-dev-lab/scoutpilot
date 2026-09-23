@@ -19,9 +19,10 @@ _FAMILY_FENCE_CAP = 22
 _AI_BAND_LOW = 25
 _AI_BAND_HIGH = 75
 
-BUILD_VERSION = "2.41.0"
+BUILD_VERSION = "2.42.0"
 BUILD_DATE = "2026-09-22"
 RECENT_CHANGES = [
+    {"version": "2.42.0", "date": "2026-09-22", "status": "active", "change": "THREE FREE SOURCES HAD NEVER PRODUCED A ROW, and it was how they were asked. Jobicy was fetched unfiltered (its 50 newest jobs worldwide) and matched locally; the API takes the search words as tag= and geo=usa, verified live to return 50 US data-analyst rows. Himalayas read the newest 100 of a 102,934-job feed by deprecated offset, five times per term; now one cursor-paged read of the newest 500, cached 10 minutes and shared by every term, filtered to US-or-anywhere by the feed's own locationRestrictions. TheMuse read the first 5 pages of the unfiltered public stream (20,638 pages); now category=Data and Analytics / Data Science with location=Flexible / Remote, ten pages each, cached. ZipRecruiter was tried and dropped: JobSpy's ZipRecruiter path answers 403 'forbidden aa' from any address. Glassdoor answers 403 from Railway. ENABLE_SOURCES=<keys> switches named sources on at boot (the Sources panel is behind the password) — set to adzuna,jooble,careerjet,jobicy,himalayas,themuse on the owner's instruction to use every site. TWO MORE LEAKS measured on the live remote feed after 2.41.0: (a) the skill-signature rescue fired on one foundation hit plus one toolkit hit (SQL + Tableau, in nearly every data-engineering posting), so Data Engineer 100, Senior Software Engineer (Data) 79 and Analytics Engineering Manager 81 sat on a BI board — when the TITLE names another family, the description must now also name the role as a phrase before the fence is overridden; unknown-family titles keep the tool-based rescue. (b) rows the Scoring worker had not reached yet showed at the head of the board at the schema default of 50 — the feed now withholds a row until it has been judged."},
     {"version": "2.41.0", "date": "2026-09-22", "status": "active", "change": "ONE SHARED WORD IS NOT A ROLE. With the AI off, the head of the board against the Business Intelligence profile read Relationship Banker Business Specialist (55), Customer Service Rep on Business Center Drive (51), Sr Data Scientist (51), Danaher Business System Leader (53). Cause: the modifier gate stripped head nouns before building each role identity, so 'Business Analytics Analyst' reduced to the one word 'business' and 'Data Analytics Analyst' to 'data' — and any title containing either word cleared the gate and rode token_set_ratio past the floor. A role with fewer than two distinctive words now keeps its head nouns in its identity ({business, analytics, analyst}, {data, analyst}), and the job side of the subset test keeps its head nouns too, so the job must also be analyst-, analytics- or developer-shaped. Replayed against the live sample feed before shipping. The boot-time rescore backfill re-judges the visible backlog with the new gate. Also, owner's instruction: deleting a profile is now a full purge (row, jobs, archive), and profiles soft-deleted under older builds are purged at startup. /api/debug/pipeline gains remote_feed: the head of the board exactly as the remote-only owner sees it."},
     {"version": "2.40.1", "date": "2026-09-18", "status": "active", "change": "/api/ats-pages is now open (no password) on the owner's explicit instruction to host the dynamic list publicly: Claude takes the list and scrapes the ATS pages itself, without going through this site. Exposes only public company names and public careers/feed URLs; read-only; every other route stays gated."},
     {"version": "2.40.0", "date": "2026-09-18", "status": "active", "change": "New endpoint /api/ats-pages (behind the site password; Claude in Chrome uses the owner's logged-in session): every company on the live ATS roster with its exact careers page and JSON feed URL, so the owner can hand exact pages to a browser agent for on-demand scraping. Filters: ats=greenhouse,lever,... q=name, format=txt|csv|json, limit/offset. Reads the merged roster (seed file + discovered DB) on every call, so it grows with the harvest worker. Read-only, no spend."},
@@ -822,6 +823,24 @@ async def lifespan(app: FastAPI):
                                    f"#{p['id']} '{p['title']}' with {gone['jobs']} jobs")
     except Exception as e:
         logger.error(f"[Startup Cleanup] PURGE_PROFILES failed: {e}")
+
+    # ENABLE_SOURCES=adzuna,jooble,... — switch named sources on at boot.
+    try:
+        from config import settings as _es
+        keys = [t.strip().lower() for t in (_es.enable_sources or "").split(",") if t.strip()]
+        if keys:
+            from database import update_source_setting, get_enabled_sources
+            before = await get_enabled_sources()
+            for key in keys:
+                if key not in before:
+                    await update_source_setting(key, True)
+            after = await get_enabled_sources()
+            lit = [k for k in keys if k in after and k not in before]
+            logger.warning(f"[Startup] ENABLE_SOURCES: {len(lit)} switched on {lit}; "
+                           f"already on: {[k for k in keys if k in before]}; "
+                           f"unknown: {[k for k in keys if k not in after]}")
+    except Exception as e:
+        logger.error(f"[Startup] ENABLE_SOURCES failed: {e}")
 
     # NOTE: removed startup score inflation (was forcing all jobs to 75)
     # Let real AI/fuzzy scores stand — filter handles visibility

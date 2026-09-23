@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # boot — the owner's way to delete a profile without logging in. Matched
     # case-insensitively; harmless once the profile is gone.
     purge_profiles: str = ""
+    # Comma-separated source keys switched ON at boot (idempotent). The
+    # Sources panel is behind the site password; this is the owner's way to
+    # light a source from Railway. 22 Sep 2026: "IT MUST BE USING EVERYTHING".
+    enable_sources: str = ""
 
     # Remote-only board. Owner's call 2026-09-02.
     #

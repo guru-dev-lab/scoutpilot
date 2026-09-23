@@ -695,6 +695,15 @@ async def get_jobs(
             # By default, exclude hidden jobs
             conditions.append("status != 'hidden'")
 
+        # v2.42.0: a row the Scoring worker has not reached yet carries the
+        # schema DEFAULT of 50, and "Just Found" ordering puts exactly those
+        # rows at the head of the board — the owner's top five were Senior
+        # Software Engineer, Chief of Staff, Analytics Engineer, Director of
+        # Data Platform and Principal Software Engineer, all at 50, all
+        # seconds old. A row joins the feed once it has been judged (the
+        # worker runs every 20s). Saved/applied rows are never withheld.
+        conditions.append("(scored_at IS NOT NULL OR status IN ('saved','applied'))")
+
         if work_type:
             conditions.append("work_type = ?")
             params.append(work_type)

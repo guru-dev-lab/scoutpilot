@@ -555,6 +555,29 @@ def _identity_tokens(text: str) -> set:
     return distinct | {w for w in kept if w in _HEAD_NOUNS}
 
 
+def _description_names_role(description: str, targets: list) -> bool:
+    """True when the description says the role's own name: a profile title or
+    variant as a contiguous phrase (seniority stripped), e.g. "business
+    intelligence analyst", "data analyst", "reporting analyst", or the bare
+    "business intelligence" / "bi analyst". Two-letter variants like "BI" on
+    their own are not enough; they need their head noun."""
+    d = " " + re.sub(r"[^a-z0-9]+", " ", (description or "").lower()) + " "
+    if not d.strip():
+        return False
+    for t in targets:
+        words = [w for w in re.findall(r"[a-z0-9]+", str(t).lower()) if w not in _NOISE_TOKENS]
+        if not words:
+            continue
+        phrase = " " + " ".join(words) + " "
+        if len(words) >= 2 and phrase in d:
+            return True
+        # the modifier pair without its head noun: "business intelligence"
+        stem = [w for w in words if w not in _HEAD_NOUNS]
+        if len(stem) >= 2 and (" " + " ".join(stem) + " ") in d:
+            return True
+    return False
+
+
 def _profile_vocabulary(target_title: str, expanded: list, keywords: list) -> set:
     """Every distinctive word the profile recognises, from its own title, its
     expanded variants and its keyword list."""
@@ -653,6 +676,7 @@ def score_relevance_fuzzy(
     unknown_family_suspect = bool(target_family) and not job_family
 
     fence_capped = False
+    family_capped = False   # the TITLE names another profession outright
     if target_family and job_family and job_family != target_family:
         allowed = _FAMILY_ADJACENCY.get(target_family, {target_family})
         if job_family not in allowed:
@@ -661,6 +685,7 @@ def score_relevance_fuzzy(
             base_title_score = min(base_title_score, 22)
             best_score = base_title_score
             fence_capped = True
+            family_capped = True
 
     # ── Modifier-recognition gate ────────────────────────────────────────
     # A title has to be recognisable by its MODIFIER, not just its head noun.
@@ -762,7 +787,22 @@ def score_relevance_fuzzy(
             # written for: a "Solutions Engineer" whose JD has SQL + Tableau +
             # dashboards + KPIs + reporting scores 66 — real evidence of the
             # role — and was still capped at 22 and dropped.
-            if sig_score >= _SIGNATURE_RESCUE_MIN:
+            # v2.42.0: TOOLS ALONE DO NOT MAKE A DATA ENGINEER A BI ANALYST.
+            # The rescue fired on one foundation hit plus one toolkit hit (SQL
+            # and Tableau, present in nearly every data-engineering and
+            # analytics-engineering posting), so with the AI off the remote
+            # board carried Data Engineer 100, Senior Software Engineer (Data)
+            # 79, Analytics Engineering Manager 81, Revenue Analytics Manager
+            # 96 — titles that name another profession outright. When the
+            # TITLE says another family, the description must also NAME the
+            # role (a profile title or variant as a phrase: "business
+            # intelligence", "data analyst", "reporting analyst") before the
+            # fence is overridden. A title of unknown family ("Senior
+            # Analyst", "Analyst, Technical") keeps the tool-based rescue,
+            # which is the disguised-role case it was written for.
+            names_role = (not family_capped) or _description_names_role(
+                job_description, all_targets)
+            if sig_score >= _SIGNATURE_RESCUE_MIN and names_role:
                 # Description clearly identifies this as the role —
                 # override whatever the title-based scoring said.
                 best_score = max(best_score, sig_score)

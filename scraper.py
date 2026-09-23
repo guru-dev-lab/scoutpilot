@@ -871,33 +871,72 @@ async def scrape_remotive(
     return jobs
 
 
+_THEMUSE_TTL = 600
+_THEMUSE_PAGES = 10
+_THEMUSE_CATEGORIES = ("Data and Analytics", "Data Science")
+_themuse_cache: dict = {"at": 0.0, "items": []}
+_themuse_lock: Optional[asyncio.Lock] = None
+
+
+async def _themuse_feed() -> list[dict]:
+    """TheMuse remote data postings, cached and shared by every term.
+
+    v2.42.0: the old read took the first 5 pages of the UNFILTERED public
+    stream (20,638 pages) and matched titles locally, so a data title almost
+    never appeared in the 100 rows it saw — zero rows ever. The API filters by
+    category and location; verified live: category=Data and Analytics with
+    location=Flexible / Remote returns 49 pages."""
+    global _themuse_lock
+    if _themuse_lock is None:
+        _themuse_lock = asyncio.Lock()
+    async with _themuse_lock:
+        now = time.time()
+        if _themuse_cache["items"] and (now - _themuse_cache["at"]) < _THEMUSE_TTL:
+            return _themuse_cache["items"]
+        items: list[dict] = []
+        seen: set = set()
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        try:
+            async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+                for cat in _THEMUSE_CATEGORIES:
+                    for page in range(1, _THEMUSE_PAGES + 1):
+                        resp = await client.get(
+                            "https://www.themuse.com/api/public/jobs",
+                            params={"page": page, "descending": "true",
+                                    "category": cat, "location": "Flexible / Remote"},
+                        )
+                        if resp.status_code != 200:
+                            logger.warning(f"[TheMuse] HTTP {resp.status_code} on {cat} page {page}")
+                            break
+                        results = resp.json().get("results", []) or []
+                        if not results:
+                            break
+                        for r in results:
+                            key = r.get("id") or r.get("refs", {}).get("landing_page")
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            items.append(r)
+                        await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"[TheMuse] feed read failed after {len(items)} rows: {e}")
+        if items:
+            _themuse_cache["items"] = items
+            _themuse_cache["at"] = now
+            logger.info(f"[TheMuse] feed refreshed: {len(items)} remote data rows")
+        return _themuse_cache["items"]
+
+
 async def scrape_themuse(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape jobs from The Muse API (free, no key needed)."""
+    """Scrape jobs from The Muse API (free, no key needed) — matched locally
+    against the cached remote data feed (see _themuse_feed)."""
     logger.info(f"[TheMuse] Searching: '{search_term}'")
-
     jobs = []
     try:
-        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
-        # Fetch multiple pages to maximize matches
-        all_results = []
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            for page in range(1, 6):  # 5 pages for more coverage
-                resp = await client.get(
-                    "https://www.themuse.com/api/public/jobs",
-                    params={"page": page, "descending": "true"},
-                )
-                if resp.status_code != 200:
-                    logger.warning(f"[TheMuse] HTTP {resp.status_code} on page {page}")
-                    break
-                page_data = resp.json()
-                results = page_data.get("results", [])
-                if not results:
-                    break
-                all_results.extend(results)
-
+        all_results = await _themuse_feed()
         search_lower = search_term.lower()
         search_words = search_lower.replace(" remote", "").strip().split()
 
@@ -1556,9 +1595,15 @@ async def scrape_jobicy(
         # Jobicy: broad fetch, no tag/geo filters (both too restrictive, return 0)
         # Their API returns the latest 50 remote jobs — filter client-side
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            # v2.42.0: the feed was fetched UNFILTERED (its 50 newest jobs
+            # worldwide) and then matched locally, which is why this source
+            # produced zero rows in its whole life. The API takes the search
+            # words as `tag` and a `geo` — verified live: tag=data analyst,
+            # geo=usa returns 50 US data-analyst rows, most a few days old.
             resp = await client.get(
                 "https://jobicy.com/api/v2/remote-jobs",
-                params={"count": 50},
+                params={"count": 50, "geo": "usa",
+                        "tag": search_term.lower().replace(" remote", "").strip()},
             )
             if resp.status_code != 200:
                 logger.error(f"[Jobicy] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -1634,46 +1679,82 @@ async def scrape_jobicy(
     return jobs
 
 
+_HIMALAYAS_TTL = 600  # seconds
+_HIMALAYAS_PAGES = 25  # x 20 rows = the newest 500 of a ~100k feed
+_himalayas_cache: dict = {"at": 0.0, "items": []}
+_himalayas_lock: Optional[asyncio.Lock] = None
+
+
+async def _himalayas_feed() -> list[dict]:
+    """The newest _HIMALAYAS_PAGES x 20 Himalayas jobs, cursor-paged, cached
+    for _HIMALAYAS_TTL seconds and shared by every search term.
+
+    v2.42.0: the old read took 100 rows by offset and matched them locally per
+    term — of a 102,934-job feed. Six terms x five pages of the same 100 rows,
+    and zero rows ever inserted. The API's own note (21 Aug 2026) says to page
+    with `cursor` (offset is deprecated); one cached read of the newest 500 is
+    what the local match now runs over."""
+    global _himalayas_lock
+    if _himalayas_lock is None:
+        _himalayas_lock = asyncio.Lock()
+    async with _himalayas_lock:
+        now = time.time()
+        if _himalayas_cache["items"] and (now - _himalayas_cache["at"]) < _HIMALAYAS_TTL:
+            return _himalayas_cache["items"]
+        items: list[dict] = []
+        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
+        cursor = None
+        try:
+            async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+                for _ in range(_HIMALAYAS_PAGES):
+                    params = {"limit": 20}
+                    if cursor:
+                        params["cursor"] = cursor
+                    resp = await client.get("https://himalayas.app/jobs/api", params=params)
+                    if resp.status_code == 429:
+                        logger.warning("[Himalayas] rate limited — keeping what was read")
+                        break
+                    if resp.status_code != 200:
+                        logger.error(f"[Himalayas] HTTP {resp.status_code}")
+                        break
+                    data = resp.json()
+                    page = data.get("jobs", []) or []
+                    if not page:
+                        break
+                    items.extend(page)
+                    cursor = data.get("nextCursor")
+                    if not cursor:
+                        break
+                    await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"[Himalayas] feed read failed after {len(items)} rows: {e}")
+        if items:
+            _himalayas_cache["items"] = items
+            _himalayas_cache["at"] = now
+            logger.info(f"[Himalayas] feed refreshed: {len(items)} newest rows")
+        return _himalayas_cache["items"]
+
+
 async def scrape_himalayas(
     search_term: str,
     profile_id: Optional[int] = None,
 ) -> list[dict]:
-    """Scrape remote jobs from Himalayas (free API, no key needed).
-    API max is 20 per request — paginate with offset to get more."""
+    """Scrape remote jobs from Himalayas (free API, no key needed) — matched
+    locally against the cached newest-500 feed (see _himalayas_feed)."""
     logger.info(f"[Himalayas] Searching: '{search_term}'")
-
     jobs = []
     try:
-        headers = {"User-Agent": "ScoutPilot/1.0 (job search aggregator)"}
         search_lower = search_term.lower().replace(" remote", "").strip()
         search_words = search_lower.split()
-        all_items = []
-
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-            # Browse endpoint — paginate 20/page up to 5 pages, filter client-side
-            # The 'q' param returns irrelevant results (tested: "data analyst" → "Campus Ambassador")
-            for page_offset in range(0, 100, 20):
-                try:
-                    resp = await client.get(
-                        "https://himalayas.app/jobs/api",
-                        params={"limit": 20, "offset": page_offset},
-                    )
-                    if resp.status_code == 429:
-                        logger.warning(f"[Himalayas] Rate limited at offset {page_offset}")
-                        break
-                    if resp.status_code != 200:
-                        logger.error(f"[Himalayas] HTTP {resp.status_code} at offset {page_offset}")
-                        break
-                    data = resp.json()
-                    page_jobs = data.get("jobs", [])
-                    if not page_jobs:
-                        break
-                    all_items.extend(page_jobs)
-                except Exception as e:
-                    logger.warning(f"[Himalayas] Page error at offset {page_offset}: {e}")
-                    break
-
+        all_items = await _himalayas_feed()
         for item in all_items:
+            # US-only board: the feed says where a job may be worked from.
+            # An empty list means anywhere, which includes the US.
+            restr = item.get("locationRestrictions") or []
+            if isinstance(restr, list) and restr and not any(
+                    str(r).strip().lower() in ("united states", "usa", "us", "north america")
+                    for r in restr):
+                continue
             title = item.get("title", "")
             # Company is under companyName (fall back to companySlug)
             company = item.get("companyName", "") or item.get("companySlug", "") or item.get("company_name", "")

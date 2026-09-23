@@ -96,6 +96,22 @@ def main():
             if not ok:
                 fails.append((prof["title"], t, a))
             print(f"{'' if b is None else b:>6} {a:>6}  {t}{'' if ok else '   <-- FAIL'}")
+    print("--- description rescue: tools alone do not rescue a different-family title")
+    TOOLS = ("We are hiring. You will build pipelines in SQL and Python, own our "
+             "Snowflake warehouse, and publish Tableau dashboards and KPI reporting "
+             "for stakeholders. ETL, dbt, Airflow.")
+    NAMED = TOOLS + " You will join the business intelligence team as its analyst."
+    for title, desc, must_pass, why in (
+            ("Data Engineer", TOOLS, False, "engineer title, tools only"),
+            ("Senior Software Engineer, Data", TOOLS, False, "engineer title, tools only"),
+            ("Analytics Engineering Manager", TOOLS, False, "engineer title, tools only"),
+            ("Senior Analyst", TOOLS, True, "unknown family keeps the tool rescue"),
+            ("Data Engineer", NAMED, True, "description names the role")):
+        a = new.score_relevance_fuzzy(title, desc, BI["title"], BI["expanded"], BI["keywords"])
+        ok = a >= 50 if must_pass else a <= 22
+        if not ok:
+            fails.append(("rescue", title, a))
+        print(f"{'':>6} {a:>6}  {title} [{why}]{'' if ok else '   <-- FAIL'}")
     print("--- re-homing (fetched under BI, belongs to DA)")
     import os
     os.environ.setdefault("DATABASE_PATH", "/tmp/scoutpilot-test.db")
