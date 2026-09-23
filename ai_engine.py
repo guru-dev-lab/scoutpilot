@@ -365,7 +365,7 @@ _ROLE_FAMILIES: dict[str, set[str]] = {
     },
     "support": {
         "support specialist", "technical support", "help desk", "helpdesk",
-        "customer support",
+        "customer support", "data entry",
     },
     "implementation": {
         "implementation specialist", "implementation consultant",
@@ -421,6 +421,12 @@ _ANALYST_DOMAIN_QUALIFIERS: dict[str, str] = {
     # people
     "hr": "hr", "human resources": "hr", "people": "hr", "talent": "hr",
     "compensation": "hr", "benefits": "hr", "recruiting": "hr",
+    # clerical / sales roles wearing the analyst word — v2.42.1: "Data Entry
+    # Analyst" and "AI Training Data Acquisition Analyst" scored 100 on the
+    # Data Analyst board because their words contain "data" and "analyst";
+    # the qualifier names a different job.
+    "data entry": "support", "data acquisition": "ops_pm", "annotation": "ops_pm",
+    "business development": "sales_cs", "data collection": "ops_pm",
     # technical (non-analytics)
     "security": "security", "soc": "security", "network": "devops_platform",
     "systems": "devops_platform", "infrastructure": "devops_platform",

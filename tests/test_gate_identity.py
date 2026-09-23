@@ -46,6 +46,9 @@ JUNK = [
     "Registered Nurse",
     "Business Development Representative",
     "Data Entry Clerk",
+    "Data Entry Analyst",
+    "AI Training Data Acquisition Analyst",
+    "Business Development Analyst",
     "Data Center Technician",
     "Business Office Manager",
 ]
