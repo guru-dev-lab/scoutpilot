@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.43.2"
+BUILD_VERSION = "2.43.3"
 BUILD_DATE = "2026-09-22"
 RECENT_CHANGES = [
+    {"version": "2.43.3", "date": "2026-09-22", "status": "active", "change": "The head of the board was still showing unjudged rows at the schema default of 50. scored_at is TEXT DEFAULT '' since the v2.1.0 migration, so an unscored row carries '' rather than NULL, and the 2.42.0 feed rule (scored_at IS NOT NULL) matched nothing. Both the feed and the remote_feed diagnostic now require a non-empty scored_at. Seen on the live remote head with 16 rows at exactly 50 from the new platforms while the scorer was still queued behind their first sweep."},
     {"version": "2.43.2", "date": "2026-09-22", "status": "active", "change": "Jobvite from the Railway snippet: each job is one <li class=row> whose whole row is the anchor, with jv-job-list-name and jv-job-list-location divs inside it — parsed that way now (was a table guess, 0 rows). iCIMS confirmed at 88 rows on the probe after 2.43.1. Also: a non-US location is out even when the title says Remote ('Remote, International' in the UK), matching every other fetcher."},
     {"version": "2.43.1", "date": "2026-09-22", "status": "active", "change": "First Railway probes of the new platforms: UKG 12 rows, Oracle 156, ADP 19, Rippling 454, Jobvite 7 parsed; iCIMS 0 although every host answered 200 on three pages. Fixes from the shape logs: UKG's JobLocationType is its workplace field and is now read; Jobvite rows are parsed per table row so the location cell is found wherever it sits; iCIMS anchors are matched in any attribute order with absolute or relative hrefs, and the first response per process is logged with a snippet so the next mismatch is visible in the log, not guessed."},
     {"version": "2.43.0", "date": "2026-09-22", "status": "active", "change": "SEVEN MORE ATS PLATFORMS, owner's instruction ('You need to be scrapping them too thats why we have workers for them too.. whatever you need to do'): UKG Pro (recruiting.ultipro.com JobBoard search), Oracle Cloud Recruiting (recruitingCEJobRequisitions), ADP WorkforceNow (career-center job-requisitions), Rippling (board API), BambooHR (careers/list), Jobvite and iCIMS (server-rendered lists). All in ats_more.py with the same fetcher contract; one worker each; sources registered; careers pages in /api/ats-pages; the harvest recognises their job links (UKG org+board, Oracle host+site, ADP cid+ccId, Rippling/BambooHR/Jobvite slugs, iCIMS hosts) and name-fuzzes the slug-only three. Nothing was probed from a laptop, per the owner ('not here.. on the website and railway'): each fetcher logs the SHAPE of its first response, and GET /api/debug/ats-probe?ats=&slug=&tenant=&site= runs a fetcher for one company with inserts OFF and returns what it parsed — the verification lives on Railway. Rosters start from seed tenants found in public search results and grow through the harvest."},
@@ -2225,7 +2226,7 @@ async def api_debug_pipeline():
                 "       j.source, j.first_seen_at, COALESCE(p.title,'(none)') AS profile "
                 "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
                 "WHERE j.status != 'hidden' AND j.work_type = 'remote' "
-                "  AND j.scored_at IS NOT NULL "
+                "  AND j.scored_at IS NOT NULL AND j.scored_at != '' "
                 "  AND (j.search_profile_id IS NULL OR p.is_active = 1) "
                 "ORDER BY datetime(j.first_seen_at) DESC, datetime(j.posted_at) DESC LIMIT 80")
             # Titles still carrying raw HTML entities (&amp; &#39; &quot; ...).

@@ -702,7 +702,10 @@ async def get_jobs(
         # Data Platform and Principal Software Engineer, all at 50, all
         # seconds old. A row joins the feed once it has been judged (the
         # worker runs every 20s). Saved/applied rows are never withheld.
-        conditions.append("(scored_at IS NOT NULL OR status IN ('saved','applied'))")
+        # scored_at is TEXT DEFAULT '' (v2.1.0 migration), so an unjudged row
+        # is '' far more often than NULL — the 2.42.0 rule tested only NULL and
+        # the head of the board kept showing schema-default 50s (v2.43.3).
+        conditions.append("((scored_at IS NOT NULL AND scored_at != '') OR status IN ('saved','applied'))")
 
         if work_type:
             conditions.append("work_type = ?")
