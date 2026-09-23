@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.42.2"
+BUILD_VERSION = "2.43.0"
 BUILD_DATE = "2026-09-22"
 RECENT_CHANGES = [
+    {"version": "2.43.0", "date": "2026-09-22", "status": "active", "change": "SEVEN MORE ATS PLATFORMS, owner's instruction ('You need to be scrapping them too thats why we have workers for them too.. whatever you need to do'): UKG Pro (recruiting.ultipro.com JobBoard search), Oracle Cloud Recruiting (recruitingCEJobRequisitions), ADP WorkforceNow (career-center job-requisitions), Rippling (board API), BambooHR (careers/list), Jobvite and iCIMS (server-rendered lists). All in ats_more.py with the same fetcher contract; one worker each; sources registered; careers pages in /api/ats-pages; the harvest recognises their job links (UKG org+board, Oracle host+site, ADP cid+ccId, Rippling/BambooHR/Jobvite slugs, iCIMS hosts) and name-fuzzes the slug-only three. Nothing was probed from a laptop, per the owner ('not here.. on the website and railway'): each fetcher logs the SHAPE of its first response, and GET /api/debug/ats-probe?ats=&slug=&tenant=&site= runs a fetcher for one company with inserts OFF and returns what it parsed — the verification lives on Railway. Rosters start from seed tenants found in public search results and grow through the harvest."},
     {"version": "2.42.2", "date": "2026-09-22", "status": "active", "change": "HIMALAYAS AND JOBICY GO DARK AGAIN, owner's call the same evening: 'it does want you apply from their site and i dont like that.. its like easy apply'. v2.42.0 repaired their fetchers and lit them through ENABLE_SOURCES, repeating the exact mistake the signup-wall block warns about — treating zero rows as a bug without asking why the source was off. The signup-wall list is now module-level (SIGNUP_WALL_SOURCES), ENABLE_SOURCES refuses those keys, and the boot block keeps disabling them and hiding their rows. The fetcher repairs stay in the code for the day a direct link is exposed."},
     {"version": "2.42.1", "date": "2026-09-22", "status": "active", "change": "Data Entry Analyst (100) and AI Training Data Acquisition Analyst (100) were on the remote Data Analyst board: their words contain data + analyst, so they cleared the gate and token_set_ratio scored the word-subset at 100. The analyst-domain qualifiers now route data entry / data acquisition / annotation / data collection / business development to the family they belong to, so the fence caps them at 22. remote_feed diagnostic now withholds unscored rows exactly as the feed does."},
     {"version": "2.42.0", "date": "2026-09-22", "status": "active", "change": "THREE FREE SOURCES HAD NEVER PRODUCED A ROW, and it was how they were asked. Jobicy was fetched unfiltered (its 50 newest jobs worldwide) and matched locally; the API takes the search words as tag= and geo=usa, verified live to return 50 US data-analyst rows. Himalayas read the newest 100 of a 102,934-job feed by deprecated offset, five times per term; now one cursor-paged read of the newest 500, cached 10 minutes and shared by every term, filtered to US-or-anywhere by the feed's own locationRestrictions. TheMuse read the first 5 pages of the unfiltered public stream (20,638 pages); now category=Data and Analytics / Data Science with location=Flexible / Remote, ten pages each, cached. ZipRecruiter was tried and dropped: JobSpy's ZipRecruiter path answers 403 'forbidden aa' from any address. Glassdoor answers 403 from Railway. ENABLE_SOURCES=<keys> switches named sources on at boot (the Sources panel is behind the password) — set to adzuna,jooble,careerjet,jobicy,himalayas,themuse on the owner's instruction to use every site. TWO MORE LEAKS measured on the live remote feed after 2.41.0: (a) the skill-signature rescue fired on one foundation hit plus one toolkit hit (SQL + Tableau, in nearly every data-engineering posting), so Data Engineer 100, Senior Software Engineer (Data) 79 and Analytics Engineering Manager 81 sat on a BI board — when the TITLE names another family, the description must now also name the role as a phrase before the fence is overridden; unknown-family titles keep the tool-based rescue. (b) rows the Scoring worker had not reached yet showed at the head of the board at the schema default of 50 — the feed now withholds a row until it has been judged."},
@@ -1152,6 +1153,13 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("ATS-workable", 600, _make_ats_body("workable")))
     asyncio.create_task(_worker("ATS-recruitee", 600, _make_ats_body("recruitee")))
     asyncio.create_task(_worker("ATS-breezy", 600, _make_ats_body("breezy")))
+    # v2.43.0 — seven more platforms (ats_more.py). Owner: "You need to be
+    # scrapping them too thats why we have workers for them too". Their
+    # rosters start from a handful of seeds and grow through the harvest
+    # (URL patterns + name-fuzz for the slug-only ones).
+    for _plat, _every in (("ukg", 300), ("oracle", 300), ("adp", 300), ("rippling", 300),
+                          ("bamboohr", 300), ("jobvite", 600), ("icims", 600)):
+        asyncio.create_task(_worker(f"ATS-{_plat}", _every, _make_ats_body(_plat)))
     # Non-ATS source groups + scoring + discovery:
     # 300s, was 120s. Every remote board in this group reports "inserted 0 new"
     # cycle after cycle (Remotive 19 found -> 0 new, TheMuse 100 -> 0) because
@@ -1298,7 +1306,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -2846,6 +2854,26 @@ async def api_ats_pages(
     head = f"# {total} ATS companies (showing {len(rows)} from offset {offset}). name | ats | careers page | json feed\n"
     body = "\n".join(f"{r['name']} | {r['ats']} | {r['page']} | {r['api']}" for r in rows)
     return HTMLResponse(head + body + "\n", media_type="text/plain")
+
+
+@app.get("/api/debug/ats-probe")
+async def api_ats_probe(
+    ats: str = Query(..., description="ukg | oracle | adp | rippling | bamboohr | jobvite | icims"),
+    slug: str = Query("", description="org code / cid / board slug / icims host"),
+    tenant: str = Query("", description="host for ukg/oracle/adp"),
+    site: str = Query("", description="ukg board guid / oracle site / adp ccId"),
+    name: str = Query(""),
+    terms: str = Query("", description="comma list of title words; empty = every title"),
+):
+    """Run one ats_more fetcher for ONE company with inserts switched off and
+    return what it parsed. This is how a new platform is verified where the app
+    actually runs (Railway), not from a laptop. Open route: it only reads a
+    public careers feed the caller names and writes nothing."""
+    from ats_more import probe
+    company = {"ats": ats.strip().lower(), "slug": slug.strip(), "tenant": tenant.strip(),
+               "site": site.strip(), "name": name.strip() or slug.strip()}
+    search_terms = [t.strip() for t in terms.split(",") if t.strip()]
+    return await probe(company, search_terms)
 
 
 @app.get("/api/discovery-stats")

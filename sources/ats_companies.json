@@ -7423,5 +7423,234 @@
   "tenant": "yale",
   "wd": "wd1",
   "site": "External_Career_Site"
+ },
+ {
+  "name": "IVE1000IVEC",
+  "slug": "IVE1000IVEC",
+  "ats": "ukg",
+  "tenant": "recruiting2.ultipro.com",
+  "site": "ec3e4530-b925-46c7-8da5-602b6abf81e7"
+ },
+ {
+  "name": "CLE1003CLEAN",
+  "slug": "CLE1003CLEAN",
+  "ats": "ukg",
+  "tenant": "recruiting2.ultipro.com",
+  "site": "34c7f7c9-2040-4eae-a7eb-0965869b3fcb"
+ },
+ {
+  "name": "DOC1001DOCM",
+  "slug": "DOC1001DOCM",
+  "ats": "ukg",
+  "tenant": "recruiting2.ultipro.com",
+  "site": "a7489e8f-529a-41c2-9cc0-821c2498ecb1"
+ },
+ {
+  "name": "HEL1006HELI",
+  "slug": "HEL1006HELI",
+  "ats": "ukg",
+  "tenant": "recruiting2.ultipro.com",
+  "site": "73d20f56-33cd-4859-a6e3-7c858a9a8241"
+ },
+ {
+  "name": "GUI1001",
+  "slug": "GUI1001",
+  "ats": "ukg",
+  "tenant": "recruiting.ultipro.com",
+  "site": "634382fd-6424-ec1b-8e37-2aa4ce4c10de"
+ },
+ {
+  "name": "BER1009TBG",
+  "slug": "BER1009TBG",
+  "ats": "ukg",
+  "tenant": "recruiting.ultipro.com",
+  "site": "66b80eac-9323-4c54-9e00-7b3d65cf651d"
+ },
+ {
+  "name": "MER1018MMIC",
+  "slug": "MER1018MMIC",
+  "ats": "ukg",
+  "tenant": "recruiting.ultipro.com",
+  "site": "1b36f9bd-51dd-d343-e324-b2b56c792814"
+ },
+ {
+  "name": "SEV1002SST",
+  "slug": "SEV1002SST",
+  "ats": "ukg",
+  "tenant": "recruiting.ultipro.com",
+  "site": "b2d369e0-7907-f83e-0d43-6c7f54b10e8a"
+ },
+ {
+  "name": "BUI1004BMDI",
+  "slug": "BUI1004BMDI",
+  "ats": "ukg",
+  "tenant": "recruiting.ultipro.com",
+  "site": "6b442184-52a5-4635-8db5-5aa4bed2a563"
+ },
+ {
+  "name": "JPMorgan Chase",
+  "slug": "jpmc.fa.oraclecloud.com/CX_1001",
+  "ats": "oracle",
+  "tenant": "jpmc.fa.oraclecloud.com",
+  "site": "CX_1001"
+ },
+ {
+  "name": "UCSF",
+  "slug": "iazuqy.fa.ocs.oraclecloud.com/CX_1",
+  "ats": "oracle",
+  "tenant": "iazuqy.fa.ocs.oraclecloud.com",
+  "site": "CX_1"
+ },
+ {
+  "name": "ADP 566efbd3",
+  "slug": "566efbd3-0446-4f82-a192-39a723b842bb",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "19000101_000001"
+ },
+ {
+  "name": "ADP c0201fdc",
+  "slug": "c0201fdc-34ad-44a1-b0a5-6bd2e603ac46",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "19000101_000001"
+ },
+ {
+  "name": "ADP 5d340a80",
+  "slug": "5d340a80-295a-43f6-90d4-ec5e023a3cd0",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "19000101_000001"
+ },
+ {
+  "name": "Foureyes",
+  "slug": "c968050c-15a9-468b-acaf-b26b765aff76",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "1586553167877902_1890"
+ },
+ {
+  "name": "ADP 89da4960",
+  "slug": "89da4960-4d45-4b46-b7aa-5959c5f71827",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "19000101_000001"
+ },
+ {
+  "name": "ADP 4f8b9ec0",
+  "slug": "4f8b9ec0-f968-42cd-9774-88eb269c652e",
+  "ats": "adp",
+  "tenant": "workforcenow.adp.com",
+  "site": "19000101_000001"
+ },
+ {
+  "name": "Rippling",
+  "slug": "rippling",
+  "ats": "rippling"
+ },
+ {
+  "name": "Gamer's Choice",
+  "slug": "gamerschoice",
+  "ats": "rippling"
+ },
+ {
+  "name": "TheGuarantors",
+  "slug": "theguarantors-open-positions",
+  "ats": "rippling"
+ },
+ {
+  "name": "IXIS",
+  "slug": "ixis-career-board",
+  "ats": "rippling"
+ },
+ {
+  "name": "Hunter Strategy",
+  "slug": "hunterstrategy",
+  "ats": "rippling"
+ },
+ {
+  "name": "Phase2",
+  "slug": "phase2-careers",
+  "ats": "rippling"
+ },
+ {
+  "name": "Vouch",
+  "slug": "vouch-inc",
+  "ats": "rippling"
+ },
+ {
+  "name": "Clarvida",
+  "slug": "pathways",
+  "ats": "jobvite"
+ },
+ {
+  "name": "Ookla",
+  "slug": "ookla",
+  "ats": "jobvite"
+ },
+ {
+  "name": "Lean Tech",
+  "slug": "leantechio",
+  "ats": "jobvite"
+ },
+ {
+  "name": "AVER",
+  "slug": "avercareers",
+  "ats": "jobvite"
+ },
+ {
+  "name": "CloudOne Digital",
+  "slug": "cloudone-digital",
+  "ats": "jobvite"
+ },
+ {
+  "name": "PulsePoint",
+  "slug": "pulsepoint",
+  "ats": "jobvite"
+ },
+ {
+  "name": "Ness Digital Engineering",
+  "slug": "ness",
+  "ats": "jobvite"
+ },
+ {
+  "name": "Aptive",
+  "slug": "careers-aptiveresources.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "Cotiviti",
+  "slug": "careers-cotiviti.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "IDEMIA",
+  "slug": "uscareers-idemia.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "FedWriters",
+  "slug": "careers-fedwriters.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "New American Funding",
+  "slug": "careers-nafinc.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "Origami Risk",
+  "slug": "careers-origamirisk.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "Turner Construction",
+  "slug": "careers-wforce.icims.com",
+  "ats": "icims"
+ },
+ {
+  "name": "WCG Clinical",
+  "slug": "careers-wcgclinical.icims.com",
+  "ats": "icims"
  }
 ]

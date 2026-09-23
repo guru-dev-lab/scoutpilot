@@ -28,6 +28,7 @@ import httpx
 from config import settings
 from database import insert_job, get_enabled_sources
 from scraper import _is_direct_url, _is_blocked_company, _normalize_posted_at
+from ats_more import FETCHERS as _MORE_FETCHERS, URLS as _MORE_URLS
 
 logger = logging.getLogger("scoutpilot.ats")
 
@@ -60,6 +61,11 @@ _PLATFORM_CONCURRENCY = {
     "workable": 3,
     "recruitee": 4,
     "breezy": 4,
+    # v2.43.0 platforms (ats_more.py). Enterprise hosts (UKG, Oracle, ADP)
+    # front every tenant on one domain, so a burst looks like one client
+    # hammering one site; keep them modest. iCIMS and Jobvite are rendered HTML.
+    "ukg": 6, "oracle": 6, "adp": 6, "rippling": 8, "bamboohr": 6,
+    "jobvite": 4, "icims": 4,
 }
 
 # Platforms to route through the residential proxy when one is configured, so a
@@ -249,7 +255,7 @@ def company_pages(c: dict) -> Optional[dict]:
         if not m:
             return None
         page, api = f"{m.group(1)}/{m.group(3)}", base.rstrip("/") + "/jobs"
-    elif not slug:
+    elif not slug and ats not in _MORE_URLS:
         return None
     elif ats == "greenhouse":
         page, api = f"https://job-boards.greenhouse.io/{slug}", f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
@@ -265,6 +271,8 @@ def company_pages(c: dict) -> Optional[dict]:
         page, api = f"https://{slug}.recruitee.com/", f"https://{slug}.recruitee.com/api/offers/"
     elif ats == "breezy":
         page, api = f"https://{slug}.breezy.hr/", f"https://{slug}.breezy.hr/json"
+    elif ats in _MORE_URLS:
+        page, api = _MORE_URLS[ats](c)
     else:
         return None
     return {"name": c.get("name") or slug, "ats": ats, "page": page, "api": api}
@@ -1174,6 +1182,7 @@ _PLATFORM_FETCHERS = {
     "workable": fetch_workable,
     "recruitee": fetch_recruitee,
     "breezy": fetch_breezy,
+    **_MORE_FETCHERS,   # ukg, oracle, adp, rippling, bamboohr, jobvite, icims
 }
 
 

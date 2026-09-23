@@ -258,6 +258,8 @@ def extract_smartrecruiters(url: str) -> Optional[str]:
 
 # Platforms fronted by Cloudflare: probe them slowly and through the proxy.
 _CLOUDFLARE_ATS = {"workable", "recruitee", "breezy"}
+from ats_more import (PLATFORMS as _MORE_PLATFORMS, NAME_FUZZ_PLATFORMS as _MORE_NAME_FUZZ,
+                      verify as _more_verify)
 
 _WORKABLE_PATTERNS = [
     re.compile(r"https?://apply\.workable\.com/([a-z0-9][a-z0-9_-]+)", re.I),
@@ -306,11 +308,50 @@ def extract_breezy(url: str) -> Optional[str]:
     return None
 
 
+# ── v2.43.0 platforms (ats_more.py) ────────────────────────────────────────
+_UKG_PAT = re.compile(r"https?://(recruiting2?\.ultipro\.com)/([A-Za-z0-9]+)/JobBoard/([0-9a-fA-F-]{36})", re.I)
+_ORACLE_PAT = re.compile(r"https?://([a-z0-9.-]+\.oraclecloud\.com)/hcmUI/CandidateExperience/[a-z-]+/sites/([A-Za-z0-9_]+)", re.I)
+_ADP_PAT = re.compile(r"https?://(workforcenow(?:\.cloud)?\.adp\.com)/mascsr/default/mdf/recruitment/recruitment\.html\?([^#\s\"']*)", re.I)
+_RIPPLING_PAT = re.compile(r"https?://ats\.rippling\.com/([a-z0-9][a-z0-9_-]+)/jobs", re.I)
+_BAMBOO_PAT = re.compile(r"https?://([a-z0-9][a-z0-9_-]+)\.bamboohr\.com/careers", re.I)
+_JOBVITE_PAT = re.compile(r"https?://jobs\.jobvite\.com/([a-z0-9][a-z0-9_-]+)/(?:job|jobs)\b", re.I)
+_ICIMS_PAT = re.compile(r"https?://([a-z0-9][a-z0-9.-]+\.icims\.com)/jobs\b", re.I)
+_ICIMS_IGNORE = {"www.icims.com", "social.icims.com", "careers.icims.com", "media.icims.com"}
+
+
+def extract_more(url: str) -> list[tuple[str, dict]]:
+    """Candidates for the ats_more platforms. slug/tenant/site follow the
+    column reuse documented in ats_more.py."""
+    out: list[tuple[str, dict]] = []
+    u = url or ""
+    if (m := _UKG_PAT.search(u)):
+        out.append(("ukg", {"slug": m.group(2), "tenant": m.group(1).lower(), "site": m.group(3).lower()}))
+    if (m := _ORACLE_PAT.search(u)):
+        host, site = m.group(1).lower(), m.group(2)
+        out.append(("oracle", {"slug": f"{host}/{site}", "tenant": host, "site": site}))
+    if (m := _ADP_PAT.search(u)):
+        q = dict(p.split("=", 1) for p in m.group(2).split("&") if "=" in p)
+        cid = (q.get("cid") or "").lower()
+        if re.fullmatch(r"[0-9a-f-]{36}", cid):
+            out.append(("adp", {"slug": cid, "tenant": m.group(1).lower(),
+                                "site": q.get("ccId") or "19000101_000001"}))
+    if (m := _RIPPLING_PAT.search(u)):
+        out.append(("rippling", {"slug": m.group(1).lower()}))
+    if (m := _BAMBOO_PAT.search(u)) and m.group(1).lower() not in ("www", "app", "api"):
+        out.append(("bamboohr", {"slug": m.group(1).lower()}))
+    if (m := _JOBVITE_PAT.search(u)):
+        out.append(("jobvite", {"slug": m.group(1).lower()}))
+    if (m := _ICIMS_PAT.search(u)) and m.group(1).lower() not in _ICIMS_IGNORE:
+        out.append(("icims", {"slug": m.group(1).lower()}))
+    return out
+
+
 def extract_candidates_from_url(url: str) -> list[tuple[str, dict]]:
     """Given a job URL, return [(ats, candidate)] for any matches."""
     if not url:
         return []
     out: list[tuple[str, dict]] = []
+    out.extend(extract_more(url))
 
     if (s := extract_greenhouse(url)):
         out.append(("greenhouse", {"slug": s}))
@@ -728,6 +769,12 @@ async def _verify_candidate(
             if await _verify_breezy(client, slug):
                 return {"name": expected_name or slug, "slug": slug, "ats": "breezy"}
 
+        elif ats in _MORE_PLATFORMS:
+            entry = {"ats": ats, "slug": cand["slug"], "tenant": cand.get("tenant", ""),
+                     "site": cand.get("site", ""), "name": expected_name or cand["slug"]}
+            if await _more_verify(client, entry):
+                return entry
+
     except Exception as e:
         logger.debug(f"[Discovery] verify {ats} failed: {e}")
     return None
@@ -874,7 +921,7 @@ async def discover_new_ats_companies() -> dict:
         # started empty, and LinkedIn/Indeed give us thousands of employer
         # names that never appear as an ATS URL anywhere in our data.
         name_platforms = ("greenhouse", "lever", "ashby", "smartrecruiters",
-                          "workable", "recruitee", "breezy")
+                          "workable", "recruitee", "breezy") + _MORE_NAME_FUZZ
         name_candidates_added = 0
         for cn in ordered_names:
             variants = slug_variants_from_name(cn)

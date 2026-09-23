@@ -961,7 +961,10 @@ async def get_discovered_companies() -> list[dict]:
         out = []
         for r in rows:
             c = {"slug": r["slug"], "ats": r["ats"], "name": r["name"] or r["slug"]}
-            if r["ats"] == "workday":
+            # Workday needs tenant/wd/site; the v2.43.0 platforms (UKG, Oracle,
+            # ADP) reuse tenant=host and site=board/site/ccId. Carry whatever
+            # is set so every fetcher gets its address back.
+            if r["ats"] == "workday" or r["tenant"] or r["site"]:
                 c["tenant"] = r["tenant"]
                 c["wd"] = r["wd"]
                 c["site"] = r["site"]
@@ -1673,6 +1676,13 @@ ATS_SOURCES = [
     {"source_key": "workable",        "display_name": "Workable (ATS)",        "category": "ats", "requires_key": ""},
     {"source_key": "recruitee",       "display_name": "Recruitee (ATS)",       "category": "ats", "requires_key": ""},
     {"source_key": "breezy",          "display_name": "Breezy HR (ATS)",       "category": "ats", "requires_key": ""},
+    {"source_key": "ukg",             "display_name": "UKG Pro (ATS)",         "category": "ats", "requires_key": ""},
+    {"source_key": "oracle",          "display_name": "Oracle Cloud (ATS)",    "category": "ats", "requires_key": ""},
+    {"source_key": "adp",             "display_name": "ADP WorkforceNow (ATS)","category": "ats", "requires_key": ""},
+    {"source_key": "rippling",        "display_name": "Rippling (ATS)",        "category": "ats", "requires_key": ""},
+    {"source_key": "bamboohr",        "display_name": "BambooHR (ATS)",        "category": "ats", "requires_key": ""},
+    {"source_key": "jobvite",         "display_name": "Jobvite (ATS)",         "category": "ats", "requires_key": ""},
+    {"source_key": "icims",           "display_name": "iCIMS (ATS)",           "category": "ats", "requires_key": ""},
 ]
 
 
