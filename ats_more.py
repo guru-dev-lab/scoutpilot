@@ -92,8 +92,8 @@ def _row(source: str, title: str, company_name: str, location: str, url: str,
         return None
     wt, is_remote = a._derive_work_type(platform_field, location, title, desc[:3000])
     us = (country or "").strip().upper() in ("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA")
-    if not us and location and not a.is_us_location(location) and not is_remote:
-        return None
+    if not us and location and not a.is_us_location(location):
+        return None   # "Remote, International" in the UK is still not a US job
     if not us and not location and not is_remote:
         # No country, no location, no remote flag — the platform said nothing
         # about where this job is; keep it only when the title says remote.
@@ -474,6 +474,7 @@ _JV_LINK = re.compile(
     r'<a[^>]+href="(?:https?://jobs\.jobvite\.com)?/([a-z0-9][a-z0-9_-]*)/job/([A-Za-z0-9]+)"[^>]*>(.*?)</a>',
     re.I | re.S)
 _JV_LOC = re.compile(r'jv-job-list-location[^>]*>(.*?)</(?:td|div|span)>', re.I | re.S)
+_JV_NAME = re.compile(r'jv-job-list-name[^>]*>(.*?)</(?:td|div|span)>', re.I | re.S)
 
 
 async def fetch_jobvite(client: httpx.AsyncClient, company: dict, profile_id, search_terms: list[str]) -> list[dict]:
@@ -495,13 +496,16 @@ async def fetch_jobvite(client: httpx.AsyncClient, company: dict, profile_id, se
         return []
     # One <tr> per job on the jv-job-list table; the location sits in its own
     # cell somewhere after the link, not necessarily right after it.
+    # Railway snippet, 22 Sep: <li class="row"><a href="/slug/job/ID" class=
+    # "flex-row"><div class="jv-job-list-name">Title</div><div class="ml-auto
+    # jv-job-type">Full-Time</div><div class="ml2 jv-job-list-location">United
+    # Kingdom</div></a></li> — the whole row is the anchor.
     rows: list[tuple[str, str, str, str]] = []
-    for tr in re.split(r"<tr[^>]*>", html)[1:]:
-        m = _JV_LINK.search(tr)
-        if not m:
-            continue
-        lm = _JV_LOC.search(tr)
-        rows.append((m.group(1), m.group(2), m.group(3), lm.group(1) if lm else ""))
+    for m in _JV_LINK.finditer(html):
+        inner = m.group(3)
+        nm = _JV_NAME.search(inner)
+        lm = _JV_LOC.search(inner)
+        rows.append((m.group(1), m.group(2), nm.group(1) if nm else inner, lm.group(1) if lm else ""))
     if "jobvite" not in _SHAPE_LOGGED:
         _SHAPE_LOGGED.add("jobvite")
         i = html.find("/job/")

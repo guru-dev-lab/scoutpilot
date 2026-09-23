@@ -55,7 +55,7 @@ PAYLOADS = {
  "bamboohr": json.dumps({"result": [
     {"id": 55, "jobOpeningName": "Reporting Analyst", "location": {"city": "Remote", "state": "", "country": "United States"}, "isRemote": True},
  ]}),
- "jobvite": '<table class="jv-job-list"><tr><td class="jv-job-list-name"><a href="/pulsepoint/job/ojtlyfwp">Sr. Data Analyst, Customer Reporting (Remote)</a></td><td class="jv-job-list-location">New York, NY</td></tr></table>',
+ "jobvite": '<div class="jv-job-list"><ul><li class="row"><a href="/pulsepoint/job/ojtlyfwp" class="flex-row"><div class="jv-job-list-name"> Sr. Data Analyst, Customer Reporting (Remote) </div><div class="ml-auto jv-job-type">Full-Time</div><div class="ml2 jv-job-list-location"> New York, NY </div></a></li><li class="row"><a href="/pulsepoint/job/ovz1zfwo" class="flex-row"><div class="jv-job-list-name"> BI Engineer, SRE (Remote, International) </div><div class="ml2 jv-job-list-location"> United Kingdom </div></a></li></ul></div>',
  "icims": '<div class="row"><a class="iCIMS_Anchor" href="https://careers-cotiviti.icims.com/jobs/16642/data-analyst/job?mode=job&iis=x"><h3>Data Analyst</h3></a><dl><dt>Job Locations</dt><dd>US-Remote</dd></dl></div>',
 }
 
