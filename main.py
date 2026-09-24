@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.53.0"
+BUILD_VERSION = "2.53.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.53.0", "date": "2026-09-24", "status": "active", "change": "JazzHR ({slug}.applytojob.com) added as an ATS platform: fetcher reads the server-rendered board (title, link, location incl. Remote), harvest recognises applytojob links, name-fuzz covers it, seeded with the boards our aggregator jobs linked to."},
@@ -2114,65 +2114,67 @@ async def _re_expand_profiles():
 
 
 async def _reprocess_existing_jobs():
-    """Fix direct_apply and posted_at for all existing jobs."""
+    """Fix direct_apply and posted_at for all existing jobs.
+
+    24 Sep: this used to clear is_direct_apply on EVERY row, then walk all
+    ~21k rows re-setting ~15k of them one UPDATE at a time inside one open
+    transaction, outside the write lock — on every boot. It changed nothing
+    net ("Fixed 15473 direct-apply flags" each restart) but held SQLite's write
+    lock for minutes, so GovJobs/Scoring/work-type writes died with "database
+    is locked" after every deploy. Now: read, compute the target values, and
+    write ONLY rows that differ, in one short batch under the write lock."""
     from scraper import _is_direct_url, _normalize_posted_at
-    from database import get_db
+    from database import get_db, _write_lock
 
     db = await get_db()
     try:
-        # Reset all direct_apply flags first so we re-evaluate cleanly
-        await db.execute("UPDATE jobs SET is_direct_apply = 0, direct_apply_url = '' WHERE is_direct_apply = 1")
-        await db.commit()
-
         cursor = await db.execute(
-            "SELECT id, source_url, direct_apply_url, description, posted_at, is_direct_apply FROM jobs"
-        )
-        rows = await cursor.fetchall()
-        fixed_direct = 0
-        fixed_posted = 0
-
-        for row in rows:
-            row = dict(row)
-            updates = {}
-
-            # Fix direct apply detection — ONLY use structured URL fields
-            # Never extract from description (leads to company homepages, not job posts)
-            urls = []
-            if row["source_url"]:
-                urls.append(row["source_url"])
-
-            # Check if any structured URL is a direct company link
-            has_direct = False
-            best_direct = ""
-            for u in urls:
-                if _is_direct_url(u):
-                    has_direct = True
-                    best_direct = u
-                    break
-
-            if has_direct and not row["is_direct_apply"]:
-                updates["is_direct_apply"] = 1
-                updates["direct_apply_url"] = best_direct
-                fixed_direct += 1
-
-            # Fix posted_at normalization
-            if row["posted_at"]:
-                normalized = _normalize_posted_at(row["posted_at"])
-                if normalized and normalized != row["posted_at"]:
-                    updates["posted_at"] = normalized
-                    fixed_posted += 1
-
-            if updates:
-                set_clause = ", ".join(f"{k} = ?" for k in updates)
-                values = list(updates.values()) + [row["id"]]
-                await db.execute(f"UPDATE jobs SET {set_clause} WHERE id = ?", values)
-
-        await db.commit()
-        logger.info(f"[Reprocess] Fixed {fixed_direct} direct-apply flags, {fixed_posted} posted_at dates out of {len(rows)} jobs")
-    except Exception as e:
-        logger.error(f"[Reprocess] Error: {e}")
+            "SELECT id, source_url, direct_apply_url, posted_at, is_direct_apply FROM jobs")
+        rows = [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
+
+    updates = []
+    fixed_direct = fixed_posted = 0
+    for row in rows:
+        # A stored employer link (JobSpy's job_url_direct for Indeed rows) is
+        # kept when it is itself direct — the old reset wiped it on every boot,
+        # which also starved the ATS harvest that reads these links.
+        cur_url = row["direct_apply_url"] or ""
+        u = row["source_url"] or ""
+        if cur_url and _is_direct_url(cur_url):
+            want_direct, want_url = 1, cur_url
+        elif u and _is_direct_url(u):
+            want_direct, want_url = 1, u
+        else:
+            want_direct, want_url = 0, ""
+        posted = row["posted_at"] or ""
+        want_posted = (_normalize_posted_at(posted) or posted) if posted else posted
+        if (int(row["is_direct_apply"] or 0) != want_direct
+                or (row["direct_apply_url"] or "") != want_url
+                or want_posted != posted):
+            if int(row["is_direct_apply"] or 0) != want_direct:
+                fixed_direct += 1
+            if want_posted != posted:
+                fixed_posted += 1
+            updates.append((want_direct, want_url, want_posted, row["id"]))
+
+    if updates:
+        try:
+            async with _write_lock():
+                db = await get_db()
+                try:
+                    await db.executemany(
+                        "UPDATE jobs SET is_direct_apply = ?, direct_apply_url = ?, posted_at = ? WHERE id = ?",
+                        updates)
+                    await db.commit()
+                finally:
+                    await db.close()
+        except Exception as e:
+            logger.error(f"[Reprocess] Error: {e}")
+            return
+    logger.info(f"[Reprocess] {len(updates)} rows changed ({fixed_direct} direct-apply, "
+                f"{fixed_posted} posted_at) out of {len(rows)} jobs")
 
 
 # ──────────────────────────────────────────────
