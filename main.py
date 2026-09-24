@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.44.0"
+BUILD_VERSION = "2.44.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.44.1", "date": "2026-09-24", "status": "active", "change": "Oracle Cloud boards searched with the profile titles (finder keyword=) and paged per title, instead of the newest 200 postings of the whole site."},
     {"version": "2.44.0", "date": "2026-09-24", "status": "active", "change": "Workday boards are SEARCHED with the profile titles and paged per title, instead of reading the first 100 postings of the whole board. Abbott has 2,000 postings, 3M 694, Adobe 579; the first 100 at Abbott were Vietnam sales jobs, so ~95% of every big Workday board was never read."},
     {"version": "2.43.3", "date": "2026-09-22", "status": "active", "change": "The head of the board was still showing unjudged rows at the schema default of 50. scored_at is TEXT DEFAULT '' since the v2.1.0 migration, so an unscored row carries '' rather than NULL, and the 2.42.0 feed rule (scored_at IS NOT NULL) matched nothing. Both the feed and the remote_feed diagnostic now require a non-empty scored_at. Seen on the live remote head with 16 rows at exactly 50 from the new platforms while the scorer was still queued behind their first sweep."},
     {"version": "2.43.2", "date": "2026-09-22", "status": "active", "change": "Jobvite from the Railway snippet: each job is one <li class=row> whose whole row is the anchor, with jv-job-list-name and jv-job-list-location divs inside it — parsed that way now (was a table guess, 0 rows). iCIMS confirmed at 88 rows on the probe after 2.43.1. Also: a non-US location is out even when the title says Remote ('Remote, International' in the UK), matching every other fetcher."},

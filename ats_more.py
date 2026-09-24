@@ -223,30 +223,46 @@ async def fetch_oracle(client: httpx.AsyncClient, company: dict, profile_id, sea
         return []
     inserted: list[dict] = []
     reqs: list[dict] = []
+    # Was the newest 200 of the whole site, unsearched; big Oracle tenants
+    # hold thousands. Search with the profile titles (finder keyword=) and
+    # page each until a page has no matching title, like fetch_workday.
+    from urllib.parse import quote
+    queries = [t for t in (search_terms or []) if t.strip()][:a.WORKDAY_QUERIES] or [""]
+    seen_ids: set = set()
     try:
-        for offset in (0, 100):
-            api = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
-                   f"?onlyData=true&expand=requisitionList.secondaryLocations"
-                   f"&finder=findReqs;siteNumber={site},limit=100,offset={offset},sortBy=POSTING_DATES_DESC")
-            resp = await client.get(api, headers={"Accept": "application/json"})
-            if resp.status_code != 200:
-                if offset == 0:
-                    logger.warning(f"[oracle:{company.get('slug')}] HTTP {resp.status_code}")
-                break
-            data = resp.json()
-            items = data.get("items") if isinstance(data, dict) else None
-            if not items:
-                _log_shape("oracle", data, None)
-                break
-            rl = (items[0] or {}).get("requisitionList") or []
-            if rl:
-                _log_shape("oracle", items[0], rl[0])
-            reqs.extend(r for r in rl if isinstance(r, dict))
-            if len(rl) < 100:
-                break
+        for q in queries:
+            kw = f",keyword={quote(q)}" if q else ""
+            for offset in range(0, 500, 100):
+                api = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+                       f"?onlyData=true&expand=requisitionList.secondaryLocations"
+                       f"&finder=findReqs;siteNumber={site}{kw},limit=100,offset={offset},sortBy=RELEVANCY")
+                resp = await client.get(api, headers={"Accept": "application/json"})
+                if resp.status_code != 200:
+                    if offset == 0:
+                        logger.warning(f"[oracle:{company.get('slug')}] HTTP {resp.status_code} q={q!r}")
+                    break
+                data = resp.json()
+                items = data.get("items") if isinstance(data, dict) else None
+                if not items:
+                    _log_shape("oracle", data, None)
+                    break
+                rl = (items[0] or {}).get("requisitionList") or []
+                if rl:
+                    _log_shape("oracle", items[0], rl[0])
+                hits = 0
+                for r in rl:
+                    if not isinstance(r, dict) or r.get("Id") in seen_ids:
+                        continue
+                    seen_ids.add(r.get("Id"))
+                    reqs.append(r)
+                    if a._title_matches_profile(_strip(r.get("Title")), search_terms):
+                        hits += 1
+                if len(rl) < 100 or hits == 0:
+                    break
     except Exception as e:
         logger.warning(f"[oracle:{company.get('slug')}] fetch error: {e}")
-        return []
+        if not reqs:
+            return []
     for r in reqs:
         try:
             title = _strip(r.get("Title"))
