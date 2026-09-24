@@ -445,6 +445,35 @@ async def _find_workday_site(client: httpx.AsyncClient, tenant: str) -> Optional
             break
     if not host:
         return None
+    # robots.txt names the boards exactly (Disney "disneycareer", CVS
+    # "CVS_Health_Careers", Home Depot "CareerDepot" only as a Disallow line),
+    # so read it before guessing. Private/agency boards are skipped.
+    listed: list = []
+    try:
+        rb = await client.get(f"https://{tenant}.{host}.myworkdayjobs.com/robots.txt", timeout=15)
+        if rb.status_code == 200:
+            for m in re.finditer(r"(?:myworkdayjobs\.com|^(?:Allow|Disallow):\s*)/([A-Za-z0-9_.-]+)/",
+                                 rb.text, re.M):
+                name = m.group(1)
+                if name not in listed and not re.search(
+                        r"refreshfacet|nonpublic|private|agency|equest|intern_conversion|internal",
+                        name, re.I):
+                    listed.append(name)
+    except Exception:
+        pass
+    best = None
+    for site in listed[:6]:
+        try:
+            r = await client.post(
+                f"https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs",
+                json=body, timeout=15)
+        except Exception:
+            continue
+        total = (r.json().get("total") or 0) if r.status_code == 200 else 0
+        if total and (not best or total > best["total"]):
+            best = {"tenant": tenant, "wd": host, "site": site, "total": total}
+    if best:
+        return best
     for g in _WD_SITE_GUESSES[1:]:
         site = g.replace("{t}", tenant)
         try:
