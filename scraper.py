@@ -2597,6 +2597,9 @@ def _get_jobspy_semaphore() -> asyncio.Semaphore:
     return _jobspy_semaphore
 
 
+_AGG_ROTATION: dict = {}
+
+
 async def scrape_light_for_profile(profile: dict) -> int:
     """All fast API / light sources for ONE profile (self-contained).
     Used by the independent Light worker AND by _run_profile_bot. Never raises."""
@@ -2631,12 +2634,22 @@ async def scrape_light_for_profile(profile: dict) -> int:
     if "usajobs" in enabled:
         for loc in effective_locations:
             light_tasks.append(("USAJobs", scrape_usajobs(title, loc, profile_id)))
+    # The keyword aggregators are the freshest source on the board (Adzuna was
+    # half of the posted-in-2-days remote rows, 24 Sep), yet each was asked ONE
+    # thing every pass: the bare profile title. Same request count now, but the
+    # query rotates through every title variant, and on the remote-only board
+    # it carries "remote" so every result slot can actually reach the screen.
+    _agg_i = _AGG_ROTATION.get(profile_id, 0)
+    _AGG_ROTATION[profile_id] = _agg_i + 1
+    agg_term = terms[_agg_i % len(terms)] if terms else title
+    if settings.remote_only or remote_only:
+        agg_term = f"{agg_term} remote"
     if "jooble" in enabled:
-        light_tasks.append(("Jooble", scrape_jooble(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+        light_tasks.append(("Jooble", scrape_jooble(agg_term, effective_locations[0] if effective_locations else "USA", profile_id)))
     if "adzuna" in enabled:
-        light_tasks.append(("Adzuna", scrape_adzuna(title, effective_locations[0] if effective_locations else "", profile_id)))
+        light_tasks.append(("Adzuna", scrape_adzuna(agg_term, effective_locations[0] if effective_locations else "", profile_id)))
     if "careerjet" in enabled:
-        light_tasks.append(("CareerJet", scrape_careerjet(title, effective_locations[0] if effective_locations else "USA", profile_id)))
+        light_tasks.append(("CareerJet", scrape_careerjet(agg_term, effective_locations[0] if effective_locations else "USA", profile_id)))
     if "findwork" in enabled:
         light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 

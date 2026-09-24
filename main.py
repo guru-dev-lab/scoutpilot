@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.47.2"
+BUILD_VERSION = "2.47.3"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.47.0", "date": "2026-09-24", "status": "active", "change": "Owner: POSTED and SEEN (when we scraped it) is what brings a job to screen; a job is only worth it in the first ~2 days after posting. The board time window is now measured from the posted date, with the scrape time standing in only when a site gives no posted date, so an old posting found today stays off. Default view: Last 2 Days (posted), sorted Newest Posted. Greenhouse dates come from first_published before updated_at (an edited old job looked new). Jobs are kept 7 days (was 3). tests/test_fresh_window.py."},
