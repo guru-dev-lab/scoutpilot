@@ -54,6 +54,11 @@ _PLATFORM_BUCKETS = {
 # Max concurrent HTTP fetches per ATS platform
 PLATFORM_CONCURRENCY = 32
 
+# Workday is searched per profile title (fetch_workday): this many titles,
+# each paged at most this many 20-row pages.
+WORKDAY_QUERIES = 4
+WORKDAY_PAGES_PER_QUERY = 5
+
 # Per-platform overrides. Workable/Recruitee/Breezy sit behind Cloudflare and
 # rate-limit far more aggressively than the open Greenhouse/Lever/Ashby APIs —
 # Workable returned `retry-after: 86287` (24h) after roughly 40 quick requests.
@@ -686,34 +691,45 @@ async def fetch_workday(
         site_name = m.group(3)
         apply_root = f"{host}/en-US/{site_name}"
 
+    # The board used to be read as its first 100 postings, unsearched. Big
+    # tenants carry 600-2,000 (Abbott 2,000, 3M 694, Adobe 579 measured from
+    # Railway 24 Sep), so ~95% of every large board was never seen — the first
+    # 100 at Abbott were Vietnam sales jobs. Now the board is SEARCHED with the
+    # profile's own titles; Workday ranks results by relevance ("data analyst"
+    # at Abbott leads with Senior Data Analytics Analyst), so each query is
+    # paged until a page stops yielding title matches.
+    queries = [t for t in (search_terms or []) if t.strip()][:WORKDAY_QUERIES] or [""]
     postings_raw: list[dict] = []
+    seen_paths: set = set()
     try:
-        # Page through up to 5 × 20 = 100 most recent remote postings
-        for offset in range(0, 100, 20):
-            resp = await client.post(
-                list_url,
-                json={
-                    "appliedFacets": {},
-                    "limit": 20,
-                    "offset": offset,
-                    # Was "Remote", which filtered the feed at the API and
-                    # made this a remote-only source. Empty returns the whole
-                    # board; the US gate and _derive_work_type sort it out.
-                    "searchText": "",
-                },
-            )
-            if resp.status_code != 200:
-                if offset == 0:
-                    logger.warning(f"[Workday:{slug}] HTTP {resp.status_code}")
-                break
-            data = resp.json()
-            batch = data.get("jobPostings", []) or []
-            postings_raw.extend(batch)
-            if len(batch) < 20:
-                break
+        for q in queries:
+            for offset in range(0, WORKDAY_PAGES_PER_QUERY * 20, 20):
+                resp = await client.post(
+                    list_url,
+                    json={"appliedFacets": {}, "limit": 20, "offset": offset,
+                          "searchText": q},
+                )
+                if resp.status_code != 200:
+                    if offset == 0:
+                        logger.warning(f"[Workday:{slug}] HTTP {resp.status_code} q={q!r}")
+                    break
+                batch = resp.json().get("jobPostings", []) or []
+                hits = 0
+                for p in batch:
+                    path = p.get("externalPath") or ""
+                    if path and path not in seen_paths:
+                        seen_paths.add(path)
+                        postings_raw.append(p)
+                    if _title_matches_profile(p.get("title") or "", search_terms):
+                        hits += 1
+                # Relevance-ranked: a page with no matching title means the
+                # rest of this query's results are other professions.
+                if len(batch) < 20 or hits == 0:
+                    break
     except Exception as e:
         logger.warning(f"[Workday:{slug}] fetch error: {e}")
-        return []
+        if not postings_raw:
+            return []
 
     inserted: list[dict] = []
 
