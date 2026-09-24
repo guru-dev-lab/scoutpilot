@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.47.3"
+BUILD_VERSION = "2.48.0"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.48.0", "date": "2026-09-24", "status": "active", "change": "Logins survive deploys. Sessions lived only in memory, so every deploy signed the owner out and the board went blank ('NOTHING SHOWS'). Session ids are now HMAC-signed with a key derived from the site password. Also 2.47.1-2.47.3: unreadable posted dates fall back to scrape time; the date parser no longer strips the timezone '+' (Ashby dates were unreadable, months-old posts looked fresh) with a boot repair for stored rows; Adzuna/Jooble/CareerJet rotate through every title variant with 'remote' instead of the bare title."},
     {"version": "2.47.0", "date": "2026-09-24", "status": "active", "change": "Owner: POSTED and SEEN (when we scraped it) is what brings a job to screen; a job is only worth it in the first ~2 days after posting. The board time window is now measured from the posted date, with the scrape time standing in only when a site gives no posted date, so an old posting found today stays off. Default view: Last 2 Days (posted), sorted Newest Posted. Greenhouse dates come from first_published before updated_at (an edited old job looked new). Jobs are kept 7 days (was 3). tests/test_fresh_window.py."},
     {"version": "2.46.0", "date": "2026-09-24", "status": "active", "change": "FOUND WHY EVERYTHING WAS SLOW. The box sat at ~1 CPU core (the whole budget of one Python thread) all day. /api/debug/profile on Railway: 96% of the event loop in discovery verification and ~70% inside the HTTP client cookie jar (set_cookie, deepvalues, is_expired). One long-lived client touched thousands of company hosts, kept every cookie and rescanned the whole jar on each request, so sweeps crawled (Greenhouse 41/536 companies in 8 minutes), the write lock waited up to 334s, and Scoring/Arbeitnow/JobSpy/Indeed crashed with database is locked. Discovery, ATS sweep, enrichment and probe clients now refuse cookies (none of the public job APIs need them). tests/test_no_cookies.py."},
     {"version": "2.45.0", "date": "2026-09-24", "status": "active", "change": "Sweeps were crawling (Greenhouse 41/536 companies in 8 minutes, Oracle 1/11) with every slot started and not done, while nearly every row seen was a duplicate. insert_job now refuses a row we already hold (hash or URL, indexed read) BEFORE joining the process-wide write queue, and the write lock logs its wait and hold times every 2 minutes ([WriteLock]) so the next stall names its holder."},
@@ -1296,9 +1297,33 @@ _valid_sessions: set[str] = set()
 _passwords: set[str] = {p.strip() for p in settings.site_password.split(",") if p.strip()}
 
 
+# Sessions used to live only in _valid_sessions (process memory), so EVERY
+# deploy signed the owner out and the board went blank until he logged in
+# again — 24 Sep, ~20 deploys, "NOTHING SHOWS". A session id is now a nonce plus
+# an HMAC keyed by the site password(s): it survives restarts, and changing the
+# password still revokes every session.
+_SESSION_KEY = hashlib.sha256(("scoutpilot-session|" + "|".join(sorted(_passwords))).encode()).digest()
+
+
+def _sign_nonce(nonce: str) -> str:
+    import hmac
+    return hmac.new(_SESSION_KEY, nonce.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def _make_session_id() -> str:
-    """Create a new random session ID."""
-    return secrets.token_hex(24)
+    """Create a new signed session ID."""
+    nonce = secrets.token_hex(16)
+    return f"{nonce}.{_sign_nonce(nonce)}"
+
+
+def _session_ok(session_id: str) -> bool:
+    import hmac
+    if not session_id:
+        return False
+    if session_id in _valid_sessions:
+        return True
+    nonce, _, sig = session_id.partition(".")
+    return bool(nonce and sig) and hmac.compare_digest(sig, _sign_nonce(nonce))
 
 
 def _validate_xhire_jwt(token: str) -> bool:
@@ -1338,7 +1363,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Check for valid session cookie
         session_id = request.cookies.get("sp_session")
-        if session_id and session_id in _valid_sessions:
+        if _session_ok(session_id):
             return await call_next(request)
 
         # Xhire Suite SSO — accept a valid Xhire JWT (query param on first hit,
