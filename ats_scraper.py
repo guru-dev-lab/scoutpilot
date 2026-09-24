@@ -1236,15 +1236,39 @@ async def _fetch_platform(
 
     async with httpx.AsyncClient(**client_kwargs) as client:
 
+        # A sweep that starts and never ends reports nothing, so it says how far
+        # it got every 2 minutes and how long it took at the end (24 Sep: every
+        # platform logged cycle#1 at 10:29 and none reached cycle#2 by 10:49).
+        _t0 = time.monotonic()
+        _prog = {"started": 0, "done": 0, "rows": 0}
+
         async def _one(company):
             async with sem:
+                _prog["started"] += 1
                 try:
-                    return await fetcher(client, company, profile_id, search_terms)
+                    r = await fetcher(client, company, profile_id, search_terms)
+                    _prog["rows"] += len(r or [])
+                    return r
                 except Exception as e:
                     logger.warning(f"[{platform}:{company.get('slug')}] crashed: {e}")
                     return []
+                finally:
+                    _prog["done"] += 1
 
-        results = await asyncio.gather(*[_one(c) for c in companies], return_exceptions=True)
+        async def _progress():
+            while True:
+                await asyncio.sleep(120)
+                logger.info(f"[{platform}] sweep progress {_prog['done']}/{len(companies)} done, "
+                            f"{_prog['started']} started, {_prog['rows']} inserted, "
+                            f"{time.monotonic() - _t0:.0f}s")
+
+        _pt = asyncio.create_task(_progress())
+        try:
+            results = await asyncio.gather(*[_one(c) for c in companies], return_exceptions=True)
+        finally:
+            _pt.cancel()
+        logger.info(f"[{platform}] sweep done {len(companies)} companies, "
+                    f"{_prog['rows']} inserted, {time.monotonic() - _t0:.0f}s")
         # A platform that sweeps hundreds of boards and inserts nothing is the
         # signature of a silent failure, not a quiet day — fetch_greenhouse once
         # raised NameError on every single item into a per-item debug handler

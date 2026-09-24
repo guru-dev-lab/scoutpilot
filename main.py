@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.44.4"
+BUILD_VERSION = "2.44.5"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.44.2", "date": "2026-09-24", "status": "active", "change": "Workday discovery learns the board name. Name-guessed tenants were probed as /None/jobs and never joined the roster (Disney, UBS, TransUnion, Roche, MemorialCare seen failing in logs). Wrong board on the real host answers 404, wrong host 422 (measured), so discovery finds the host then tries the 17 board names that cover the roster."},
