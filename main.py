@@ -1309,7 +1309,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
