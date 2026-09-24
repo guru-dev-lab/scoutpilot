@@ -2382,6 +2382,21 @@ async def api_debug_pipeline():
                 "WHERE status != 'hidden' AND work_type='remote' "
                 "  AND source IN ('indeed','workday','ashby','greenhouse','adzuna') "
                 "GROUP BY source, substr(posted_at, 11) LIMIT 40")
+            # Which employer career hosts do aggregator jobs link to? Picks the
+            # next ATS to build by evidence (24 Sep).
+            _hosts = await rows(
+                "SELECT COALESCE(NULLIF(direct_apply_url,''), source_url) AS u FROM jobs "
+                "WHERE source IN ('indeed','adzuna','jooble','careerjet','usajobs','findwork') "
+                "  AND first_seen_at > datetime('now','-7 days')")
+            import collections as _c, re as _re
+            _hc = _c.Counter()
+            for _r in _hosts:
+                _m = _re.match(r"https?://([^/]+)", _r.get("u") or "")
+                if _m:
+                    _h = _m.group(1).lower()
+                    _parts = _h.split(".")
+                    _hc[".".join(_parts[-2:]) if len(_parts) >= 2 else _h] += 1
+            out["aggregator_link_hosts"] = _hc.most_common(40)
             out["visible_remote_by_source"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE status != 'hidden' AND work_type='remote' "
