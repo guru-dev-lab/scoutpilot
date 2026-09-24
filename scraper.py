@@ -505,6 +505,8 @@ async def scrape_jobspy(
     fetch_description: bool = True,
     timeout: int = 120,
     use_proxy: bool = False,
+    is_remote: bool = False,
+    google_search_term: str = "",
 ) -> list[dict]:
     """
     Scrape jobs using JobSpy (LinkedIn, Indeed, Glassdoor, Google, ZipRecruiter).
@@ -533,6 +535,10 @@ async def scrape_jobspy(
             }
             if location:
                 kwargs["location"] = location
+            if is_remote:
+                kwargs["is_remote"] = True
+            if google_search_term:
+                kwargs["google_search_term"] = google_search_term
 
             # Route through the residential proxy only where it actually helps.
             # LinkedIn blocks Railway's datacenter IP outright; through a US
@@ -2715,16 +2721,23 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
         start = (cycle_number * window) % len(terms)
         jobspy_terms = [terms[(start + i) % len(terms)] for i in range(window)]
     total_new = 0
+    # 24 Sep: every Indeed search returned its newest 200 and inserted 0 —
+    # refused as "already have", because Indeed's loose matching hands every
+    # analyst-ish query the same top 200. Read up to 1,000 deep, filter to
+    # remote with Indeed's own remote flag (not the word in the query), and
+    # look back 2 days — the owner's window for a job worth applying to.
+    want_remote = bool(remote_only or settings.remote_only)
     for term in jobspy_terms:
-        effective_term = f"{term} remote" if remote_only else term
+        effective_term = term
         for loc in effective_locations:
             if do_indeed:
                 async with _get_jobspy_semaphore():
                     try:
                         r = await scrape_jobspy(
                             search_term=effective_term, location=loc,
-                            results_wanted=200, hours_old=72, profile_id=profile_id,
-                            sites=["indeed"], fetch_description=True, timeout=90,
+                            results_wanted=1000, hours_old=48, profile_id=profile_id,
+                            sites=["indeed"], fetch_description=True, timeout=240,
+                            is_remote=want_remote,
                         )
                         total_new += len(r) if isinstance(r, list) else 0
                     except Exception as e:
@@ -2757,6 +2770,22 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
                     except Exception as e:
                         logger.error(f"[JobSpy:{title}] LinkedIn '{term}' @ '{loc}': {e}")
                 await asyncio.sleep(1.5)
+    # Google Jobs (owner asked for it): JobSpy reads the public Google jobs
+    # panel, no key. One query per pass, rotating titles; if Google blocks
+    # Railway the log says EMPTY and nothing else is affected.
+    if "google" in enabled or settings.google_jobs_enabled:
+        gterm = terms[cycle_number % len(terms)] if terms else title
+        gq = f"{gterm} {'remote ' if want_remote else ''}jobs in United States since yesterday"
+        async with _get_jobspy_semaphore():
+            try:
+                r = await scrape_jobspy(
+                    search_term=gterm, google_search_term=gq, results_wanted=100,
+                    hours_old=48, profile_id=profile_id, sites=["google"],
+                    fetch_description=True, timeout=120,
+                )
+                total_new += len(r) if isinstance(r, list) else 0
+            except Exception as e:
+                logger.error(f"[JobSpy:{title}] Google '{gq}': {e}")
     logger.info(f"[JobSpy:{title}] +{total_new} new jobs")
     return total_new
 

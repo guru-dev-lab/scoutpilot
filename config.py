@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     # simply not shown. Flip this to False, or set REMOTE_ONLY=false on Railway,
     # and the whole board comes back with no re-scrape.
     remote_only: bool = True
+    # Google Jobs through JobSpy (free, no key). On by default, owner 24 Sep.
+    google_jobs_enabled: bool = True
 
     # Scraping
     scrape_interval_minutes: int = 5
