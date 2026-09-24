@@ -2902,6 +2902,31 @@ async def api_ats_probe(
     return await probe(company, search_terms)
 
 
+@app.get("/api/debug/workday-raw")
+async def api_workday_raw(
+    base: str = Query(..., description="https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"),
+    q: str = Query(""),
+    offset: int = Query(0, ge=0),
+):
+    """One raw Workday CxS list call from Railway: board total, the keys a
+    posting carries, and a few postings. Read-only; only myworkdayjobs hosts."""
+    import httpx
+    if not re.match(r"^https://[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com/wday/cxs/[^/]+/[^/]+/?$", base):
+        return JSONResponse({"error": "base must be a myworkdayjobs cxs url"}, status_code=400)
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(base.rstrip("/") + "/jobs",
+                         json={"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": q})
+    try:
+        d = r.json()
+    except Exception:
+        return {"status": r.status_code, "body": r.text[:500]}
+    posts = d.get("jobPostings") or []
+    keys = sorted({k for p in posts for k in p.keys()})
+    return {"status": r.status_code, "total": d.get("total"), "posting_keys": keys,
+            "facet_ids": [f.get("facetParameter") for f in (d.get("facets") or [])],
+            "postings": posts[:6]}
+
+
 @app.get("/api/discovery-stats")
 async def api_discovery_stats():
     """Roster size = static file companies + companies found by the AI bot."""
