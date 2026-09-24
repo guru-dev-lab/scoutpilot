@@ -92,8 +92,9 @@ class Settings(BaseSettings):
     # simply not shown. Flip this to False, or set REMOTE_ONLY=false on Railway,
     # and the whole board comes back with no re-scrape.
     remote_only: bool = True
-    # Google Jobs through JobSpy (free, no key). On by default, owner 24 Sep.
-    google_jobs_enabled: bool = True
+    # Google Jobs through JobSpy (free, no key). Measured 24 Sep: Google gives
+    # Railway no jobs panel ("initial cursor not found", EMPTY every time). Off.
+    google_jobs_enabled: bool = False
 
     # Scraping
     scrape_interval_minutes: int = 5

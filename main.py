@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.54.0"
+BUILD_VERSION = "2.54.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.54.0", "date": "2026-09-24", "status": "active", "change": "Board quality, from the owner's 2-day remote board: SynergisticIT (training-programme bait, 6 of 81 rows) and RemoteJobsOne (reposter) blocklisted, existing rows hidden at boot. A title naming another kind of job (intern, co-op, apprentice, student, coder, clerk, coordinator, representative, technician, nurse...) is capped at 22 however much Data Analytics it carries, unless the profile itself uses the word."},

@@ -2853,7 +2853,7 @@ async def scrape_jobspy_for_profile(profile: dict, cycle_number: int = 0) -> int
     # Google Jobs (owner asked for it): JobSpy reads the public Google jobs
     # panel, no key. One query per pass, rotating titles; if Google blocks
     # Railway the log says EMPTY and nothing else is affected.
-    if "google" in enabled or settings.google_jobs_enabled:
+    if settings.google_jobs_enabled:
         gterm = terms[cycle_number % len(terms)] if terms else title
         gq = f"{gterm} {'remote ' if want_remote else ''}jobs in United States since yesterday"
         async with _get_jobspy_semaphore():
