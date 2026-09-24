@@ -421,7 +421,7 @@ async def fetch_greenhouse(
                 "source": "greenhouse",
                 "source_url": apply_url,
                 "direct_apply_url": apply_url,  # Greenhouse boards are direct apply
-                "posted_at": _normalize_posted_at(item.get("updated_at") or item.get("first_published") or ""),
+                "posted_at": _normalize_posted_at(item.get("first_published") or item.get("updated_at") or ""),
                 "is_direct_apply": True,
                 "search_profile_id": profile_id,
             }

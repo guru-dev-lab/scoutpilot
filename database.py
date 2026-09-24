@@ -725,8 +725,17 @@ async def get_jobs(
             )
 
         if hours > 0:
+            # Owner's rule (24 Sep): "POSTED and SEEN is what actually bring it
+            # to screen" — a job is only worth applying to in the first ~2 days
+            # after it is POSTED. So the window is measured from the posted
+            # date; the date we saw it stands in only when the site gives none.
+            # A 30-day-old posting we found this minute stays off the screen.
+            # datetime() on both sides: posted_at/first_seen_at are ISO with a
+            # 'T', datetime('now') uses a space, and raw text comparison let
+            # most of the boundary day through.
             conditions.append(
-                "first_seen_at >= datetime('now', ?)"
+                "CASE WHEN posted_at LIKE '____-__-__%' THEN datetime(posted_at) "
+                "ELSE datetime(first_seen_at) END >= datetime('now', ?)"
             )
             params.append(f"-{hours} hours")
 
@@ -1237,7 +1246,7 @@ async def purge_inactive_profiles() -> list[dict]:
 # Hot board, not a backlog: anything older than this is deleted outright. There
 # is no archive step any more — copying rows to jobs_archive only moved the disk
 # cost instead of releasing it.
-RETENTION_DAYS = 3
+RETENTION_DAYS = 7  # owner, 24 Sep: keep a week; the board itself shows the fresh 2 days
 # Kept as aliases so any older caller/import keeps working.
 ARCHIVE_AFTER_DAYS = RETENTION_DAYS
 PURGE_AFTER_DAYS = RETENTION_DAYS
