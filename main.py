@@ -3058,7 +3058,8 @@ async def api_debug_profile(seconds: int = Query(20, ge=5, le=60)):
 
 
 @app.get("/api/debug/http-probe")
-async def api_http_probe(url: str = Query(...), method: str = Query("GET")):
+async def api_http_probe(url: str = Query(...), method: str = Query("GET"),
+                         request_max: int = Query(800, ge=100, le=20000), find: str = Query("")):
     """One raw request from Railway to a fixed allowlist of public ATS hosts:
     status, content type, first 800 bytes. Read-only verification of an endpoint
     shape before a fetcher is written against it."""
@@ -3068,7 +3069,8 @@ async def api_http_probe(url: str = Query(...), method: str = Query("GET")):
     host = (urlparse(url).hostname or "").lower()
     allowed = ("workable.com", "dayforcehcm.com", "paylocity.com", "successfactors.com",
                "taleo.net", "applytojob.com", "jazzhr.com", "teamtailor.com",
-               "pinpointhq.com", "paycomonline.net", "bamboohr.com", "myworkdayjobs.com")
+               "pinpointhq.com", "paycomonline.net", "bamboohr.com", "myworkdayjobs.com",
+               "governmentjobs.com", "avature.net")
     if url[:8] != "https://" or not any(host == a or host.endswith("." + a) for a in allowed):
         return JSONResponse({"error": "host not allowed"}, status_code=400)
     async with httpx.AsyncClient(timeout=20, cookies=no_cookie_jar(), follow_redirects=True,
@@ -3076,7 +3078,9 @@ async def api_http_probe(url: str = Query(...), method: str = Query("GET")):
         r = await (c.post(url, json={}) if method.upper() == "POST" else c.get(url))
     return {"status": r.status_code, "final_url": str(r.url),
             "content_type": r.headers.get("content-type"), "bytes": len(r.content),
-            "body": r.text[:800]}
+            "body": (r.text[max(0, r.text.find(find) - 200):][:int(request_max)] if find and find in r.text
+                     else r.text[:int(request_max)]),
+            "find_hits": (r.text.count(find) if find else None)}
 
 
 @app.get("/api/debug/workday-find")
