@@ -1877,3 +1877,32 @@ async def get_retention_stats() -> dict:
         }
     finally:
         await db.close()
+
+
+async def repair_mangled_posted_at() -> int:
+    """One-time repair for ISO stamps whose '+' timezone sign was stripped by the
+    old posted-date normaliser ("...04.65900:00" -> "...04.659+00:00"). Only rows
+    SQLite cannot parse are touched. Batched under the write lock."""
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, posted_at FROM jobs WHERE posted_at LIKE '____-__-__T%' "
+            "AND datetime(posted_at) IS NULL")
+        bad = [(r[0], r[1]) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+    fixes = []
+    for jid, p in bad:
+        q = re.sub(r"(\d{2}):(\d{2})$", r"+\1:\2", p)
+        if q != p:
+            fixes.append((q, jid))
+    if not fixes:
+        return 0
+    async with _write_lock():
+        db = await get_db()
+        try:
+            await db.executemany("UPDATE jobs SET posted_at = ? WHERE id = ?", fixes)
+            await db.commit()
+        finally:
+            await db.close()
+    return len(fixes)

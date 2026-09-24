@@ -45,7 +45,12 @@ def _normalize_posted_at(raw: str) -> str:
     # scrape time, permanently claimed to be brand new, and buried sources that
     # report honest timestamps. Strip the prefix and the "+" before matching.
     raw = re.sub(r"^posted\s+", "", raw, flags=re.IGNORECASE).strip()
-    raw = re.sub(r"(\d+)\+", r"\1", raw)
+    # Only the "30+ Days" count loses its "+". The old pattern stripped EVERY
+    # digit-plus, including the timezone of an ISO stamp: Ashby's
+    # "2026-08-28T13:50:04.659+00:00" was stored as "...04.65900:00", which
+    # SQLite cannot read, so a months-old posting passed as fresh (24 Sep).
+    raw = re.sub(r"(\d+)\+(?=\s*(?:minute|min|hour|hr|day|week|month)s?\b)", r"\1",
+                 raw, flags=re.IGNORECASE)
 
     # Already ISO datetime (e.g. 2026-03-27T12:00:00Z or 2026-03-27T12:00:00+00:00)
     if re.match(r"^\d{4}-\d{2}-\d{2}T", raw):
