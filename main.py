@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.47.0"
+BUILD_VERSION = "2.47.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.47.0", "date": "2026-09-24", "status": "active", "change": "Owner: POSTED and SEEN (when we scraped it) is what brings a job to screen; a job is only worth it in the first ~2 days after posting. The board time window is now measured from the posted date, with the scrape time standing in only when a site gives no posted date, so an old posting found today stays off. Default view: Last 2 Days (posted), sorted Newest Posted. Greenhouse dates come from first_published before updated_at (an edited old job looked new). Jobs are kept 7 days (was 3). tests/test_fresh_window.py."},
@@ -2298,6 +2298,12 @@ async def api_debug_pipeline():
                 "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
                 f"WHERE j.status='hidden' AND {_rel} "
                 "ORDER BY datetime(j.first_seen_at) DESC LIMIT 400")
+            out["posted_at_samples"] = await rows(
+                "SELECT source, posted_at, first_seen_at, datetime(posted_at) AS p_parsed, "
+                "  datetime(first_seen_at) AS f_parsed FROM jobs "
+                "WHERE status != 'hidden' AND work_type='remote' "
+                "  AND source IN ('indeed','workday','ashby','greenhouse','adzuna') "
+                "GROUP BY source, substr(posted_at, 11) LIMIT 40")
             out["visible_remote_by_source"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE status != 'hidden' AND work_type='remote' "

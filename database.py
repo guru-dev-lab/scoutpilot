@@ -734,8 +734,8 @@ async def get_jobs(
             # 'T', datetime('now') uses a space, and raw text comparison let
             # most of the boundary day through.
             conditions.append(
-                "CASE WHEN posted_at LIKE '____-__-__%' THEN datetime(posted_at) "
-                "ELSE datetime(first_seen_at) END >= datetime('now', ?)"
+                "COALESCE(CASE WHEN posted_at LIKE '____-__-__%' THEN datetime(posted_at) END, "
+                "datetime(first_seen_at), datetime(substr(first_seen_at, 1, 19))) >= datetime('now', ?)"
             )
             params.append(f"-{hours} hours")
 
