@@ -2607,6 +2607,77 @@ def _get_jobspy_semaphore() -> asyncio.Semaphore:
     return _jobspy_semaphore
 
 
+
+_GOVJOBS_ITEM = re.compile(r'<li class="job-item"(.*?)</li>', re.S)
+
+
+async def scrape_governmentjobs(search_term: str, profile_id: Optional[int] = None,
+                                max_pages: int = 4) -> list[dict]:
+    """GovernmentJobs.com (NEOGOV): ONE keyword search across every US public
+    agency (states, counties, cities, universities) — 128 aggregator links in a
+    week pointed here. Server-rendered cards: title/link, agency, "City, ST",
+    "type | pay | closes". Sorted newest first; a card labelled "New" was just
+    posted, so pages are read until the New labels stop (owner's rule: only a
+    freshly posted job is worth it). Measured on Railway 24 Sep."""
+    import html as _html
+    from urllib.parse import quote
+    jobs: list[dict] = []
+    seen_new = 0
+    try:
+        async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "Mozilla/5.0"},
+                                     follow_redirects=True) as client:
+            for page in range(1, max_pages + 1):
+                url = (f"https://www.governmentjobs.com/jobs?keyword={quote(search_term)}"
+                       f"&sort=PostingDate&isDescendingSort=true&page={page}")
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    logger.warning(f"[GovJobs] HTTP {resp.status_code} for '{search_term}' p{page}")
+                    break
+                cards = _GOVJOBS_ITEM.findall(resp.text)
+                if not cards:
+                    break
+                fresh_on_page = 0
+                for c in cards:
+                    if "new-job-label" not in c:
+                        continue
+                    fresh_on_page += 1
+                    m = re.search(r'class="job-details-link" href="([^"]+)">([^<]+)</a>', c)
+                    if not m:
+                        continue
+                    href, title = m.group(1), _html.unescape(m.group(2)).strip()
+                    org = re.search(r'job-organization">([^<]+)<', c)
+                    loc = re.search(r'class="job-location">([^<]+)<', c)
+                    info = re.findall(r'<div class="primaryInfo">\s*([^<]+?)\s*</div>', c)
+                    info_txt = _html.unescape(info[-1]) if info else ""
+                    company = _html.unescape(org.group(1)).strip() if org else "Public agency"
+                    location = _html.unescape(loc.group(1)).strip() if loc else ""
+                    link = "https://www.governmentjobs.com" + href
+                    sal = re.findall(r"\$([\d,]+(?:\.\d+)?)", info_txt)
+                    smin = smax = 0
+                    if sal and "annual" in info_txt.lower():
+                        vals = [int(float(x.replace(",", ""))) for x in sal[:2]]
+                        smin, smax = vals[0], vals[-1]
+                    text = f"{title} {location} {info_txt}".lower()
+                    wt = "remote" if ("remote" in text or "telework" in text or "telecommut" in text) else "onsite"
+                    job = {
+                        "title": title, "company_name": company, "company_domain": "",
+                        "location": location, "is_remote": wt == "remote", "work_type": wt,
+                        "description": f"{title} — {company}. {info_txt}",
+                        "salary_min": smin, "salary_max": smax,
+                        "source": "governmentjobs", "source_url": link, "direct_apply_url": link,
+                        "posted_at": datetime.now(timezone.utc).isoformat(),
+                        "is_direct_apply": True, "search_profile_id": profile_id,
+                    }
+                    if await insert_job(job):
+                        jobs.append(job)
+                seen_new += fresh_on_page
+                if fresh_on_page == 0:
+                    break
+    except Exception as e:
+        logger.warning(f"[GovJobs] '{search_term}': {e}")
+    logger.info(f"[GovJobs] '{search_term}': {seen_new} new-labelled, inserted {len(jobs)}")
+    return jobs
+
 _AGG_ROTATION: dict = {}
 
 
@@ -2660,6 +2731,11 @@ async def scrape_light_for_profile(profile: dict) -> int:
         light_tasks.append(("Adzuna", scrape_adzuna(agg_term, effective_locations[0] if effective_locations else "", profile_id)))
     if "careerjet" in enabled:
         light_tasks.append(("CareerJet", scrape_careerjet(agg_term, effective_locations[0] if effective_locations else "USA", profile_id)))
+    if "governmentjobs" in enabled:
+        # No "remote" suffix: public-sector cards rarely say it; the scorer and
+        # the work-type label decide.
+        gov_term = terms[_agg_i % len(terms)] if terms else title
+        light_tasks.append(("GovJobs", scrape_governmentjobs(gov_term, profile_id)))
     if "findwork" in enabled:
         light_tasks.append(("FindWork", scrape_findwork(title, profile_id)))
 

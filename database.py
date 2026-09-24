@@ -1744,6 +1744,7 @@ ALL_SOURCES = [
     {"source_key": "careerjet",     "display_name": "CareerJet",       "category": "api",     "requires_key": "CAREERJET_AFFID"},
     {"source_key": "findwork",      "display_name": "FindWork",        "category": "api",     "requires_key": "FINDWORK_TOKEN"},
     {"source_key": "usajobs",       "display_name": "USAJobs",         "category": "api",     "requires_key": "USAJOBS_API_KEY"},
+    {"source_key": "governmentjobs","display_name": "GovernmentJobs (NEOGOV)", "category": "free", "requires_key": ""},
     {"source_key": "remotive",      "display_name": "Remotive",        "category": "free",    "requires_key": ""},
     {"source_key": "remoteok",      "display_name": "RemoteOK",        "category": "free",    "requires_key": ""},
     {"source_key": "weworkremotely","display_name": "WeWorkRemotely",  "category": "free",    "requires_key": ""},
