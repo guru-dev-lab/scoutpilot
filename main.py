@@ -2397,6 +2397,15 @@ async def api_debug_pipeline():
                     _parts = _h.split(".")
                     _hc[".".join(_parts[-2:]) if len(_parts) >= 2 else _h] += 1
             out["aggregator_link_hosts"] = _hc.most_common(40)
+            _want = ("governmentjobs.com", "paylocity.com", "applytojob.com", "avature.net",
+                     "taleo.net", "dayforcehcm.com", "paycomonline.net")
+            _samp: dict = {}
+            for _r in _hosts:
+                _u = _r.get("u") or ""
+                for _w in _want:
+                    if _w in _u and len(_samp.setdefault(_w, [])) < 4:
+                        _samp[_w].append(_u)
+            out["aggregator_link_samples"] = _samp
             out["visible_remote_by_source"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE status != 'hidden' AND work_type='remote' "
