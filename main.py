@@ -2910,7 +2910,7 @@ async def api_workday_raw(
 ):
     """One raw Workday CxS list call from Railway: board total, the keys a
     posting carries, and a few postings. Read-only; only myworkdayjobs hosts."""
-    import httpx
+    import httpx, re
     if not re.match(r"^https://[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com/wday/cxs/[^/]+/[^/]+/?$", base):
         return JSONResponse({"error": "base must be a myworkdayjobs cxs url"}, status_code=400)
     async with httpx.AsyncClient(timeout=20) as c:
