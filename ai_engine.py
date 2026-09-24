@@ -596,6 +596,13 @@ def _profile_vocabulary(target_title: str, expanded: list, keywords: list) -> se
     return vocab
 
 
+_OTHER_JOB_KIND_WORDS = {
+    "intern", "internship", "interns", "co-op", "coop", "apprentice", "apprenticeship",
+    "student", "coder", "coding", "clerk", "coordinator", "receptionist",
+    "representative", "technician", "nurse", "therapist", "cashier", "driver",
+}
+
+
 def score_relevance_fuzzy(
     job_title: str,
     job_description: str,
@@ -621,6 +628,17 @@ def score_relevance_fuzzy(
     """
     job_lower = job_title.lower()
     target_lower = target_title.lower()
+
+    # A title that names a different KIND of job is not this role, however
+    # much "Data Analytics" it also carries (24 Sep, owner's board: "SQL &
+    # Reporting Co-Op, Internship", "Inpatient Coder Clinical Data Analyst",
+    # "Pharmacy Program Coordinator - Data Analytics"). Skipped when the
+    # profile itself uses the word (a profile could be "Data Coordinator").
+    _jt_words = set(re.findall(r"[a-z]+(?:-[a-z]+)?", job_lower))
+    _profile_words = set(re.findall(r"[a-z]+(?:-[a-z]+)?", " ".join(
+        [target_lower] + [str(t).lower() for t in (expanded_titles or [])])))
+    if (_jt_words & _OTHER_JOB_KIND_WORDS) - _profile_words:
+        return 22
 
     # Pre-sanitize expansions so bad data from old DB rows can't poison scoring
     clean_expanded = _sanitize_expansions(target_title, expanded_titles or [])

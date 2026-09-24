@@ -226,6 +226,10 @@ BLOCKED_COMPANIES = {
     "brilliant staffing", "artech", "mastech", "genesis10",
     "collabera", "wipro", "infosys", "tata consultancy", "cognizant",
     "hcl technologies", "tech mahindra", "mphasis",
+    # 24 Sep, seen on the owner's 2-day remote board: SynergisticIT posts
+    # "Junior Data Analyst/Data Scientist/Java Programmer - Remote" bait for a
+    # paid training programme (6 of 81 rows); RemoteJobsOne reposts others' jobs.
+    "synergisticit", "synergistic it", "remotejobsone", "remote jobs one",
 }
 
 
