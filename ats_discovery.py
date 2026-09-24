@@ -530,12 +530,14 @@ async def _verify_workable(client: httpx.AsyncClient, slug: str) -> bool:
     whether the board is real.
     """
     try:
-        r = await client.post(
-            f"https://apply.workable.com/api/v3/accounts/{slug}/jobs", json={})
+        # Widget API: the v3 POST answers 429 to every Railway request (24 Sep),
+        # which kept the Workable roster frozen at 50.
+        r = await client.get(
+            f"https://apply.workable.com/api/v1/widget/accounts/{slug}")
         if r.status_code != 200:
             return False
         data = r.json()
-        return isinstance(data, dict) and "results" in data and bool(data.get("total"))
+        return isinstance(data, dict) and bool(data.get("jobs"))
     except Exception:
         return False
 

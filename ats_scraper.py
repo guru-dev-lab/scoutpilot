@@ -923,6 +923,62 @@ async def fetch_smartrecruiters(
 # Platform dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
 
+_WORKABLE_SHAPE_LOGGED = {"done": False}
+
+
+async def _workable_widget_rows(data: dict, slug: str, company_name: str,
+                                profile_id: Optional[int], search_terms: list[str]) -> list[dict]:
+    """Rows from Workable's widget payload {name, description, jobs:[...]}.
+    A job carries title, shortcode, telecommuting, country/state/city,
+    locations[{countryCode,...}], published_on/created_at, url/application_url,
+    and with details=true its description."""
+    jobs = (data or {}).get("jobs") or []
+    if jobs and not _WORKABLE_SHAPE_LOGGED["done"]:
+        _WORKABLE_SHAPE_LOGGED["done"] = True
+        logger.info(f"[Workable] widget SHAPE top={sorted((data or {}).keys())} job={sorted(jobs[0].keys())}")
+    inserted: list[dict] = []
+    for item in jobs:
+        try:
+            title = (item.get("title") or "").strip()
+            if not title or not _title_matches_profile(title, search_terms):
+                continue
+            if _is_blocked_company(company_name):
+                continue
+            locs = item.get("locations") or []
+            codes = {(l.get("countryCode") or "").upper() for l in locs if isinstance(l, dict)}
+            country = (item.get("country") or "").strip()
+            if country.lower() in ("united states", "usa", "us"):
+                codes.add("US")
+            loc_str = ", ".join(p for p in (item.get("city"), item.get("state"), country) if p)
+            import html as _html
+            desc = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", _html.unescape(item.get("description") or ""))).strip()
+            platform_field = "remote" if item.get("telecommuting") else ""
+            wt, is_remote = _derive_work_type(platform_field, loc_str, title, desc[:3000])
+            if "US" not in codes and not is_us_location(loc_str):
+                continue
+            apply_url = (item.get("application_url") or item.get("url") or
+                         (f"https://apply.workable.com/{slug}/j/{item.get('shortcode')}/"
+                          if item.get("shortcode") else ""))
+            if not apply_url:
+                continue
+            job = {
+                "title": title, "company_name": company_name, "company_domain": "",
+                "location": loc_str or ("Remote, US" if is_remote else ""),
+                "is_remote": is_remote, "work_type": wt,
+                "description": desc[:10000], "salary_min": 0, "salary_max": 0,
+                "source": "workable", "source_url": apply_url, "direct_apply_url": apply_url,
+                "posted_at": _normalize_posted_at(item.get("published_on") or item.get("created_at") or ""),
+                "is_direct_apply": True, "search_profile_id": profile_id,
+            }
+            if await insert_job(job):
+                inserted.append(job)
+        except Exception as e:
+            logger.debug(f"[Workable:{slug}] widget item skip: {e}")
+    if inserted:
+        logger.info(f"[Workable:{slug}] +{len(inserted)} new jobs ({len(jobs)} on board, widget)")
+    return inserted
+
+
 async def fetch_workable(
     client: httpx.AsyncClient,
     company: dict,
@@ -940,6 +996,23 @@ async def fetch_workable(
     slug = company["slug"]
     company_name = company.get("name", slug)
     url = f"https://apply.workable.com/api/v3/accounts/{slug}/jobs"
+
+    # 24 Sep: the v3 POST answers 429 (Cloudflare) to every request from
+    # Railway, so Workable produced nothing. The public widget API
+    # (/api/v1/widget/accounts/{slug}?details=true) answers 200 JSON from the
+    # same box and carries the description too. Widget first, v3 as fallback.
+    try:
+        w = await client.get(
+            f"https://apply.workable.com/api/v1/widget/accounts/{slug}",
+            params={"details": "true"})
+        if w.status_code == 404:
+            return []
+        if w.status_code == 200:
+            return await _workable_widget_rows(w.json(), slug, company_name,
+                                               profile_id, search_terms)
+        logger.info(f"[Workable:{slug}] widget HTTP {w.status_code}, trying v3")
+    except Exception as e:
+        logger.info(f"[Workable:{slug}] widget error {e}, trying v3")
 
     items: list[dict] = []
     token = None
