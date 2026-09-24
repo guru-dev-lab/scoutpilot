@@ -2273,6 +2273,29 @@ async def api_debug_pipeline():
                 "WHERE j.status != 'hidden' AND j.work_type='remote' "
                 "  AND j.relevance_score >= 50 "
                 "GROUP BY profile ORDER BY last_3d DESC")
+            # Hidden rows whose TITLE looks like the owner's field. "Less jobs"
+            # is either nothing arriving or the scorer killing real ones; this
+            # shows which, title by title.
+            _rel = ("(lower(j.title) LIKE '%analyst%' OR lower(j.title) LIKE '%analytics%' "
+                    " OR lower(j.title) LIKE '%business intelligence%' OR lower(j.title) LIKE '%bi %' "
+                    " OR lower(j.title) LIKE '%reporting%' OR lower(j.title) LIKE '%insight%' "
+                    " OR lower(j.title) LIKE '%power bi%' OR lower(j.title) LIKE '%tableau%')")
+            out["hidden_relevant_by_source"] = await rows(
+                "SELECT j.source, COUNT(*) AS n, "
+                "  SUM(CASE WHEN j.work_type='remote' THEN 1 ELSE 0 END) AS remote "
+                f"FROM jobs j WHERE j.status='hidden' AND {_rel} "
+                "GROUP BY j.source ORDER BY n DESC")
+            out["hidden_relevant_titles"] = await rows(
+                "SELECT j.title, j.relevance_score, j.source, j.work_type, j.location, "
+                "  COALESCE(p.title,'(none)') AS profile, "
+                "  CASE WHEN j.description IS NULL OR j.description='' THEN 0 ELSE 1 END AS has_desc "
+                "FROM jobs j LEFT JOIN search_profiles p ON p.id = j.search_profile_id "
+                f"WHERE j.status='hidden' AND {_rel} "
+                "ORDER BY datetime(j.first_seen_at) DESC LIMIT 400")
+            out["visible_remote_by_source"] = await rows(
+                "SELECT source, COUNT(*) AS n FROM jobs "
+                "WHERE status != 'hidden' AND work_type='remote' "
+                "GROUP BY source ORDER BY n DESC")
             out["no_description"] = await rows(
                 "SELECT source, COUNT(*) AS n FROM jobs "
                 "WHERE (description IS NULL OR description='') GROUP BY source ORDER BY n DESC")
