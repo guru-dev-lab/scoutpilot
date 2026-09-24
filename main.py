@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.54.1"
+BUILD_VERSION = "2.54.2"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.54.0", "date": "2026-09-24", "status": "active", "change": "Board quality, from the owner's 2-day remote board: SynergisticIT (training-programme bait, 6 of 81 rows) and RemoteJobsOne (reposter) blocklisted, existing rows hidden at boot. A title naming another kind of job (intern, co-op, apprentice, student, coder, clerk, coordinator, representative, technician, nurse...) is capped at 22 however much Data Analytics it carries, unless the profile itself uses the word."},
@@ -566,27 +566,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[Repair] posted_at timezone repair failed: {e}")
 
-    # Blocklist is checked at insert only, so a company added to it later
-    # (SynergisticIT, RemoteJobsOne — 24 Sep) keeps its rows on the board.
-    try:
-        from scraper import BLOCKED_COMPANIES
-        from database import get_db as _gdb_b, _write_lock as _wl_b
-        _terms = sorted(BLOCKED_COMPANIES)
-        _where = " OR ".join("lower(company_name) LIKE ?" for _ in _terms)
-        async with _wl_b():
-            _dbb = await _gdb_b()
-            try:
-                _c = await _dbb.execute(
-                    f"UPDATE jobs SET status='hidden' WHERE status NOT IN ('hidden','saved','applied') "
-                    f"AND ({_where})", [f"%{t}%" for t in _terms])
-                await _dbb.commit()
-                if _c.rowcount:
-                    logger.info(f"[Repair] hid {_c.rowcount} rows from blocklisted reposters")
-            finally:
-                await _dbb.close()
-    except Exception as e:
-        logger.error(f"[Repair] blocklist hide failed: {e}")
-
     # Re-show jobs that only became hidden because the old threshold was
     # stricter. update_job_scores() writes status='hidden' at scrape time, so
     # lowering relevance_hide_below alone would apply to NEW jobs only and the
@@ -612,6 +591,30 @@ async def lifespan(app: FastAPI):
             await _db.close()
     except Exception as e:
         logger.error(f"[Retention] unhide backfill failed: {e}")
+
+    # Runs AFTER the un-hide backfill above, which re-shows any hidden row scoring
+    # >= the threshold whatever hid it (it undid this hide once, 24 Sep).
+    # Blocklist is checked at insert only, so a company added to it later
+    # (SynergisticIT, RemoteJobsOne — 24 Sep) keeps its rows on the board.
+    try:
+        from scraper import BLOCKED_COMPANIES
+        from database import get_db as _gdb_b, _write_lock as _wl_b
+        _terms = sorted(BLOCKED_COMPANIES)
+        _where = " OR ".join("lower(company_name) LIKE ?" for _ in _terms)
+        async with _wl_b():
+            _dbb = await _gdb_b()
+            try:
+                _c = await _dbb.execute(
+                    f"UPDATE jobs SET status='hidden' WHERE status NOT IN ('hidden','saved','applied') "
+                    f"AND ({_where})", [f"%{t}%" for t in _terms])
+                await _dbb.commit()
+                if _c.rowcount:
+                    logger.info(f"[Repair] hid {_c.rowcount} rows from blocklisted reposters")
+            finally:
+                await _dbb.close()
+    except Exception as e:
+        logger.error(f"[Repair] blocklist hide failed: {e}")
+
 
     # One-time consistency repair: rows written before is_remote was derived
     # from work_type can disagree, and the card badge treats is_remote=1 as
