@@ -1392,7 +1392,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root", "/api/debug/workday-find", "/api/debug/profile"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root", "/api/debug/workday-find", "/api/debug/profile", "/api/debug/http-probe"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -3030,6 +3030,28 @@ async def api_debug_profile(seconds: int = Query(20, ge=5, le=60)):
     return {"samples": n["s"],
             "self": [(k, round(100 * v / tot, 1)) for k, v in self_c.most_common(25)],
             "cumulative": [(k, round(100 * v / tot, 1)) for k, v in cum_c.most_common(40)]}
+
+
+@app.get("/api/debug/http-probe")
+async def api_http_probe(url: str = Query(...), method: str = Query("GET")):
+    """One raw request from Railway to a fixed allowlist of public ATS hosts:
+    status, content type, first 800 bytes. Read-only verification of an endpoint
+    shape before a fetcher is written against it."""
+    import httpx
+    from urllib.parse import urlparse
+    from ats_scraper import no_cookie_jar
+    host = (urlparse(url).hostname or "").lower()
+    allowed = ("workable.com", "dayforcehcm.com", "paylocity.com", "successfactors.com",
+               "taleo.net", "applytojob.com", "jazzhr.com", "teamtailor.com",
+               "pinpointhq.com", "paycomonline.net", "bamboohr.com", "myworkdayjobs.com")
+    if url[:8] != "https://" or not any(host == a or host.endswith("." + a) for a in allowed):
+        return JSONResponse({"error": "host not allowed"}, status_code=400)
+    async with httpx.AsyncClient(timeout=20, cookies=no_cookie_jar(), follow_redirects=True,
+                                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/html"}) as c:
+        r = await (c.post(url, json={}) if method.upper() == "POST" else c.get(url))
+    return {"status": r.status_code, "final_url": str(r.url),
+            "content_type": r.headers.get("content-type"), "bytes": len(r.content),
+            "body": r.text[:800]}
 
 
 @app.get("/api/debug/workday-find")
