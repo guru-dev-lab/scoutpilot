@@ -1311,7 +1311,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -2902,6 +2902,26 @@ async def api_ats_probe(
                "site": site.strip(), "name": name.strip() or slug.strip()}
     search_terms = [t.strip() for t in terms.split(",") if t.strip()]
     return await probe(company, search_terms)
+
+
+@app.get("/api/debug/workday-root")
+async def api_workday_root(host: str = Query(..., description="{tenant}.{wd}.myworkdayjobs.com")):
+    """How a Workday host answers at its root (status, redirect, body snippet):
+    tells discovery how to learn a tenant's board name. Read-only."""
+    import httpx, re
+    if not re.match(r"^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$", host):
+        return JSONResponse({"error": "host must be tenant.wdN.myworkdayjobs.com"}, status_code=400)
+    out = []
+    async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0"}) as c:
+        for path in ("/", "/en-US"):
+            try:
+                r = await c.get(f"https://{host}{path}", follow_redirects=False)
+                out.append({"path": path, "status": r.status_code,
+                            "location": r.headers.get("location"),
+                            "body": r.text[:600]})
+            except Exception as e:
+                out.append({"path": path, "error": str(e)})
+    return out
 
 
 @app.get("/api/debug/workday-raw")
