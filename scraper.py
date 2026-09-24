@@ -572,6 +572,8 @@ async def scrape_jobspy(
     jobs = []
     inserted = 0
     blocked = 0
+    from database import REJECT_REASONS
+    _rej0 = dict(REJECT_REASONS)
     for _, row in df.iterrows():
         row_dict = row.to_dict()
         # Handle NaN values
@@ -596,7 +598,9 @@ async def scrape_jobspy(
             jobs.append(job)
 
     direct_count = sum(1 for j in jobs if j.get("is_direct_apply"))
-    logger.info(f"[JobSpy] Found {len(df)} results, blocked {blocked}, inserted {inserted} new ({direct_count} direct apply)")
+    _why = {k: v - _rej0.get(k, 0) for k, v in REJECT_REASONS.items() if v - _rej0.get(k, 0)}
+    logger.info(f"[JobSpy] Found {len(df)} results, blocked {blocked}, inserted {inserted} new "
+                f"({direct_count} direct apply) refused={_why}")
     return jobs
 
 

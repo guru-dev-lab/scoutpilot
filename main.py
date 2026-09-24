@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.48.0"
+BUILD_VERSION = "2.48.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.48.0", "date": "2026-09-24", "status": "active", "change": "Logins survive deploys. Sessions lived only in memory, so every deploy signed the owner out and the board went blank ('NOTHING SHOWS'). Session ids are now HMAC-signed with a key derived from the site password. Also 2.47.1-2.47.3: unreadable posted dates fall back to scrape time; the date parser no longer strips the timezone '+' (Ashby dates were unreadable, months-old posts looked fresh) with a boot repair for stored rows; Adzuna/Jooble/CareerJet rotate through every title variant with 'remote' instead of the bare title."},

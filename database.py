@@ -530,7 +530,7 @@ async def _already_have(job_data: dict) -> bool:
 async def insert_job(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist. Serialised against other writers."""
     if await _already_have(job_data):
-        return False
+        return _reject("already_have")
     async with _write_lock():
         return await _insert_job_unlocked(job_data)
 
@@ -549,6 +549,17 @@ def _clean_text(v) -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+# Why insert_job refused a row, counted per reason (24 Sep: Indeed returned 200
+# rows per search and every search inserted 0, with no way to tell why).
+import collections as _collections
+REJECT_REASONS: "_collections.Counter[str]" = _collections.Counter()
+
+
+def _reject(reason: str) -> bool:
+    REJECT_REASONS[reason] += 1
+    return False
+
+
 async def _insert_job_unlocked(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist (exact hash + fuzzy title + URL check). Returns True if inserted."""
     # US-only gate — applies to EVERY source. Skip clearly non-US locations;
@@ -556,12 +567,12 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
     if getattr(settings, "us_only", True):
         _loc = (job_data.get("location") or "").strip()
         if _loc and not is_us_location(_loc):
-            return False
+            return _reject("non_us_location")
         # A German/Austrian/Swiss gender marker in the title proves non-US
         # origin even when the location string looks harmless ("Cologne",
         # "Remote"). Arbeitnow is a Berlin board and was the main leak.
         if looks_non_us_posting(job_data.get("title") or ""):
-            return False
+            return _reject("non_us_title")
     # Normalise the display fields BEFORE hashing, so the dedup hash is computed
     # on clean text and an escaped/unescaped pair cannot slip through as two
     # different jobs.
@@ -579,7 +590,7 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
         # 1. Exact hash match — fastest check
         existing = await db.execute("SELECT id FROM jobs WHERE hash = ?", (h,))
         if await existing.fetchone():
-            return False
+            return _reject("same_hash")
 
         # 1b. Source URL dedup — same URL from different scrape cycles
         source_url = job_data.get("source_url", "")
@@ -588,7 +599,7 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
                 "SELECT id FROM jobs WHERE source_url = ? LIMIT 1", (source_url,)
             )
             if await existing_url.fetchone():
-                return False
+                return _reject("same_url")
 
         # 1c. Cross-source dedup — same company + normalized title (ignore location diffs)
         company_norm_hash = _normalize_company(job_data.get("company_name", ""))
@@ -599,7 +610,7 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
                 "SELECT id FROM jobs WHERE hash_cross = ? LIMIT 1", (cross_hash,)
             )
             if await existing_cross.fetchone():
-                return False
+                return _reject("same_company_title")
         else:
             cross_hash = None
 
@@ -620,7 +631,7 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
                     logger.debug(
                         f"[Dedup] Fuzzy match ({score}%): '{job_data.get('title')}' ≈ '{row[1]}' — skipped"
                     )
-                    return False
+                    return _reject("fuzzy_title")
                 # Borderline fuzzy (70-87): was calling AI to confirm — DISABLED to cut costs
                 # Fuzzy dedup at 87+ is reliable enough; false negatives are acceptable
                 # if 70 <= score < FUZZY_TITLE_THRESHOLD:
