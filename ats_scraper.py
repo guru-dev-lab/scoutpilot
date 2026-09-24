@@ -56,6 +56,18 @@ PLATFORM_CONCURRENCY = 32
 
 # Workday is searched per profile title (fetch_workday): this many titles,
 # each paged at most this many 20-row pages.
+
+def no_cookie_jar():
+    """A cookie jar that refuses every cookie. Measured on Railway 24 Sep with
+    /api/debug/profile: ~70% of the event loop's CPU was the shared discovery
+    client's cookie jar (set_cookie / deepvalues / is_expired), because a client
+    that touches thousands of company hosts keeps every cookie they set and
+    rescans the whole jar on each request. The box sat pinned at one core and
+    every sweep and write starved behind it. The public job APIs need none."""
+    import http.cookiejar
+    return http.cookiejar.CookieJar(
+        policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+
 WORKDAY_QUERIES = 4
 WORKDAY_PAGES_PER_QUERY = 5
 
@@ -1229,6 +1241,7 @@ async def _fetch_platform(
         "timeout": HTTP_TIMEOUT,
         "headers": HTTP_HEADERS,
         "follow_redirects": True,
+        "cookies": no_cookie_jar(),
     }
     if platform in _PROXIED_PLATFORMS and settings.proxy_url:
         client_kwargs["proxy"] = settings.proxy_url
@@ -1630,8 +1643,8 @@ async def enrich_ats_descriptions(limit: int = 60) -> int:
     t0 = time.monotonic()
     timed_out = False
     fetched: list = []
-    async with httpx.AsyncClient(**base) as direct_client, \
-               httpx.AsyncClient(**proxied) as proxy_client:
+    async with httpx.AsyncClient(**base, cookies=no_cookie_jar()) as direct_client, \
+               httpx.AsyncClient(**proxied, cookies=no_cookie_jar()) as proxy_client:
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(

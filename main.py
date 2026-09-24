@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.45.1"
+BUILD_VERSION = "2.46.0"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.46.0", "date": "2026-09-24", "status": "active", "change": "FOUND WHY EVERYTHING WAS SLOW. The box sat at ~1 CPU core (the whole budget of one Python thread) all day. /api/debug/profile on Railway: 96% of the event loop in discovery verification and ~70% inside the HTTP client cookie jar (set_cookie, deepvalues, is_expired). One long-lived client touched thousands of company hosts, kept every cookie and rescanned the whole jar on each request, so sweeps crawled (Greenhouse 41/536 companies in 8 minutes), the write lock waited up to 334s, and Scoring/Arbeitnow/JobSpy/Indeed crashed with database is locked. Discovery, ATS sweep, enrichment and probe clients now refuse cookies (none of the public job APIs need them). tests/test_no_cookies.py."},
     {"version": "2.45.0", "date": "2026-09-24", "status": "active", "change": "Sweeps were crawling (Greenhouse 41/536 companies in 8 minutes, Oracle 1/11) with every slot started and not done, while nearly every row seen was a duplicate. insert_job now refuses a row we already hold (hash or URL, indexed read) BEFORE joining the process-wide write queue, and the write lock logs its wait and hold times every 2 minutes ([WriteLock]) so the next stall names its holder."},
     {"version": "2.44.2", "date": "2026-09-24", "status": "active", "change": "Workday discovery learns the board name. Name-guessed tenants were probed as /None/jobs and never joined the roster (Disney, UBS, TransUnion, Roche, MemorialCare seen failing in logs). Wrong board on the real host answers 404, wrong host 422 (measured), so discovery finds the host then tries the 17 board names that cover the roster."},
     {"version": "2.44.1", "date": "2026-09-24", "status": "active", "change": "Oracle Cloud boards searched with the profile titles (finder keyword=) and paged per title, instead of the newest 200 postings of the whole site."},

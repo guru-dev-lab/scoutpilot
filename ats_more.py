@@ -673,7 +673,7 @@ async def probe(company: dict, search_terms: Optional[list[str]] = None) -> dict
     token = DRY_RUN.set(True)
     try:
         async with httpx.AsyncClient(timeout=a.HTTP_TIMEOUT, headers=a.HTTP_HEADERS,
-                                     follow_redirects=True) as client:
+                                     follow_redirects=True, cookies=a.no_cookie_jar()) as client:
             rows = await fn(client, company, None, search_terms or [])
     except Exception as e:
         return {"ok": False, "error": str(e)}

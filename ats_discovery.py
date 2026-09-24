@@ -27,7 +27,7 @@ import httpx
 from database import get_db
 from config import settings
 from ats_scraper import (COMPANIES_FILE, load_companies, load_companies_merged,
-                          save_companies, HTTP_HEADERS)
+                          save_companies, HTTP_HEADERS, no_cookie_jar)
 
 logger = logging.getLogger("scoutpilot.ats.discovery")
 
@@ -946,6 +946,7 @@ async def discover_new_ats_companies() -> dict:
                 timeout=12,
                 follow_redirects=True,
                 headers=_HTML_FETCH_HEADERS,
+                cookies=no_cookie_jar(),
             ) as html_client:
 
                 async def fetch_one(cn_url):
@@ -1060,8 +1061,9 @@ async def discover_new_ats_companies() -> dict:
             cf_kwargs["proxy"] = settings.proxy_url
 
         async with httpx.AsyncClient(
-            timeout=15, headers=HTTP_HEADERS, follow_redirects=True
-        ) as client, httpx.AsyncClient(**cf_kwargs) as cf_client:
+            timeout=15, headers=HTTP_HEADERS, follow_redirects=True,
+            cookies=no_cookie_jar(),
+        ) as client, httpx.AsyncClient(**cf_kwargs, cookies=no_cookie_jar()) as cf_client:
 
             async def one(cand):
                 if cand.get("ats") in _CLOUDFLARE_ATS:
