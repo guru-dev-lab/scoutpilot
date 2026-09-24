@@ -29,7 +29,7 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.45.0"
+BUILD_VERSION = "2.45.1"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
     {"version": "2.45.0", "date": "2026-09-24", "status": "active", "change": "Sweeps were crawling (Greenhouse 41/536 companies in 8 minutes, Oracle 1/11) with every slot started and not done, while nearly every row seen was a duplicate. insert_job now refuses a row we already hold (hash or URL, indexed read) BEFORE joining the process-wide write queue, and the write lock logs its wait and hold times every 2 minutes ([WriteLock]) so the next stall names its holder."},
@@ -1313,7 +1313,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root", "/api/debug/workday-find"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root", "/api/debug/workday-find", "/api/debug/profile"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -2904,6 +2904,47 @@ async def api_ats_probe(
                "site": site.strip(), "name": name.strip() or slug.strip()}
     search_terms = [t.strip() for t in terms.split(",") if t.strip()]
     return await probe(company, search_terms)
+
+
+@app.get("/api/debug/profile")
+async def api_debug_profile(seconds: int = Query(20, ge=5, le=60)):
+    """Sample the event-loop thread's stack every 10ms from a side thread for
+    `seconds` and return the hottest functions (self and cumulative). The box
+    sits at ~1 core, which is the whole budget of one Python thread; this names
+    what spends it. Read-only."""
+    import sys, threading, time as _t, collections
+    main_id = threading.get_ident()
+    self_c, cum_c = collections.Counter(), collections.Counter()
+    n = {"s": 0}
+    stop = threading.Event()
+
+    def sampler():
+        while not stop.is_set():
+            f = sys._current_frames().get(main_id)
+            if f is not None:
+                n["s"] += 1
+                seen = set()
+                top = True
+                while f is not None:
+                    key = f"{f.f_code.co_filename.rsplit('/', 1)[-1]}:{f.f_code.co_name}"
+                    if top:
+                        self_c[key] += 1
+                        top = False
+                    if key not in seen:
+                        cum_c[key] += 1
+                        seen.add(key)
+                    f = f.f_back
+            _t.sleep(0.01)
+
+    th = threading.Thread(target=sampler, daemon=True)
+    th.start()
+    await asyncio.sleep(seconds)
+    stop.set()
+    th.join(1)
+    tot = max(n["s"], 1)
+    return {"samples": n["s"],
+            "self": [(k, round(100 * v / tot, 1)) for k, v in self_c.most_common(25)],
+            "cumulative": [(k, round(100 * v / tot, 1)) for k, v in cum_c.most_common(40)]}
 
 
 @app.get("/api/debug/workday-find")
