@@ -2925,12 +2925,12 @@ async def api_workday_root(host: str = Query(..., description="{tenant}.{wd}.myw
         return JSONResponse({"error": "host must be tenant.wdN.myworkdayjobs.com"}, status_code=400)
     out = []
     async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0"}) as c:
-        for path in ("/", "/en-US"):
+        for path in ("/", "/en-US", "/robots.txt"):
             try:
                 r = await c.get(f"https://{host}{path}", follow_redirects=False)
                 out.append({"path": path, "status": r.status_code,
                             "location": r.headers.get("location"),
-                            "body": r.text[:600]})
+                            "body": r.text[:1500]})
             except Exception as e:
                 out.append({"path": path, "error": str(e)})
     return out
