@@ -410,17 +410,65 @@ async def _verify_ashby(client: httpx.AsyncClient, slug: str) -> bool:
         return False
 
 
-_WD_VARIANTS = ["wd1", "wd3", "wd5", "wd12", "wd2", "wd103"]
+# Ordered by how many roster tenants live on each (729 rows, 24 Sep).
+_WD_VARIANTS = ["wd1", "wd5", "wd12", "wd3", "wd108", "wd501", "wd503", "wd504",
+                "wd2", "wd103", "wd10", "wd101"]
+
+# Board names, most common first, from the same 729 rows ({t} = tenant). The
+# CxS path is case-insensitive (abbottcareers == AbbottCareers, measured).
+_WD_SITE_GUESSES = ["External", "{t}", "{t}careers", "Careers", "{t}_careers",
+                    "Search", "External_Careers", "jobs", "External_Career_Site",
+                    "{t}external", "{t}jobs", "{t}_external", "Global", "{t}_jobs",
+                    "{t}-careers", "ExternalCareers", "{t}_External_Careers"]
+
+
+async def _find_workday_site(client: httpx.AsyncClient, tenant: str) -> Optional[dict]:
+    """Name-fuzzed tenants arrive with no wd and no board name. Measured from
+    Railway 24 Sep: a wrong board on the tenant's REAL host answers 404, while a
+    wrong host or unknown tenant answers 422. So find the host first (any
+    non-422), then try the common board names on that host only.
+    Before this, the candidate was sent as site=None and every probe hit
+    /None/jobs, so no name-fuzzed Workday tenant ever joined the roster."""
+    body = {"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""}
+    host = None
+    for wd in _WD_VARIANTS:
+        try:
+            r = await client.post(
+                f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/External/jobs",
+                json=body, timeout=15)
+        except Exception:
+            continue
+        if r.status_code == 200 and (r.json().get("total") or 0) > 0:
+            return {"tenant": tenant, "wd": wd, "site": "External", "total": r.json()["total"]}
+        if r.status_code in (200, 404):
+            host = wd
+            break
+    if not host:
+        return None
+    for g in _WD_SITE_GUESSES[1:]:
+        site = g.replace("{t}", tenant)
+        try:
+            r = await client.post(
+                f"https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs",
+                json=body, timeout=15)
+        except Exception:
+            continue
+        if r.status_code == 200 and (r.json().get("total") or 0) > 0:
+            return {"tenant": tenant, "wd": host, "site": site, "total": r.json()["total"]}
+    logger.info(f"[Discovery] workday tenant {tenant} on {host} but no board name matched")
+    return None
 
 
 async def _verify_workday(client: httpx.AsyncClient, cand: dict) -> Optional[dict]:
     """Returns filled-in {tenant, wd, site, total} or None.
 
     If ``wd`` is None in the input, probes all known wd# subdomains to find
-    the one that responds.
+    the one that responds. If ``site`` is None too, _find_workday_site learns it.
     """
     tenant = cand["tenant"]
     site = cand["site"]
+    if not site:
+        return await _find_workday_site(client, tenant)
     wds = [cand["wd"]] if cand.get("wd") else _WD_VARIANTS
 
     for wd in wds:

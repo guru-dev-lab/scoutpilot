@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.44.1"
+BUILD_VERSION = "2.44.2"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.44.2", "date": "2026-09-24", "status": "active", "change": "Workday discovery learns the board name. Name-guessed tenants were probed as /None/jobs and never joined the roster (Disney, UBS, TransUnion, Roche, MemorialCare seen failing in logs). Wrong board on the real host answers 404, wrong host 422 (measured), so discovery finds the host then tries the 17 board names that cover the roster."},
     {"version": "2.44.1", "date": "2026-09-24", "status": "active", "change": "Oracle Cloud boards searched with the profile titles (finder keyword=) and paged per title, instead of the newest 200 postings of the whole site."},
     {"version": "2.44.0", "date": "2026-09-24", "status": "active", "change": "Workday boards are SEARCHED with the profile titles and paged per title, instead of reading the first 100 postings of the whole board. Abbott has 2,000 postings, 3M 694, Adobe 579; the first 100 at Abbott were Vietnam sales jobs, so ~95% of every big Workday board was never read."},
     {"version": "2.43.3", "date": "2026-09-22", "status": "active", "change": "The head of the board was still showing unjudged rows at the schema default of 50. scored_at is TEXT DEFAULT '' since the v2.1.0 migration, so an unscored row carries '' rather than NULL, and the 2.42.0 feed rule (scored_at IS NOT NULL) matched nothing. Both the feed and the remote_feed diagnostic now require a non-empty scored_at. Seen on the live remote head with 16 rows at exactly 50 from the new platforms while the scorer was still queued behind their first sweep."},
@@ -1311,7 +1312,7 @@ def _validate_xhire_jwt(token: str) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Block all routes except /login when SITE_PASSWORD is set and user has no session."""
 
-    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root"}
+    OPEN_PATHS = {"/login", "/favicon.ico", "/healthz", "/api/test-sources", "/api/debug/scrape-log", "/api/debug/sources", "/api/debug/outbound-ip", "/api/debug/storage", "/api/debug/storage-reclaim", "/api/debug/pipeline", "/api/status", "/api/ats-pages", "/api/debug/ats-probe", "/api/debug/workday-raw", "/api/debug/workday-root", "/api/debug/workday-find"}
 
     async def dispatch(self, request: Request, call_next):
         # If no password configured, let everything through
@@ -2902,6 +2903,17 @@ async def api_ats_probe(
                "site": site.strip(), "name": name.strip() or slug.strip()}
     search_terms = [t.strip() for t in terms.split(",") if t.strip()]
     return await probe(company, search_terms)
+
+
+@app.get("/api/debug/workday-find")
+async def api_workday_find(tenant: str = Query(...)):
+    """Run discovery's Workday host + board-name finder for one tenant. Read-only."""
+    import httpx, re
+    from ats_discovery import _find_workday_site
+    if not re.match(r"^[a-z0-9-]{2,40}$", tenant):
+        return JSONResponse({"error": "bad tenant"}, status_code=400)
+    async with httpx.AsyncClient(timeout=20) as c:
+        return {"tenant": tenant, "found": await _find_workday_site(c, tenant)}
 
 
 @app.get("/api/debug/workday-root")
