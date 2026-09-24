@@ -452,13 +452,18 @@ async def _find_workday_site(client: httpx.AsyncClient, tenant: str) -> Optional
     try:
         rb = await client.get(f"https://{tenant}.{host}.myworkdayjobs.com/robots.txt", timeout=15)
         if rb.status_code == 200:
-            for m in re.finditer(r"(?:myworkdayjobs\.com|^(?:Allow|Disallow):\s*)/([A-Za-z0-9_.-]+)/",
+            # Sitemap/Allow boards are the public ones; a Disallow board
+            # (Disney "disneycareerdc") is only tried when nothing is public
+            # (Home Depot lists "CareerDepot" only as Disallow).
+            public, hidden = [], []
+            for m in re.finditer(r"(?:myworkdayjobs\.com|^(Allow|Disallow):\s*)/([A-Za-z0-9_.-]+)/",
                                  rb.text, re.M):
-                name = m.group(1)
-                if name not in listed and not re.search(
-                        r"refreshfacet|nonpublic|private|agency|equest|intern_conversion|internal",
-                        name, re.I):
-                    listed.append(name)
+                name = m.group(2)
+                if re.search(r"refreshfacet|nonpublic|private|agency|equest|intern_conversion|internal",
+                             name, re.I):
+                    continue
+                (hidden if m.group(1) == "Disallow" else public).append(name)
+            listed = list(dict.fromkeys(public)) or list(dict.fromkeys(hidden))
     except Exception:
         pass
     best = None
