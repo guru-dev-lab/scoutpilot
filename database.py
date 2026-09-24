@@ -1773,6 +1773,7 @@ ATS_SOURCES = [
     {"source_key": "bamboohr",        "display_name": "BambooHR (ATS)",        "category": "ats", "requires_key": ""},
     {"source_key": "jobvite",         "display_name": "Jobvite (ATS)",         "category": "ats", "requires_key": ""},
     {"source_key": "icims",           "display_name": "iCIMS (ATS)",           "category": "ats", "requires_key": ""},
+    {"source_key": "jazzhr",          "display_name": "JazzHR (ATS)",          "category": "ats", "requires_key": ""},
 ]
 
 

@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.52.0"
+BUILD_VERSION = "2.53.0"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.53.0", "date": "2026-09-24", "status": "active", "change": "JazzHR ({slug}.applytojob.com) added as an ATS platform: fetcher reads the server-rendered board (title, link, location incl. Remote), harvest recognises applytojob links, name-fuzz covers it, seeded with the boards our aggregator jobs linked to."},
     {"version": "2.52.0", "date": "2026-09-24", "status": "active", "change": "GovernmentJobs.com (NEOGOV) added: one keyword search across every US public agency; 128 aggregator jobs in a week linked there. Only cards labelled New (just posted) are taken, pages read until the New labels stop. Chosen by evidence: aggregator_link_hosts in the pipeline diagnostic ranks the career hosts our aggregator jobs link to."},
     {"version": "2.51.0", "date": "2026-09-24", "status": "active", "change": "Workable works again: the v3 POST answers 429 (Cloudflare) to every Railway request, so the fetcher and the discovery check now use the public widget API (/api/v1/widget/accounts/{slug}?details=true), measured 200 JSON from Railway, which also carries the description. /api/debug/http-probe added (allowlisted ATS hosts)."},
     {"version": "2.50.0", "date": "2026-09-24", "status": "active", "change": "Workday-Seed worker: walks a list of ~370 big US employers (banks, insurers, health systems, pharma, retail, telecom, defense, universities), verifies each live with the host+robots.txt finder, and adds only real boards to the Workday roster. 12 per 3-minute pass."},
@@ -1180,7 +1181,7 @@ async def lifespan(app: FastAPI):
     # rosters start from a handful of seeds and grow through the harvest
     # (URL patterns + name-fuzz for the slug-only ones).
     for _plat, _every in (("ukg", 300), ("oracle", 300), ("adp", 300), ("rippling", 300),
-                          ("bamboohr", 300), ("jobvite", 600), ("icims", 600)):
+                          ("bamboohr", 300), ("jobvite", 600), ("icims", 600), ("jazzhr", 600)):
         asyncio.create_task(_worker(f"ATS-{_plat}", _every, _make_ats_body(_plat)))
     # Non-ATS source groups + scoring + discovery:
     # 300s, was 120s. Every remote board in this group reports "inserted 0 new"

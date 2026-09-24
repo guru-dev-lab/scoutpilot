@@ -7652,5 +7652,20 @@
   "name": "WCG Clinical",
   "slug": "careers-wcgclinical.icims.com",
   "ats": "icims"
+ },
+ {
+  "name": "SmartLight Analytics",
+  "slug": "smartlightanalytics",
+  "ats": "jazzhr"
+ },
+ {
+  "name": "Work Truck Solutions",
+  "slug": "worktrucksolutions",
+  "ats": "jazzhr"
+ },
+ {
+  "name": "532 Group",
+  "slug": "532group",
+  "ats": "jazzhr"
  }
 ]

@@ -82,7 +82,7 @@ _PLATFORM_CONCURRENCY = {
     # front every tenant on one domain, so a burst looks like one client
     # hammering one site; keep them modest. iCIMS and Jobvite are rendered HTML.
     "ukg": 6, "oracle": 6, "adp": 6, "rippling": 8, "bamboohr": 6,
-    "jobvite": 4, "icims": 4,
+    "jobvite": 4, "icims": 4, "jazzhr": 4,
 }
 
 # Platforms to route through the residential proxy when one is configured, so a

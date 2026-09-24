@@ -636,6 +636,65 @@ async def fetch_icims(client: httpx.AsyncClient, company: dict, profile_id, sear
     return inserted
 
 
+# ── JazzHR ({slug}.applytojob.com) ─────────────────────────────────────────
+# 55 aggregator jobs in a week linked here (24 Sep). The public board is
+# server-rendered: <li class="list-group-item"> with an <h3> link to
+# /apply/{code}/{Title} and a map-marker <li> carrying the location
+# ("Remote" is common). No posted date on the list.
+
+_JAZZ_ITEM = re.compile(
+    r"<h3 class='list-group-item-heading'>\s*<a href=\"([^\"]+/apply/[A-Za-z0-9]+/[^\"]*)\">\s*(.*?)\s*</a>"
+    r"(.*?)</li>\s*(?:</ul>|<li class=\"list-group-item\"|$)", re.S)
+
+
+def jazzhr_urls(c: dict) -> tuple[str, str]:
+    slug = c.get("slug") or ""
+    return f"https://{slug}.applytojob.com/apply", f"https://{slug}.applytojob.com/apply"
+
+
+async def fetch_jazzhr(client: httpx.AsyncClient, company: dict, profile_id, search_terms: list[str]) -> list[dict]:
+    a = _h()[0]
+    slug = company.get("slug") or ""
+    name = company.get("name") or slug
+    page, _ = jazzhr_urls(company)
+    inserted: list[dict] = []
+    try:
+        resp = await client.get(page)
+        if resp.status_code != 200:
+            if resp.status_code != 404:
+                logger.warning(f"[jazzhr:{slug}] HTTP {resp.status_code}")
+            return []
+        html = resp.text
+    except Exception as e:
+        logger.warning(f"[jazzhr:{slug}] fetch error: {e}")
+        return []
+    rows = _JAZZ_ITEM.findall(html)
+    if not rows:
+        i = html.find("/apply/")
+        logger.info(f"[jazzhr] SHAPE {slug}: 0 rows, bytes={len(html)} snippet={html[max(0, i-200):i+300]!r}"[:900])
+    for href, raw_title, tail in rows:
+        try:
+            title = _strip(raw_title)
+            if not a._title_matches_profile(title, search_terms):
+                continue
+            loc_m = re.search(r"fa-map-marker'></i>\s*([^<]+)", tail)
+            loc = _strip(loc_m.group(1)) if loc_m else ""
+            platform_field = "remote" if loc.lower().startswith("remote") else ""
+            # JazzHR is a US platform: a bare "Remote" is a US remote role.
+            country = ""
+            if platform_field == "remote" and loc.lower() in ("remote", "remote, us", "remote - us", "remote us"):
+                loc, country = "Remote, US", "US"
+            job = _row("jazzhr", title, name, loc, href.replace("http://", "https://"), "",
+                       "", profile_id, platform_field, country)
+            if job:
+                await _emit(job, inserted)
+        except Exception as e:
+            logger.debug(f"[jazzhr:{slug}] item skip: {e}")
+    if inserted:
+        logger.info(f"[jazzhr:{slug}] +{len(inserted)} new jobs ({len(rows)} on board)")
+    return inserted
+
+
 FETCHERS = {
     "ukg": fetch_ukg,
     "oracle": fetch_oracle,
@@ -644,6 +703,7 @@ FETCHERS = {
     "bamboohr": fetch_bamboohr,
     "jobvite": fetch_jobvite,
     "icims": fetch_icims,
+    "jazzhr": fetch_jazzhr,
 }
 
 URLS = {
@@ -654,12 +714,13 @@ URLS = {
     "bamboohr": bamboohr_urls,
     "jobvite": jobvite_urls,
     "icims": icims_urls,
+    "jazzhr": jazzhr_urls,
 }
 
 PLATFORMS = tuple(FETCHERS.keys())
 
 # Slug-only platforms whose slug can be guessed from a company name
-NAME_FUZZ_PLATFORMS = ("rippling", "bamboohr", "jobvite")
+NAME_FUZZ_PLATFORMS = ("rippling", "bamboohr", "jobvite", "jazzhr")
 
 
 async def probe(company: dict, search_terms: Optional[list[str]] = None) -> dict:

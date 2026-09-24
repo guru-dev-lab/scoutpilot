@@ -316,6 +316,7 @@ _RIPPLING_PAT = re.compile(r"https?://ats\.rippling\.com/([a-z0-9][a-z0-9_-]+)/j
 _BAMBOO_PAT = re.compile(r"https?://([a-z0-9][a-z0-9_-]+)\.bamboohr\.com/careers", re.I)
 _JOBVITE_PAT = re.compile(r"https?://jobs\.jobvite\.com/([a-z0-9][a-z0-9_-]+)/(?:job|jobs)\b", re.I)
 _ICIMS_PAT = re.compile(r"https?://([a-z0-9][a-z0-9.-]+\.icims\.com)/jobs\b", re.I)
+_JAZZ_PAT = re.compile(r"https?://([a-z0-9][a-z0-9-]+)\.applytojob\.com/apply", re.I)
 _ICIMS_IGNORE = {"www.icims.com", "social.icims.com", "careers.icims.com", "media.icims.com"}
 
 
@@ -343,6 +344,8 @@ def extract_more(url: str) -> list[tuple[str, dict]]:
         out.append(("jobvite", {"slug": m.group(1).lower()}))
     if (m := _ICIMS_PAT.search(u)) and m.group(1).lower() not in _ICIMS_IGNORE:
         out.append(("icims", {"slug": m.group(1).lower()}))
+    if (m := _JAZZ_PAT.search(u)) and m.group(1).lower() not in ("www", "app", "api"):
+        out.append(("jazzhr", {"slug": m.group(1).lower()}))
     return out
 
 

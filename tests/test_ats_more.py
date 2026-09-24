@@ -31,6 +31,8 @@ check(ex.get("jobvite") == {"slug": "pulsepoint"}, f"jobvite extract {ex.get('jo
 ex = dict(extract_candidates_from_url("https://careers-cotiviti.icims.com/jobs/16642/data-analyst/job"))
 check(ex.get("icims") == {"slug": "careers-cotiviti.icims.com"}, f"icims extract {ex.get('icims')}")
 check(not dict(extract_candidates_from_url("https://www.icims.com/jobs/whatever")).get("icims"), "icims ignores www.icims.com")
+ex = dict(extract_candidates_from_url("https://smartlightanalytics.applytojob.com/apply/RVElPTFWQh/Business-Analyst?source=INDE"))
+check(ex.get("jazzhr") == {"slug": "smartlightanalytics"}, f"jazzhr extract {ex.get('jazzhr')}")
 
 # ── fetchers on synthetic payloads (the shapes each API is documented to return) ──
 PAYLOADS = {
@@ -57,14 +59,24 @@ PAYLOADS = {
  ]}),
  "jobvite": '<div class="jv-job-list"><ul><li class="row"><a href="/pulsepoint/job/ojtlyfwp" class="flex-row"><div class="jv-job-list-name"> Sr. Data Analyst, Customer Reporting (Remote) </div><div class="ml-auto jv-job-type">Full-Time</div><div class="ml2 jv-job-list-location"> New York, NY </div></a></li><li class="row"><a href="/pulsepoint/job/ovz1zfwo" class="flex-row"><div class="jv-job-list-name"> BI Engineer, SRE (Remote, International) </div><div class="ml2 jv-job-list-location"> United Kingdom </div></a></li></ul></div>',
  "icims": '<div class="row"><a class="iCIMS_Anchor" href="https://careers-cotiviti.icims.com/jobs/16642/data-analyst/job?mode=job&iis=x"><h3>Data Analyst</h3></a><dl><dt>Job Locations</dt><dd>US-Remote</dd></dl></div>',
+ "jazzhr": """<li class="list-group-item">
+  <h3 class='list-group-item-heading'>
+   <a href="https://acme.applytojob.com/apply/AbC123/Data-Analyst">
+     Data Analyst   </a>
+  </h3>
+  <ul class='list-inline list-group-item-text'>
+   <li><i class='fa fa-map-marker'></i>Remote</li>
+  </ul>
+ </li>""",
 }
 
 def handler(req: httpx.Request) -> httpx.Response:
     u = str(req.url)
     key = ("ukg" if "ultipro" in u else "oracle" if "oraclecloud" in u else "adp" if "adp.com" in u
            else "rippling" if "rippling" in u else "bamboohr" if "bamboohr" in u
-           else "jobvite" if "jobvite" in u else "icims" if "icims" in u else None)
-    if key in ("jobvite", "icims"):
+           else "jobvite" if "jobvite" in u else "icims" if "icims" in u
+           else "jazzhr" if "applytojob" in u else None)
+    if key in ("jobvite", "icims", "jazzhr"):
         return httpx.Response(200, text=PAYLOADS[key], headers={"content-type": "text/html"})
     return httpx.Response(200, text=PAYLOADS[key], headers={"content-type": "application/json"})
 
@@ -76,8 +88,9 @@ COMPANIES = {
  "bamboohr": {"ats": "bamboohr", "slug": "acme", "name": "Acme"},
  "jobvite": {"ats": "jobvite", "slug": "pulsepoint", "name": "PulsePoint"},
  "icims": {"ats": "icims", "slug": "careers-cotiviti.icims.com", "name": "Cotiviti"},
+ "jazzhr": {"ats": "jazzhr", "slug": "acme", "name": "Acme"},
 }
-EXPECT = {"ukg": 2, "oracle": 1, "adp": 1, "rippling": 1, "bamboohr": 1, "jobvite": 1, "icims": 1}
+EXPECT = {"ukg": 2, "oracle": 1, "adp": 1, "rippling": 1, "bamboohr": 1, "jobvite": 1, "icims": 1, "jazzhr": 1}
 
 async def run():
     token = M.DRY_RUN.set(True)
