@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.49.0"
+BUILD_VERSION = "2.50.0"
 BUILD_DATE = "2026-09-24"
 RECENT_CHANGES = [
+    {"version": "2.50.0", "date": "2026-09-24", "status": "active", "change": "Workday-Seed worker: walks a list of ~370 big US employers (banks, insurers, health systems, pharma, retail, telecom, defense, universities), verifies each live with the host+robots.txt finder, and adds only real boards to the Workday roster. 12 per 3-minute pass."},
     {"version": "2.49.0", "date": "2026-09-24", "status": "active", "change": "Indeed: every search returned its newest 200 and inserted 0 (refused as already-have: Indeed hands every analyst query the same top 200). Now reads up to 1,000 deep, uses Indeed's own remote filter, and looks back 2 days. Google Jobs added through JobSpy (free, no key), one rotating query per pass."},
     {"version": "2.48.0", "date": "2026-09-24", "status": "active", "change": "Logins survive deploys. Sessions lived only in memory, so every deploy signed the owner out and the board went blank ('NOTHING SHOWS'). Session ids are now HMAC-signed with a key derived from the site password. Also 2.47.1-2.47.3: unreadable posted dates fall back to scrape time; the date parser no longer strips the timezone '+' (Ashby dates were unreadable, months-old posts looked fresh) with a boot repair for stored rows; Adzuna/Jooble/CareerJet rotate through every title variant with 'remote' instead of the bare title."},
     {"version": "2.47.0", "date": "2026-09-24", "status": "active", "change": "Owner: POSTED and SEEN (when we scraped it) is what brings a job to screen; a job is only worth it in the first ~2 days after posting. The board time window is now measured from the posted date, with the scrape time standing in only when a site gives no posted date, so an old posting found today stays off. Default view: Last 2 Days (posted), sorted Newest Posted. Greenhouse dates come from first_published before updated_at (an edited old job looked new). Jobs are kept 7 days (was 3). tests/test_fresh_window.py."},
@@ -1210,6 +1211,46 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_worker("Scoring", 20, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
+
+    async def _workday_seed_body():
+        """Walk sources/workday_seed_tenants.txt: big US employers likely on
+        Workday. Each guess is verified live by _find_workday_site (host by
+        404-vs-422, board from robots.txt) and only real boards join the
+        roster. 12 guesses per pass, already-known tenants skipped."""
+        import pathlib
+        import httpx
+        from ats_discovery import _find_workday_site
+        from ats_scraper import load_companies_merged, no_cookie_jar
+        from database import add_discovered_company
+        f = pathlib.Path(__file__).parent / "sources" / "workday_seed_tenants.txt"
+        names = [ln.strip().lower() for ln in f.read_text().splitlines()
+                 if ln.strip() and not ln.startswith("#")]
+        known = {(c.get("tenant") or c.get("slug") or "").lower()
+                 for c in await load_companies_merged() if c.get("ats") == "workday"}
+        todo = [n for n in dict.fromkeys(names) if n not in known and n not in _wd_seed_tried]
+        if not todo:
+            return
+        batch = todo[:12]
+        added = []
+        async with httpx.AsyncClient(timeout=15, cookies=no_cookie_jar(),
+                                     headers={"User-Agent": "Mozilla/5.0"}) as client:
+            for t in batch:
+                _wd_seed_tried.add(t)
+                try:
+                    found = await _find_workday_site(client, t)
+                except Exception as e:
+                    logger.debug(f"[Workday-Seed] {t}: {e}")
+                    continue
+                if found:
+                    await add_discovered_company({
+                        "slug": found["tenant"], "ats": "workday", "name": t,
+                        "tenant": found["tenant"], "wd": found["wd"], "site": found["site"],
+                        "jobs_seen": found.get("total", 0)})
+                    added.append(f"{t}:{found['site']}({found.get('total')})")
+        logger.info(f"[Workday-Seed] tried {len(batch)}, added {len(added)} "
+                    f"({len(todo) - len(batch)} left): {', '.join(added)}")
+
+    asyncio.create_task(_worker("Workday-Seed", 180, _workday_seed_body))
     asyncio.create_task(_worker("Discovery-Harvest", 600, _ats_harvest_body))  # URL-harvest: free, high-yield roster growth
 
     # Re-validate everything currently VISIBLE against the current scorer, once
@@ -1303,6 +1344,8 @@ _passwords: set[str] = {p.strip() for p in settings.site_password.split(",") if 
 # again — 24 Sep, ~20 deploys, "NOTHING SHOWS". A session id is now a nonce plus
 # an HMAC keyed by the site password(s): it survives restarts, and changing the
 # password still revokes every session.
+_wd_seed_tried: set = set()
+
 _SESSION_KEY = hashlib.sha256(("scoutpilot-session|" + "|".join(sorted(_passwords))).encode()).digest()
 
 
