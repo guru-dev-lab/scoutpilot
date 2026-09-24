@@ -453,18 +453,84 @@ def is_us_location(location: str, strict: bool = False) -> bool:
 # raised "database is locked", which crashed whole worker passes — the
 # Discovery worker died that way in production. Serialising writes in-process
 # removes the contention entirely: nothing waits on the OS lock any more.
-_WRITE_LOCK: Optional[asyncio.Lock] = None
+_WRITE_LOCK: Optional["_TimedLock"] = None
+
+# Write-queue meter (24 Sep): sweeps were finishing ~5 companies/min with every
+# slot "started" and not "done". This records how long callers wait for the
+# lock and who holds it longest, and logs it every 2 minutes.
+_LOCK_STATS = {"acq": 0, "wait": 0.0, "wait_max": 0.0, "hold": {}, "t": 0.0}
 
 
-def _write_lock() -> asyncio.Lock:
+class _TimedLock:
+    def __init__(self):
+        self._lock = asyncio.Lock()
+
+    async def __aenter__(self):
+        import sys, time as _t
+        f = sys._getframe(1)
+        self._who = f"{f.f_code.co_name}"
+        t0 = _t.monotonic()
+        await self._lock.acquire()
+        w = _t.monotonic() - t0
+        self._t_in = _t.monotonic()
+        st = _LOCK_STATS
+        st["acq"] += 1
+        st["wait"] += w
+        st["wait_max"] = max(st["wait_max"], w)
+        return self
+
+    async def __aexit__(self, *exc):
+        import time as _t
+        held = _t.monotonic() - self._t_in
+        who = self._who
+        self._lock.release()
+        st = _LOCK_STATS
+        h = st["hold"].setdefault(who, [0, 0.0, 0.0])
+        h[0] += 1; h[1] += held; h[2] = max(h[2], held)
+        now = _t.monotonic()
+        if now - st["t"] >= 120:
+            if st["t"]:
+                top = sorted(st["hold"].items(), key=lambda kv: -kv[1][1])[:6]
+                logger.info(
+                    "[WriteLock] %d acquisitions, avg wait %.2fs, max wait %.1fs; held by %s",
+                    st["acq"], st["wait"] / max(st["acq"], 1), st["wait_max"],
+                    "; ".join(f"{k} n={v[0]} total={v[1]:.0f}s max={v[2]:.1f}s" for k, v in top))
+            _LOCK_STATS.update({"acq": 0, "wait": 0.0, "wait_max": 0.0, "hold": {}, "t": now})
+        return False
+
+
+def _write_lock() -> "_TimedLock":
     global _WRITE_LOCK
     if _WRITE_LOCK is None:
-        _WRITE_LOCK = asyncio.Lock()
+        _WRITE_LOCK = _TimedLock()
     return _WRITE_LOCK
+
+
+async def _already_have(job_data: dict) -> bool:
+    """Read-only duplicate check that needs no write lock (WAL readers never
+    block). A row we already hold by hash or URL is refused here, before it
+    joins the write queue; nearly every row a sweep sees is one of those."""
+    try:
+        h = make_job_hash(_clean_text(job_data.get("company_name", "") or ""),
+                          _clean_text(job_data.get("title", "") or ""),
+                          _clean_text(job_data.get("location", "") or ""))
+        url = job_data.get("source_url", "") or ""
+        db = await get_db()
+        try:
+            cur = await db.execute(
+                "SELECT 1 FROM jobs WHERE hash = ? OR (? != '' AND source_url = ?) LIMIT 1",
+                (h, url, url))
+            return (await cur.fetchone()) is not None
+        finally:
+            await db.close()
+    except Exception:
+        return False   # fall through to the full check under the lock
 
 
 async def insert_job(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist. Serialised against other writers."""
+    if await _already_have(job_data):
+        return False
     async with _write_lock():
         return await _insert_job_unlocked(job_data)
 
