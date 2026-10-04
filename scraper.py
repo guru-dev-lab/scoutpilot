@@ -2570,6 +2570,40 @@ async def scrape_himalayas_rss(
     return jobs
 
 
+async def scrape_ats_all_profiles(profiles: list, cycle_number: int,
+                                  platforms: Optional[list] = None,
+                                  shard: int = 0, shards: int = 1) -> int:
+    """ATS sweep ONCE for every active profile (3 Oct 2026 cost audit: each
+    board was fetched once per profile — 'ashby sweep done 498' twice, 9 s
+    apart). Terms are the union of every profile's terms; rows are tagged with
+    the first profile and the Scoring worker's _home_profile re-homes a row the
+    fetching profile would cap. Never raises."""
+    profiles = [p for p in (profiles or []) if p]
+    if not profiles:
+        return 0
+    try:
+        import ats_scraper
+        seen: set[str] = set()
+        terms: list[str] = []
+        for p in profiles:
+            for t in _build_profile_terms(p):
+                if t.lower() not in seen:
+                    seen.add(t.lower())
+                    terms.append(t)
+        ats_results = await ats_scraper.scrape_all_ats(
+            profile_id=profiles[0]["id"], search_terms=terms,
+            cycle_number=cycle_number, platforms=platforms,
+            shard=shard, shards=shards,
+        )
+        ats_total = sum(ats_results.values())
+        if ats_total > 0:
+            logger.info(f"[ATS:all-profiles] +{ats_total} new jobs {ats_results}")
+        return ats_total
+    except Exception as e:
+        logger.error(f"[ATS:all-profiles] block crashed: {e}")
+        return 0
+
+
 def _build_profile_terms(profile: dict) -> list[str]:
     """Build search terms for a profile from title + expanded titles ONLY.
 

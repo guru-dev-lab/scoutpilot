@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.54.2"
-BUILD_DATE = "2026-09-24"
+BUILD_VERSION = "2.55.0"
+BUILD_DATE = "2026-10-03"
 RECENT_CHANGES = [
+    {"version": "2.55.0", "date": "2026-10-03", "status": "active", "change": "COST CUT. Measured on Railway: 1.17 vCPU and 5.5 GB around the clock (~$78/mo, 87% of the bill) for 2-22 inserted rows an hour. 58% of CPU was re-downloading every ATS board every 1-3 minutes with full descriptions and inserting nothing; the write lock was held 114 s of every 120 s refusing rows the cheap pre-check let through, one new SQLite connection each; every sweep ran once PER PROFILE so each board was fetched twice. Fixes: (1) BoardClient remembers each board's ETag + content print — Greenhouse, Ashby, Lever and SmartRecruiters answer If-None-Match with 304 and 0 bytes, others match on bytes — and an unchanged board reads as an empty payload of the same shape, so nothing is parsed or inserted; a print older than 6 h is ignored so every board is read in full a few times a day. (2) One sweep per platform shard for ALL profiles (union of terms; _home_profile re-homes). (3) Non-US and cross-source refusals moved before the lock, on one shared reader connection, counted under their real reason. (4) Concurrency 32 -> 8 per platform; cadence greenhouse/ashby/lever/smartrecruiters 10 min, workday + enterprise platforms 15 min, small platforms 20 min, JobSpy 15 min. Sweep-done line now reports unchanged boards. Target: <0.2 vCPU, ~1 GB. Rollback tag known-good-2026-10-03-pre-costcut."},
     {"version": "2.54.0", "date": "2026-09-24", "status": "active", "change": "Board quality, from the owner's 2-day remote board: SynergisticIT (training-programme bait, 6 of 81 rows) and RemoteJobsOne (reposter) blocklisted, existing rows hidden at boot. A title naming another kind of job (intern, co-op, apprentice, student, coder, clerk, coordinator, representative, technician, nurse...) is capped at 22 however much Data Analytics it carries, unless the profile itself uses the word."},
     {"version": "2.53.0", "date": "2026-09-24", "status": "active", "change": "JazzHR ({slug}.applytojob.com) added as an ATS platform: fetcher reads the server-rendered board (title, link, location incl. Remote), harvest recognises applytojob links, name-fuzz covers it, seeded with the boards our aggregator jobs linked to."},
     {"version": "2.52.0", "date": "2026-09-24", "status": "active", "change": "GovernmentJobs.com (NEOGOV) added: one keyword search across every US public agency; 128 aggregator jobs in a week linked there. Only cards labelled New (just posted) are taken, pages read until the New labels stop. Chosen by evidence: aggregator_link_hosts in the pipeline diagnostic ranks the career hosts our aggregator jobs link to."},
@@ -967,10 +968,11 @@ async def lifespan(app: FastAPI):
         _key = f"{platform}#{shard}"
         _ats_cycles[_key] = 0
         async def _body():
-            from scraper import scrape_ats_for_profile
+            # One sweep for ALL profiles (3 Oct 2026: per-profile sweeps fetched every board twice)
+            from scraper import scrape_ats_all_profiles
             _ats_cycles[_key] += 1
-            await _for_each_profile(
-                scrape_ats_for_profile, _ats_cycles[_key], [platform],
+            await scrape_ats_all_profiles(
+                await get_profiles() or [], _ats_cycles[_key], [platform],
                 shard, shards)
         return _body
 
@@ -1181,32 +1183,35 @@ async def lifespan(app: FastAPI):
     # Sharded: several workers per platform, each taking every Nth company, so
     # the roster is swept in parallel rather than one company at a time.
     # Greenhouse ~1,700 companies / 4 shards, Ashby ~1,080 / 3, and so on.
+    # Cadence (3 Oct 2026 cost audit): sweeps every 1-3 min inserted 0 rows per pass for ~1 visible
+    # job an hour at 1.17 vCPU / 5.5 GB. 10-20 min loses nothing on a 2-day board; BoardClient
+    # answers unchanged boards with 304/empty so a pass is now cheap anyway.
     for _sh in range(4):
         asyncio.create_task(_worker(
-            f"ATS-greenhouse-{_sh+1}", 120, _make_ats_body("greenhouse", _sh, 4)))
+            f"ATS-greenhouse-{_sh+1}", 600, _make_ats_body("greenhouse", _sh, 4)))
     for _sh in range(3):
         asyncio.create_task(_worker(
-            f"ATS-ashby-{_sh+1}", 110, _make_ats_body("ashby", _sh, 3)))
+            f"ATS-ashby-{_sh+1}", 600, _make_ats_body("ashby", _sh, 3)))
     for _sh in range(2):
         asyncio.create_task(_worker(
-            f"ATS-lever-{_sh+1}", 100, _make_ats_body("lever", _sh, 2)))
+            f"ATS-lever-{_sh+1}", 600, _make_ats_body("lever", _sh, 2)))
     for _sh in range(2):
         asyncio.create_task(_worker(
-            f"ATS-smartrecruiters-{_sh+1}", 110,
+            f"ATS-smartrecruiters-{_sh+1}", 600,
             _make_ats_body("smartrecruiters", _sh, 2)))
-    asyncio.create_task(_worker("ATS-workday", 200, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
+    asyncio.create_task(_worker("ATS-workday", 900, _make_ats_body("workday")))           # rotates (buckets=4), WAF-sensitive
     # Cloudflare-fronted platforms: low concurrency + long intervals. Workable
     # answered ~40 quick probes with a 24-hour 429 ban, so these are swept
     # gently (and via the residential proxy when one is configured).
-    asyncio.create_task(_worker("ATS-workable", 600, _make_ats_body("workable")))
-    asyncio.create_task(_worker("ATS-recruitee", 600, _make_ats_body("recruitee")))
-    asyncio.create_task(_worker("ATS-breezy", 600, _make_ats_body("breezy")))
+    asyncio.create_task(_worker("ATS-workable", 1200, _make_ats_body("workable")))
+    asyncio.create_task(_worker("ATS-recruitee", 1200, _make_ats_body("recruitee")))
+    asyncio.create_task(_worker("ATS-breezy", 1200, _make_ats_body("breezy")))
     # v2.43.0 — seven more platforms (ats_more.py). Owner: "You need to be
     # scrapping them too thats why we have workers for them too". Their
     # rosters start from a handful of seeds and grow through the harvest
     # (URL patterns + name-fuzz for the slug-only ones).
-    for _plat, _every in (("ukg", 300), ("oracle", 300), ("adp", 300), ("rippling", 300),
-                          ("bamboohr", 300), ("jobvite", 600), ("icims", 600), ("jazzhr", 600)):
+    for _plat, _every in (("ukg", 900), ("oracle", 900), ("adp", 900), ("rippling", 900),
+                          ("bamboohr", 900), ("jobvite", 1200), ("icims", 1200), ("jazzhr", 1200)):
         asyncio.create_task(_worker(f"ATS-{_plat}", _every, _make_ats_body(_plat)))
     # Non-ATS source groups + scoring + discovery:
     # 300s, was 120s. Every remote board in this group reports "inserted 0 new"
@@ -1214,7 +1219,7 @@ async def lifespan(app: FastAPI):
     # cross-source dedup already has those jobs. Polling them 3x/hour instead of
     # 30x frees request budget for the ATS sweep that is actually producing.
     asyncio.create_task(_worker("Light", 300, _light_body))
-    asyncio.create_task(_worker("JobSpy", 420, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
+    asyncio.create_task(_worker("JobSpy", 900, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
     # Three parallel LinkedIn workers, one per workplace type. Remote runs
     # most often because it is the filter the board is browsed with.
     asyncio.create_task(_worker("LinkedIn-remote", 300, _make_linkedin_body("remote")))
@@ -1347,6 +1352,11 @@ async def lifespan(app: FastAPI):
 
     yield
     scheduler.shutdown()
+    try:
+        from database import close_reader
+        await close_reader()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="ScoutPilot", lifespan=lifespan)

@@ -506,31 +506,72 @@ def _write_lock() -> "_TimedLock":
     return _WRITE_LOCK
 
 
-async def _already_have(job_data: dict) -> bool:
-    """Read-only duplicate check that needs no write lock (WAL readers never
-    block). A row we already hold by hash or URL is refused here, before it
-    joins the write queue; nearly every row a sweep sees is one of those."""
-    try:
-        h = make_job_hash(_clean_text(job_data.get("company_name", "") or ""),
-                          _clean_text(job_data.get("title", "") or ""),
-                          _clean_text(job_data.get("location", "") or ""))
-        url = job_data.get("source_url", "") or ""
-        db = await get_db()
+_READER = None   # one long-lived read connection for the pre-check (3 Oct 2026: it opened one per row — ~1,000 threads/min)
+
+
+async def _reader():
+    global _READER
+    if _READER is None:
+        _READER = await get_db()
+    return _READER
+
+
+async def close_reader():
+    """Shutdown hook: aiosqlite runs a non-daemon thread per connection, so an
+    open reader would keep the process alive after the app stops."""
+    global _READER
+    r, _READER = _READER, None
+    if r is not None:
         try:
+            await r.close()
+        except Exception:
+            pass
+
+
+async def _already_have(job_data: dict) -> str:
+    """Everything that can refuse a row WITHOUT the write lock (WAL readers never
+    block): non-US location/title, same hash, same URL, same company+title from
+    another source. 3 Oct 2026: the lock was held 114 s of every 120 s refusing
+    rows this check let through, one new SQLite connection per row."""
+    global _READER
+    try:
+        if getattr(settings, "us_only", True):
+            _loc = (job_data.get("location") or "").strip()
+            if _loc and not is_us_location(_loc):
+                return "non_us_location"
+            if looks_non_us_posting(job_data.get("title") or ""):
+                return "non_us_title"
+        company = _clean_text(job_data.get("company_name", "") or "")
+        title = _clean_text(job_data.get("title", "") or "")
+        h = make_job_hash(company, title, _clean_text(job_data.get("location", "") or ""))
+        url = job_data.get("source_url", "") or ""
+        cn, tn = _normalize_company(company), _normalize_text(title)
+        cross = hashlib.md5(f"{cn}|{tn}".encode()).hexdigest() if cn and tn else ""
+        try:
+            db = await _reader()
             cur = await db.execute(
-                "SELECT 1 FROM jobs WHERE hash = ? OR (? != '' AND source_url = ?) LIMIT 1",
-                (h, url, url))
-            return (await cur.fetchone()) is not None
-        finally:
-            await db.close()
+                "SELECT CASE WHEN hash = ? THEN 'same_hash' WHEN source_url = ? THEN 'same_url' ELSE 'same_company_title' END "
+                "FROM jobs WHERE hash = ? OR (? != '' AND source_url = ?) OR (? != '' AND hash_cross = ?) LIMIT 1",
+                (h, url, h, url, url, cross, cross))
+            row = await cur.fetchone()
+            return row[0] if row else ""
+        except Exception:
+            try:
+                if _READER is not None:
+                    await _READER.close()
+            except Exception:
+                pass
+            _READER = None
+            raise
     except Exception:
-        return False   # fall through to the full check under the lock
+        return ""   # fall through to the full check under the lock
 
 
 async def insert_job(job_data: dict) -> bool:
     """Insert a job if it doesn't already exist. Serialised against other writers."""
-    if await _already_have(job_data):
-        return _reject("already_have")
+    why = await _already_have(job_data)
+    if why:
+        return _reject(why)   # refused before the lock, counted under its real reason
     async with _write_lock():
         return await _insert_job_unlocked(job_data)
 

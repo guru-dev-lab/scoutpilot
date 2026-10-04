@@ -19,6 +19,15 @@ async def main():
     other = dict(JOB, title="Business Intelligence Analyst",
                  source_url="https://boards.greenhouse.io/acme/jobs/2")
     assert await d.insert_job(other) is True, "a different job must still insert"
-    print("OK: known rows refused before the lock; new rows insert")
+    # 3 Oct 2026: the lock was busy 95% of the time refusing rows the cheap check let through.
+    acq = d._LOCK_STATS["acq"]
+    non_us = dict(JOB, title="Data Analyst (m/w/d)", location="Berlin, Germany", source_url="https://boards.greenhouse.io/acme/jobs/3")
+    assert await d.insert_job(non_us) is False and d._LOCK_STATS["acq"] == acq, "a non-US row is refused BEFORE the lock"
+    cross = dict(JOB, title="Senior Data Analyst", location="Austin, TX", source_url="https://jobs.lever.co/acme/9")
+    assert await d.insert_job(cross) is False and d._LOCK_STATS["acq"] == acq, "same company+title from another source is refused BEFORE the lock"
+    assert d._READER is not None, "the pre-check reuses one read connection instead of opening one per row"
+    r1 = d._READER; await d._already_have(dict(JOB)); assert d._READER is r1, "reader connection is reused across calls"
+    await d.close_reader(); assert d._READER is None, "shutdown closes the reader (its thread would keep the process alive)"
+    print("OK: known / non-US / cross-source rows refused before the lock on one shared reader; new rows insert")
 
 asyncio.run(main())

@@ -52,7 +52,89 @@ _PLATFORM_BUCKETS = {
 }
 
 # Max concurrent HTTP fetches per ATS platform
-PLATFORM_CONCURRENCY = 32
+PLATFORM_CONCURRENCY = 8   # was 32: 32 in-flight boards x 22 shards held ~5 GB (3 Oct 2026 cost audit)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unchanged boards are not read twice (3 Oct 2026 cost audit)
+# ─────────────────────────────────────────────────────────────────────────────
+# Measured: every sweep re-downloaded every board every 1-3 minutes with full
+# descriptions and inserted 0 rows; TLS + gunzip + JSON parse of unchanged
+# boards was 58% of CPU, and the per-item pre-check kept the write lock busy
+# 95% of the time. Greenhouse, Ashby, Lever and SmartRecruiters all honour
+# If-None-Match (verified: 304, 0 bytes). BoardClient remembers each board's
+# ETag + a print of its bytes; an unchanged board comes back as an EMPTY
+# payload of the same shape ({} / [] / ''), so the fetcher's item loop runs on
+# nothing. A print older than BOARD_PRINT_TTL is ignored, so every board is
+# read in full a few times a day and nothing can stay invisible.
+import hashlib as _hashlib
+
+BOARD_PRINT_TTL = 6 * 3600
+_BOARD_STATE: dict[str, dict] = {}   # key → {"etag", "print", "shape", "ts"}
+_BOARD_STATE_MAX = 200_000
+
+
+def _board_key(method: str, url: str, body: bytes | None) -> str:
+    k = f"{method} {url}"
+    if body:
+        k += " " + _hashlib.sha1(body).hexdigest()[:16]
+    return k
+
+
+def _shape_of(content: bytes) -> str:
+    head = content.lstrip()[:1]
+    return "{" if head == b"{" else "[" if head == b"[" else ""
+
+
+class BoardClient(httpx.AsyncClient):
+    """httpx client that answers an unchanged board with an empty payload."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.unchanged = 0
+
+    async def _board_request(self, method: str, url, **kw):
+        body = None
+        if "json" in kw and kw["json"] is not None:
+            body = json.dumps(kw["json"], sort_keys=True, default=str).encode()
+        elif kw.get("content") is not None:
+            body = kw["content"] if isinstance(kw["content"], bytes) else str(kw["content"]).encode()
+        key = _board_key(method, str(url), body)
+        st = _BOARD_STATE.get(key)
+        fresh = st is not None and (time.monotonic() - st["ts"]) < BOARD_PRINT_TTL
+        if fresh and st.get("etag"):
+            h = dict(kw.get("headers") or {})
+            h["If-None-Match"] = st["etag"]
+            kw["headers"] = h
+        resp = await super().request(method, url, **kw)
+        if resp.status_code == 304 and st is not None:
+            self.unchanged += 1
+            st["ts"] = st["ts"] if fresh else time.monotonic()
+            return self._empty(resp, st["shape"])
+        if resp.status_code != 200:
+            return resp
+        content = resp.content
+        pr = _hashlib.sha1(content).hexdigest()
+        if fresh and st.get("print") == pr:
+            self.unchanged += 1
+            return self._empty(resp, st["shape"])
+        if len(_BOARD_STATE) >= _BOARD_STATE_MAX:
+            _BOARD_STATE.clear()
+        _BOARD_STATE[key] = {"etag": resp.headers.get("ETag") or "", "print": pr,
+                             "shape": _shape_of(content), "ts": time.monotonic()}
+        return resp
+
+    @staticmethod
+    def _empty(resp: httpx.Response, shape: str) -> httpx.Response:
+        body = b"{}" if shape == "{" else b"[]" if shape == "[" else b""
+        out = httpx.Response(200, content=body, request=resp.request)
+        out.extensions["board_unchanged"] = True
+        return out
+
+    async def get(self, url, **kw):
+        return await self._board_request("GET", url, **kw)
+
+    async def post(self, url, **kw):
+        return await self._board_request("POST", url, **kw)
 
 # Workday is searched per profile title (fetch_workday): this many titles,
 # each paged at most this many 20-row pages.
@@ -1320,7 +1402,7 @@ async def _fetch_platform(
         client_kwargs["proxy"] = settings.proxy_url
         logger.info(f"[{platform}] routing via residential proxy")
 
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with BoardClient(**client_kwargs) as client:
 
         # A sweep that starts and never ends reports nothing, so it says how far
         # it got every 2 minutes and how long it took at the end (24 Sep: every
@@ -1354,7 +1436,7 @@ async def _fetch_platform(
         finally:
             _pt.cancel()
         logger.info(f"[{platform}] sweep done {len(companies)} companies, "
-                    f"{_prog['rows']} inserted, {time.monotonic() - _t0:.0f}s")
+                    f"{_prog['rows']} inserted, {client.unchanged} unchanged, {time.monotonic() - _t0:.0f}s")
         # A platform that sweeps hundreds of boards and inserts nothing is the
         # signature of a silent failure, not a quiet day — fetch_greenhouse once
         # raised NameError on every single item into a per-item debug handler
