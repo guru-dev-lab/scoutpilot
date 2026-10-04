@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.55.0"
-BUILD_DATE = "2026-10-03"
+BUILD_VERSION = "2.55.1"
+BUILD_DATE = "2026-10-04"
 RECENT_CHANGES = [
+    {"version": "2.55.1", "date": "2026-10-04", "status": "active", "change": "Cost cut, second pass. 12 h after v2.55.0 the box averaged 0.25 vCPU / 1.5 GB (from 1.17 / 5.5) and idled at 0.03; the profiler showed 98% idle, so what was left was bursts: the 6-hourly full re-read of every board (0.7 vCPU peaks) and workers on short clocks. BOARD_PRINT_TTL 6 h -> 24 h (ETag 304s catch real changes in between), Scoring 20 s -> 60 s, Workday-Seed live tenant guessing 3 min -> 1 h, Light + Enrich-ATS 5 -> 15 min, JobSpy/Indeed 15 -> 30 min. Intake stayed 2-15 rows an hour through the night, same as before the cut."},
     {"version": "2.55.0", "date": "2026-10-03", "status": "active", "change": "COST CUT. Measured on Railway: 1.17 vCPU and 5.5 GB around the clock (~$78/mo, 87% of the bill) for 2-22 inserted rows an hour. 58% of CPU was re-downloading every ATS board every 1-3 minutes with full descriptions and inserting nothing; the write lock was held 114 s of every 120 s refusing rows the cheap pre-check let through, one new SQLite connection each; every sweep ran once PER PROFILE so each board was fetched twice. Fixes: (1) BoardClient remembers each board's ETag + content print — Greenhouse, Ashby, Lever and SmartRecruiters answer If-None-Match with 304 and 0 bytes, others match on bytes — and an unchanged board reads as an empty payload of the same shape, so nothing is parsed or inserted; a print older than 6 h is ignored so every board is read in full a few times a day. (2) One sweep per platform shard for ALL profiles (union of terms; _home_profile re-homes). (3) Non-US and cross-source refusals moved before the lock, on one shared reader connection, counted under their real reason. (4) Concurrency 32 -> 8 per platform; cadence greenhouse/ashby/lever/smartrecruiters 10 min, workday + enterprise platforms 15 min, small platforms 20 min, JobSpy 15 min. Sweep-done line now reports unchanged boards. Target: <0.2 vCPU, ~1 GB. Rollback tag known-good-2026-10-03-pre-costcut."},
     {"version": "2.54.0", "date": "2026-09-24", "status": "active", "change": "Board quality, from the owner's 2-day remote board: SynergisticIT (training-programme bait, 6 of 81 rows) and RemoteJobsOne (reposter) blocklisted, existing rows hidden at boot. A title naming another kind of job (intern, co-op, apprentice, student, coder, clerk, coordinator, representative, technician, nurse...) is capped at 22 however much Data Analytics it carries, unless the profile itself uses the word."},
     {"version": "2.53.0", "date": "2026-09-24", "status": "active", "change": "JazzHR ({slug}.applytojob.com) added as an ATS platform: fetcher reads the server-rendered board (title, link, location incl. Remote), harvest recognises applytojob links, name-fuzz covers it, seeded with the boards our aggregator jobs linked to."},
@@ -1218,8 +1219,8 @@ async def lifespan(app: FastAPI):
     # cycle after cycle (Remotive 19 found -> 0 new, TheMuse 100 -> 0) because
     # cross-source dedup already has those jobs. Polling them 3x/hour instead of
     # 30x frees request budget for the ATS sweep that is actually producing.
-    asyncio.create_task(_worker("Light", 300, _light_body))
-    asyncio.create_task(_worker("JobSpy", 900, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
+    asyncio.create_task(_worker("Light", 900, _light_body))
+    asyncio.create_task(_worker("JobSpy", 1800, _jobspy_body)) # LinkedIn/Indeed anti-bot: long interval
     # Three parallel LinkedIn workers, one per workplace type. Remote runs
     # most often because it is the filter the board is browsed with.
     asyncio.create_task(_worker("LinkedIn-remote", 300, _make_linkedin_body("remote")))
@@ -1240,8 +1241,8 @@ async def lifespan(app: FastAPI):
     # Deliberately a backfill and not a fetch-time call: here the row has already
     # survived the US and title filters, so only jobs that made the board cost
     # a second request.
-    asyncio.create_task(_worker("Enrich-ATS", 300, _enrich_ats_body))
-    asyncio.create_task(_worker("Scoring", 20, _scoring_body))# classify + hide, keeps up with inflow
+    asyncio.create_task(_worker("Enrich-ATS", 900, _enrich_ats_body))
+    asyncio.create_task(_worker("Scoring", 60, _scoring_body))# classify + hide, keeps up with inflow
     asyncio.create_task(_worker("Discovery", 900, _discovery_body)) # AI finds new companies, forever
     asyncio.create_task(_worker("Discovery-Workday", 5400, _workday_discovery_body)) # gentle, every 90min
 
@@ -1283,7 +1284,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"[Workday-Seed] tried {len(batch)}, added {len(added)} "
                     f"({len(todo) - len(batch)} left): {', '.join(added)}")
 
-    asyncio.create_task(_worker("Workday-Seed", 180, _workday_seed_body))
+    asyncio.create_task(_worker("Workday-Seed", 3600, _workday_seed_body))
     asyncio.create_task(_worker("Discovery-Harvest", 600, _ats_harvest_body))  # URL-harvest: free, high-yield roster growth
 
     # Re-validate everything currently VISIBLE against the current scorer, once

@@ -68,7 +68,7 @@ PLATFORM_CONCURRENCY = 8   # was 32: 32 in-flight boards x 22 shards held ~5 GB 
 # read in full a few times a day and nothing can stay invisible.
 import hashlib as _hashlib
 
-BOARD_PRINT_TTL = 6 * 3600
+BOARD_PRINT_TTL = 24 * 3600   # 4 Oct: the 6 h full re-reads were the only CPU left (0.7 vCPU bursts); 304s catch changes between
 _BOARD_STATE: dict[str, dict] = {}   # key → {"etag", "print", "shape", "ts"}
 _BOARD_STATE_MAX = 200_000
 
