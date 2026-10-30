@@ -240,6 +240,87 @@ def _normalize_company(name: str) -> str:
     return t
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Employer text beats an aggregator's Remote flag (Fault 114, 29 Oct 2026)
+# ─────────────────────────────────────────────────────────────────────────────
+# Fidelity "Business Analyst" (jobs.fidelity.com 2137131) was badged REMOTE; the
+# employer's posting says onsite, Smithfield RI. Fidelity's text reads "Onsite
+# Working Model ... require 100% onsite presence ... does not apply to fully
+# remote roles" — the last clause even fed scraper._detect_work_type's
+# "fully remote" match.
+#
+# Two strengths, measured on 3,611 live Greenhouse jobs (29 Oct): Toast puts
+# "we embrace a hybrid work model" in EVERY posting, its remote roles included,
+# so a company-wide model sentence cannot overrule a location that says Remote.
+#   _ROLE_*   — about THIS role ("this role is onsite", "two days per week in the
+#               office", "Location: Hybrid"). Beats any remote label.
+#   _MODEL_*  — the company's model ("Onsite Working Model", "100% onsite
+#               presence", "hybrid work model"). Only beats a remote label that
+#               nothing in the title/location backs, i.e. an aggregator's flag
+#               on a row whose location names an office.
+_ROLE = r"(this|the)\s+(role|position|job|opportunity)"
+_PLACE = r"(on[\s-]?site|in[\s-]office|in[\s-]person)"
+_ROLE_ONSITE = [re.compile(p) for p in (
+    rf"\b{_ROLE}\s+(is|will\s+be|requires?)\s+(an?\s+)?(100%\s+|fully\s+|full[\s-]time\s+|primarily\s+)?{_PLACE}\b",
+    rf"\bthis\s+is\s+an?\s+(100%\s+|fully\s+)?{_PLACE}\s+(role|position|job)\b",
+    r"\bon[\s-]?site\s+(only|required|position|role)\b",
+    rf"\b(must|required\s+to)\s+(be\s+able\s+to\s+)?(be|work|report)\s+({_PLACE[1:-1]}|in\s+(the|our)\s+office)\b",
+    rf"\b(work\s*place|work\s+location|location|work\s+arrangement)\s*(type\s*)?:\s*{_PLACE}\b",
+    r"\b(no|not\s+a?)\s*remote\b(?!\s+(sensing|support|access|monitor))",
+    r"\bin[\s-]office\s+only\b", r"\bno\s+work\s*from\s*home\b", r"#li-onsite\b",
+)]
+_ROLE_HYBRID = [re.compile(p) for p in (
+    rf"\b{_ROLE}\s+is\s+(a\s+)?hybrid\b",
+    r"\bthis\s+is\s+a\s+hybrid\s+(role|position|job)\b",
+    r"\bhybrid\s+(role|position|schedule|work\s+schedule)\b",
+    r"\b(work\s*place|work\s+location|location|work\s+arrangement)\s*(type\s*)?:\s*hybrid\b",
+    r"\b(\d|one|two|three|four)\s*(\+\s*)?days?\s+(per|a|each)\s+week\s+(in|on|at)[\s-]+(the\s+|our\s+)?(office|site|person|onsite)\b",
+    r"\b(\d|one|two|three|four)\s*days?\s+(in[\s-]office|on[\s-]?site|onsite|in[\s-]person)\b",
+    r"\bin[\s-]office\s+(\d|one|two|three|four)\s*days?\b", r"#li-hybrid\b",
+)]
+_MODEL_ONSITE = [re.compile(p) for p in (
+    rf"\b(100%|fully|full[\s-]time)\s+{_PLACE}\b",
+    r"\bon[\s-]?site\s+(working|work)\s+model\b",
+)]
+_MODEL_HYBRID = [re.compile(p) for p in (
+    r"\bhybrid\s+(work|working)\s+(model|arrangement|environment)\b",
+)]
+# The role itself said remote: then the text is mixed and the label stays.
+_ROLE_REMOTE = [re.compile(p) for p in (
+    rf"\b{_ROLE}\s+is\s+(a\s+)?(fully\s+|100%\s+|completely\s+)?remote\b",
+    r"\bthis\s+is\s+a\s+(fully|100%|completely)\s+remote\b",
+    r"\bthis\s+is\s+a\s+remote\s+(role|position|job)\b",
+    r"#li-remote\b",
+    r"\b(fully|100%|completely)\s+remote\s+(role|position|job|opportunity)\b(?!s)",
+    r"\b(work|location|workplace|work\s+arrangement)\s*(type\s*)?:\s*(fully\s+)?remote\b",
+)]
+
+
+def remote_contradiction(title: str, location: str, description: str) -> str:
+    """For a row labelled remote: 'onsite' or 'hybrid' when the employer's own
+    text contradicts the label, else '' (keep remote).
+
+    A title/location that itself says Remote is only overruled by a sentence
+    about this role, and then the row becomes 'hybrid' (flagged, not remote,
+    not silently onsite)."""
+    desc = re.sub(r"\s+", " ", (description or "")[:6000].lower())
+    tl = re.sub(r"\s+", " ", f"{title or ''} {location or ''}".lower())
+    text = f"{tl} {desc}"
+    if any(p.search(text) for p in _ROLE_REMOTE):
+        return ""
+    role_onsite = any(p.search(text) for p in _ROLE_ONSITE)
+    role_hybrid = any(p.search(text) for p in _ROLE_HYBRID)
+    if re.search(r"\bremote\b|\banywhere\b|\bwork from home\b|\btelework", tl):
+        return "hybrid" if (role_onsite or role_hybrid) else ""
+    if role_hybrid:
+        return "hybrid"
+    if role_onsite or any(p.search(text) for p in _MODEL_ONSITE):
+        return "onsite"
+    if any(p.search(text) for p in _MODEL_HYBRID):
+        return "hybrid"
+    return ""
+
+
 def make_job_hash(company: str, title: str, location: str) -> str:
     raw = f"{company.lower().strip()}|{title.lower().strip()}|{location.lower().strip()}"
     return hashlib.md5(raw.encode()).hexdigest()
@@ -677,6 +758,15 @@ async def _insert_job_unlocked(job_data: dict) -> bool:
                 # Fuzzy dedup at 87+ is reliable enough; false negatives are acceptable
                 # if 70 <= score < FUZZY_TITLE_THRESHOLD:
                 #     ... AI dedup removed ...
+
+        # Every source's Remote label passes here, aggregator flags included:
+        # the employer's own text decides when it says onsite/hybrid (Fault 114).
+        if (job_data.get("work_type") or "").lower() == "remote":
+            _wt = remote_contradiction(job_data.get("title", ""), job_data.get("location", ""),
+                                       job_data.get("description") or "")
+            if _wt:
+                job_data["work_type"] = _wt
+                job_data["is_remote"] = False
 
         now = datetime.now(timezone.utc).isoformat()
         # If no posted_at from source, leave empty — DON'T fake it with scrape time

@@ -603,6 +603,45 @@ _OTHER_JOB_KIND_WORDS = {
 }
 
 
+# ── Duties, read from the description (Fault 108, 29 Oct 2026) ──────────────
+# "Reporting Analyst" is one of the BI profile's own variants, so an Ascension
+# Medicare cost-reporting job, "Financial Reporting Analyst" and "STAT Financial
+# Reporting Analyst" all scored 100 on title words alone. The DUTIES are
+# accounting. Pure regex, zero tokens.
+_ACCOUNTING_DUTIES = tuple(re.compile(p) for p in (
+    r"\bcost reports?\b", r"\bcost reporting\b", r"\bmedicare cost\b", r"\bgeneral ledger\b",
+    r"\bjournal entr", r"\breconcil", r"\bgaap\b", r"\bstatutory\b", r"\bmonth[\s-]end\b",
+    r"\baccruals?\b", r"\btrial balance\b", r"\bfinancial statements?\b", r"\breimbursement\b",
+    r"\baccounts (payable|receivable)\b", r"\bcpa\b", r"\b10-[kq]\b", r"\bsec reporting\b",
+    r"\bfixed assets?\b", r"\brevenue recognition\b", r"\bbalance sheets?\b", r"\bintercompany\b",
+    r"\bcost accounting\b", r"\bfiscal intermediar", r"\bwork ?papers?\b", r"\baudits?\b",
+    r"\bsettlements?\b", r"\baccounting\b",
+))
+_DATA_DUTIES = tuple(re.compile(p) for p in (
+    r"\bsql\b", r"\bpower ?bi\b", r"\btableau\b", r"\blooker\b", r"\bqlik\b", r"\bdashboards?\b",
+    r"\bdata visuali[sz]ation\b", r"\bdata models?\b", r"\bdata modell?ing\b", r"\bdata warehous",
+    r"\betl\b", r"\bpython\b", r"\bsnowflake\b", r"\bbigquery\b", r"\bssrs\b", r"\bdax\b",
+    r"\bbusiness intelligence\b", r"\bdatabricks\b", r"\bdbt\b",
+))
+# A title that names data work itself is not judged by this rule.
+_TITLE_NAMES_DATA = re.compile(
+    r"\b(data|bi|business intelligence|analytics|insights?|dashboards?|tableau|power ?bi|sql|"
+    r"visuali[sz]ation|looker|reporting developer|report developer)\b")
+
+
+def _accounting_duties_dominate(job_title: str, job_description: str) -> bool:
+    """True when the description's duties are accounting, not data/BI: at least
+    3 distinct accounting duties and at most 1 data tool or duty, for a title
+    that does not itself name data work."""
+    if not job_description or _TITLE_NAMES_DATA.search((job_title or "").lower()):
+        return False
+    d = job_description[:6000].lower()
+    acct = sum(1 for p in _ACCOUNTING_DUTIES if p.search(d))
+    if acct < 3:
+        return False
+    return sum(1 for p in _DATA_DUTIES if p.search(d)) <= 1
+
+
 def score_relevance_fuzzy(
     job_title: str,
     job_description: str,
@@ -851,6 +890,12 @@ def score_relevance_fuzzy(
             elif kw_lower in desc_lower:
                 keyword_boost += 4
         best_score = min(100, best_score + min(keyword_boost, 15))
+
+    # The title's words matched; the duties are accounting (see
+    # _accounting_duties_dominate). Same cap as the family fence.
+    if target_family in ("data_analytics", "data_science", "data_engineering") \
+            and _accounting_duties_dominate(job_title, job_description):
+        best_score = min(best_score, 22)
 
     return int(min(100, best_score))
 

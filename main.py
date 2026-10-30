@@ -29,9 +29,10 @@ _AI_BAND_HIGH = 75
 # site and i dont like that.. its like easy apply".
 SIGNUP_WALL_SOURCES = ("himalayas", "himalayas_rss", "jobicy", "jobicy_rss")
 
-BUILD_VERSION = "2.55.1"
-BUILD_DATE = "2026-10-04"
+BUILD_VERSION = "2.56.0"
+BUILD_DATE = "2026-10-29"
 RECENT_CHANGES = [
+    {"version": "2.56.0", "date": "2026-10-29", "status": "active", "change": "Remote and relevance, rules only (no AI). Remote: the employer's own text beats an aggregator's Remote flag at insert and in the boot re-derive (Fidelity Smithfield RI: onsite working model, 100% onsite presence); a title or location saying Remote is only overruled by a sentence about this role, and then becomes hybrid. Relevance reads duties: a title carrying Reporting Analyst whose description is accounting (cost reports, GL, GAAP, reconciliations; at most one data tool) is capped at 22 for data profiles. The board is shared, so jobs anyone applied to stay on it."},
     {"version": "2.55.1", "date": "2026-10-04", "status": "active", "change": "Cost cut, second pass. 12 h after v2.55.0 the box averaged 0.25 vCPU / 1.5 GB (from 1.17 / 5.5) and idled at 0.03; the profiler showed 98% idle, so what was left was bursts: the 6-hourly full re-read of every board (0.7 vCPU peaks) and workers on short clocks. BOARD_PRINT_TTL 6 h -> 24 h (ETag 304s catch real changes in between), Scoring 20 s -> 60 s, Workday-Seed live tenant guessing 3 min -> 1 h, Light + Enrich-ATS 5 -> 15 min, JobSpy/Indeed 15 -> 30 min. Intake stayed 2-15 rows an hour through the night, same as before the cut."},
     {"version": "2.55.0", "date": "2026-10-03", "status": "active", "change": "COST CUT. Measured on Railway: 1.17 vCPU and 5.5 GB around the clock (~$78/mo, 87% of the bill) for 2-22 inserted rows an hour. 58% of CPU was re-downloading every ATS board every 1-3 minutes with full descriptions and inserting nothing; the write lock was held 114 s of every 120 s refusing rows the cheap pre-check let through, one new SQLite connection each; every sweep ran once PER PROFILE so each board was fetched twice. Fixes: (1) BoardClient remembers each board's ETag + content print — Greenhouse, Ashby, Lever and SmartRecruiters answer If-None-Match with 304 and 0 bytes, others match on bytes — and an unchanged board reads as an empty payload of the same shape, so nothing is parsed or inserted; a print older than 6 h is ignored so every board is read in full a few times a day. (2) One sweep per platform shard for ALL profiles (union of terms; _home_profile re-homes). (3) Non-US and cross-source refusals moved before the lock, on one shared reader connection, counted under their real reason. (4) Concurrency 32 -> 8 per platform; cadence greenhouse/ashby/lever/smartrecruiters 10 min, workday + enterprise platforms 15 min, small platforms 20 min, JobSpy 15 min. Sweep-done line now reports unchanged boards. Target: <0.2 vCPU, ~1 GB. Rollback tag known-good-2026-10-03-pre-costcut."},
     {"version": "2.54.0", "date": "2026-09-24", "status": "active", "change": "Board quality, from the owner's 2-day remote board: SynergisticIT (training-programme bait, 6 of 81 rows) and RemoteJobsOne (reposter) blocklisted, existing rows hidden at boot. A title naming another kind of job (intern, co-op, apprentice, student, coder, clerk, coordinator, representative, technician, nurse...) is capped at 22 however much Data Analytics it carries, unless the profile itself uses the word."},
@@ -2623,7 +2624,7 @@ async def _fix_work_types() -> None:
     Module-level rather than a closure inside the startup routine so it can be
     driven by a test; as a nested function it was unreachable.
     """
-    from database import get_db, _write_lock
+    from database import get_db, _write_lock, remote_contradiction
     from scraper import _detect_work_type
     try:
         db = await get_db()
@@ -2642,6 +2643,10 @@ async def _fix_work_types() -> None:
                 "title": title, "location": loc,
                 "description": desc, "source": source,
             })
+            if new_type == "remote":
+                # Same rule insert_job applies (Fault 114): the employer's
+                # text saying onsite/hybrid beats a remote reading.
+                new_type = remote_contradiction(title, loc, desc) or new_type
             if new_type != current:
                 changes.append((jid, new_type))
 
